@@ -14,6 +14,14 @@ class Config:
     BOT_DISPLAY_NAME = os.getenv("BOT_DISPLAY_NAME", "Napoleon_bot")
     ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
 
+    # تشغيل على VPS: polling (محلي) أو webhook (بورت 6001)
+    BOT_MODE = os.getenv("BOT_MODE", "polling").lower()  # polling | webhook
+    WEBHOOK_HOST = os.getenv("WEBHOOK_HOST", "0.0.0.0")
+    WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT", "6001"))
+    WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "telegram-webhook").strip("/")
+    WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")  # https://domain.com/telegram-webhook
+    WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
+
     # روابط التواصل (عدّلها في .env)
     FACEBOOK_URL = os.getenv("FACEBOOK_URL", "https://facebook.com/NapoleonBot")
     TELEGRAM_CHANNEL_URL = os.getenv("TELEGRAM_CHANNEL_URL", "https://t.me/NapoleonChannel")

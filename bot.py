@@ -166,13 +166,38 @@ class TelegramBot:
                 logger.error(f"خطأ في إرسال رسالة الخطأ: {e}")
     
     async def run(self):
-        """تشغيل البوت"""
+        """تشغيل البوت — polling أو webhook على VPS"""
         try:
             await self.setup_bot()
-            logger.info("تم بدء تشغيل البوت...")
-            await self.application.run_polling(allowed_updates=Update.ALL_TYPES)
+            mode = Config.BOT_MODE
+
+            if mode == "webhook":
+                if not Config.WEBHOOK_URL:
+                    raise ValueError(
+                        "WEBHOOK_URL مطلوب عند BOT_MODE=webhook "
+                        "(مثال: https://yourdomain.com/telegram-webhook)"
+                    )
+                logger.info(
+                    "Webhook على %s:%s/%s",
+                    Config.WEBHOOK_HOST,
+                    Config.WEBHOOK_PORT,
+                    Config.WEBHOOK_PATH,
+                )
+                webhook_kwargs = {
+                    "listen": Config.WEBHOOK_HOST,
+                    "port": Config.WEBHOOK_PORT,
+                    "url_path": Config.WEBHOOK_PATH,
+                    "webhook_url": Config.WEBHOOK_URL.rstrip("/"),
+                }
+                if Config.WEBHOOK_SECRET:
+                    webhook_kwargs["secret_token"] = Config.WEBHOOK_SECRET
+                await self.application.run_webhook(**webhook_kwargs)
+            else:
+                logger.info("Polling mode — لا يحتاج بورت")
+                await self.application.run_polling(allowed_updates=Update.ALL_TYPES)
         except Exception as e:
             logger.error(f"خطأ في تشغيل البوت: {e}")
+            raise
         finally:
             if self.application:
                 await self.application.shutdown()

@@ -1,0 +1,15 @@
+[Unit]
+Description=ichancy Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/ichancy-telegram-bot
+EnvironmentFile=/opt/ichancy-telegram-bot/.env
+ExecStart=/opt/ichancy-telegram-bot/venv/bin/python bot.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
