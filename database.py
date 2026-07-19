@@ -8,6 +8,46 @@ from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
 import uuid
 import os
+from pathlib import Path
+
+
+def _prepare_database_url(database_url: str) -> str:
+    """تجهيز مسار SQLite وإنشاء المجلد إن لم يكن موجوداً"""
+    if not database_url.startswith("sqlite"):
+        return database_url
+
+    prefix = "sqlite:///"
+    if not database_url.startswith(prefix):
+        return database_url
+
+    raw_path = database_url[len(prefix):]
+    if raw_path.startswith("/"):
+        db_path = Path(raw_path)
+    else:
+        project_root = Path(__file__).resolve().parent
+        db_path = (project_root / raw_path).resolve()
+
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    return f"sqlite:///{db_path.as_posix()}"
+
+
+def get_database_url(database_url: str | None = None) -> str:
+    """رابط قاعدة البيانات المحلية على VPS (SQLite داخل مجلد المشروع)"""
+    if database_url is None:
+        database_url = os.getenv("DATABASE_URL", "").strip()
+    if not database_url:
+        project_root = Path(__file__).resolve().parent
+        db_path = project_root / "data" / "telegram_bot.db"
+        database_url = f"sqlite:///{db_path.as_posix()}"
+    return _prepare_database_url(database_url)
+
+
+def get_local_db_file_path(database_url: str) -> Path | None:
+    """مسار ملف SQLite على القرص (للعرض في اللوج)"""
+    if not database_url.startswith("sqlite:///"):
+        return None
+    return Path(database_url[len("sqlite:///"):])
+
 
 Base = declarative_base()
 
@@ -271,10 +311,12 @@ class DatabaseManager:
     """مدير قاعدة البيانات"""
     
     def __init__(self, database_url=None):
-        if database_url is None:
-            database_url = os.getenv("DATABASE_URL", "sqlite:///data/telegram_bot.db")
-        
-        self.engine = create_engine(database_url)
+        self.database_url = get_database_url(database_url)
+        self.db_file_path = get_local_db_file_path(self.database_url)
+        self.engine = create_engine(
+            self.database_url,
+            connect_args={"check_same_thread": False},
+        )
         self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
         self.func = func  # إضافة func للاستعلامات المتقدمة
         

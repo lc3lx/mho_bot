@@ -14,9 +14,9 @@ class Config:
     BOT_DISPLAY_NAME = os.getenv("BOT_DISPLAY_NAME", "Napoleon_bot")
     ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
 
-    # تشغيل على VPS: polling (محلي) أو webhook (بورت 6001)
-    BOT_MODE = os.getenv("BOT_MODE", "polling").lower()  # polling | webhook
-    WEBHOOK_HOST = os.getenv("WEBHOOK_HOST", "0.0.0.0")
+    # تشغيل على VPS: webhook (موصى به للأداء) أو polling
+    BOT_MODE = os.getenv("BOT_MODE", "webhook").lower()  # webhook | polling
+    WEBHOOK_HOST = os.getenv("WEBHOOK_HOST", "127.0.0.1")
     WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT", "6001"))
     WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "telegram-webhook").strip("/")
     WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")  # https://domain.com/telegram-webhook
@@ -28,7 +28,7 @@ class Config:
     TELEGRAM_SUPPORT_URL = os.getenv("TELEGRAM_SUPPORT_URL", "https://t.me/NapoleonSupport")
     
     # إعدادات قاعدة البيانات
-    DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///telegram_bot.db")
+    DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///data/telegram_bot.db")
     
     # إعدادات الإحالات
     REFERRAL_PERCENTAGE = float(os.getenv("REFERRAL_PERCENTAGE", "10"))  # نسبة الربح من الإحالات

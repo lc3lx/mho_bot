@@ -27,8 +27,7 @@ module.exports = {
       out_file: './logs/pm2-out.log',
       merge_logs: true,
       time: true,
-      // bot.py يقرأ .env تلقائياً (python-dotenv)
-      // للـ webhook على 6001 ضع في .env:
+      // Webhook على 6001 — اضبط في .env:
       // BOT_MODE=webhook
       // WEBHOOK_PORT=6001
       // WEBHOOK_URL=https://yourdomain.com/telegram-webhook

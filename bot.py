@@ -3,7 +3,6 @@
 """
 
 import logging
-import asyncio
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -36,23 +35,24 @@ class TelegramBot:
         self.db = DatabaseManager()
         self.application = None
         
-    async def setup_bot(self):
-        """إعداد البوت"""
-        # إنشاء قاعدة البيانات
+    def setup_bot(self):
+        """إعداد البوت (متزامن — run_polling/run_webhook يديران الـ loop)"""
         self.db.create_tables()
+        if self.db.db_file_path:
+            logger.info("قاعدة البيانات المحلية: %s", self.db.db_file_path)
         
-        # إنشاء التطبيق
-        self.application = Application.builder().token(Config.BOT_TOKEN).build()
+        self.application = (
+            Application.builder()
+            .token(Config.BOT_TOKEN)
+            .post_init(self.setup_bot_commands)
+            .build()
+        )
         
-        # إضافة المعالجات
         self.add_handlers()
         self.setup_jobs()
         
-        # إعداد أوامر البوت
-        await self.setup_bot_commands()
-        
-    async def setup_bot_commands(self):
-        """إعداد أوامر البوت"""
+    async def setup_bot_commands(self, application: Application):
+        """إعداد أوامر البوت بعد تهيئة التطبيق"""
         commands = [
             BotCommand("start", "بدء استخدام البوت"),
             BotCommand("menu", "القائمة الرئيسية"),
@@ -62,7 +62,7 @@ class TelegramBot:
         ]
         
         try:
-            await self.application.bot.set_my_commands(commands)
+            await application.bot.set_my_commands(commands)
             logger.info("تم إعداد أوامر البوت بنجاح")
         except TelegramError as e:
             logger.error(f"خطأ في إعداد أوامر البوت: {e}")
@@ -165,48 +165,43 @@ class TelegramBot:
             except Exception as e:
                 logger.error(f"خطأ في إرسال رسالة الخطأ: {e}")
     
-    async def run(self):
+    def run(self):
         """تشغيل البوت — polling أو webhook على VPS"""
-        try:
-            await self.setup_bot()
-            mode = Config.BOT_MODE
+        self.setup_bot()
+        mode = Config.BOT_MODE
 
-            if mode == "webhook":
-                if not Config.WEBHOOK_URL:
-                    raise ValueError(
-                        "WEBHOOK_URL مطلوب عند BOT_MODE=webhook "
-                        "(مثال: https://yourdomain.com/telegram-webhook)"
-                    )
-                logger.info(
-                    "Webhook على %s:%s/%s",
-                    Config.WEBHOOK_HOST,
-                    Config.WEBHOOK_PORT,
-                    Config.WEBHOOK_PATH,
+        if mode == "webhook":
+            if not Config.WEBHOOK_URL:
+                raise ValueError(
+                    "WEBHOOK_URL مطلوب عند BOT_MODE=webhook "
+                    "(مثال: https://yourdomain.com/telegram-webhook)"
                 )
-                webhook_kwargs = {
-                    "listen": Config.WEBHOOK_HOST,
-                    "port": Config.WEBHOOK_PORT,
-                    "url_path": Config.WEBHOOK_PATH,
-                    "webhook_url": Config.WEBHOOK_URL.rstrip("/"),
-                }
-                if Config.WEBHOOK_SECRET:
-                    webhook_kwargs["secret_token"] = Config.WEBHOOK_SECRET
-                await self.application.run_webhook(**webhook_kwargs)
-            else:
-                logger.info("Polling mode — لا يحتاج بورت")
-                await self.application.run_polling(allowed_updates=Update.ALL_TYPES)
-        except Exception as e:
-            logger.error(f"خطأ في تشغيل البوت: {e}")
-            raise
-        finally:
-            if self.application:
-                await self.application.shutdown()
+            logger.info(
+                "Webhook على %s:%s/%s",
+                Config.WEBHOOK_HOST,
+                Config.WEBHOOK_PORT,
+                Config.WEBHOOK_PATH,
+            )
+            webhook_kwargs = {
+                "listen": Config.WEBHOOK_HOST,
+                "port": Config.WEBHOOK_PORT,
+                "url_path": Config.WEBHOOK_PATH,
+                "webhook_url": Config.WEBHOOK_URL.rstrip("/"),
+                "allowed_updates": Update.ALL_TYPES,
+                "drop_pending_updates": True,
+            }
+            if Config.WEBHOOK_SECRET:
+                webhook_kwargs["secret_token"] = Config.WEBHOOK_SECRET
+            # لا تستخدم await — run_webhook يدير الـ event loop بنفسه
+            self.application.run_webhook(**webhook_kwargs)
+        else:
+            logger.info("Polling mode — لا يحتاج بورت")
+            self.application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 def main():
     """الدالة الرئيسية"""
     bot = TelegramBot()
-    asyncio.run(bot.run())
+    bot.run()
 
 if __name__ == "__main__":
     main()
-
