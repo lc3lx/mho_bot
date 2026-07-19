@@ -20,7 +20,11 @@ class Config:
     WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT", "6001"))
     WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "telegram-webhook").strip("/")
     WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")  # https://domain.com/telegram-webhook
-    WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
+    # Telegram: فقط A-Z a-z 0-9 _ - وطول 1-256
+    WEBHOOK_SECRET = "".join(
+        c for c in os.getenv("WEBHOOK_SECRET", "").strip()
+        if c.isalnum() or c in "_-"
+    )[:256]
 
     # روابط التواصل (عدّلها في .env)
     FACEBOOK_URL = os.getenv("FACEBOOK_URL", "https://facebook.com/NapoleonBot")

@@ -65,7 +65,8 @@ class TelegramBot:
             await application.bot.set_my_commands(commands)
             logger.info("تم إعداد أوامر البوت بنجاح")
         except TelegramError as e:
-            logger.error(f"خطأ في إعداد أوامر البوت: {e}")
+            # Flood control عند إعادة التشغيل المتكرر — لا يمنع تشغيل البوت
+            logger.warning("تخطي setMyCommands: %s", e)
     
     def add_handlers(self):
         """إضافة معالجات الأوامر والرسائل"""
@@ -192,6 +193,12 @@ class TelegramBot:
             }
             if Config.WEBHOOK_SECRET:
                 webhook_kwargs["secret_token"] = Config.WEBHOOK_SECRET
+                logger.info("Webhook secret_token مفعّل")
+            else:
+                logger.warning(
+                    "WEBHOOK_SECRET فارغ أو غير صالح — "
+                    "استخدم فقط A-Z a-z 0-9 _ -"
+                )
             # لا تستخدم await — run_webhook يدير الـ event loop بنفسه
             self.application.run_webhook(**webhook_kwargs)
         else:
