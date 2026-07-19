@@ -1,4 +1,4 @@
-python-telegram-bot[webhooks]==20.7
+python-telegram-bot[webhooks,job-queue]==20.7
 SQLAlchemy==1.4.49
 python-dotenv==1.0.0
 cryptography==41.0.7

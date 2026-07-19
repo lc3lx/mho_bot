@@ -90,6 +90,12 @@ class TelegramBot:
 
     def setup_jobs(self):
         """مهام مجدولة - مراقبة إيداعات USDT"""
+        if self.application.job_queue is None:
+            logger.error(
+                'JobQueue غير متوفر — نفّذ: '
+                'pip install "python-telegram-bot[job-queue]"'
+            )
+            return
         interval = Config.USDT_CONFIG.get("poll_interval_seconds", 30)
         self.application.job_queue.run_repeating(
             PaymentHandler.poll_usdt_deposits,

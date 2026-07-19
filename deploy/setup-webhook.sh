@@ -18,7 +18,7 @@ echo "=== Webhook setup for $DOMAIN ==="
 
 # مكتبات webhook
 source venv/bin/activate
-pip install -q "python-telegram-bot[webhooks]==20.7"
+pip install -q "python-telegram-bot[webhooks,job-queue]==20.7"
 
 # Nginx + certbot
 if command -v apt-get &>/dev/null; then
