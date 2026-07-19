@@ -52,7 +52,7 @@ class PaymentHandler:
             if method == "shamcash":
                 return api_client.shamcash_ready()
         if provider == "tron":
-            return tron_client.is_configured()
+            return tron_client.is_configured
         return False
 
     # ─── شام كاش — تدفق مثل الصور ───────────────────────────
@@ -990,7 +990,7 @@ class PaymentHandler:
     @staticmethod
     async def poll_usdt_deposits(context: ContextTypes.DEFAULT_TYPE):
         """مراقبة دورية لطلبات USDT المعلقة"""
-        if not tron_client.is_configured():
+        if not tron_client.is_configured:
             return
 
         pending = db.get_pending_usdt_deposits()
