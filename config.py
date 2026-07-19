@@ -20,10 +20,11 @@ class Config:
     WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT", "6001"))
     WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "telegram-webhook").strip("/")
     WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")  # https://domain.com/telegram-webhook
-    # Telegram: فقط A-Z a-z 0-9 _ - وطول 1-256
+    # Telegram يقبل فقط ASCII: A-Z a-z 0-9 _ - (isalnum يقبل العربي — لا تستخدمه)
+    _raw_secret = os.getenv("WEBHOOK_SECRET", "").strip()
     WEBHOOK_SECRET = "".join(
-        c for c in os.getenv("WEBHOOK_SECRET", "").strip()
-        if c.isalnum() or c in "_-"
+        c for c in _raw_secret
+        if c.isascii() and (c.isalnum() or c in "_-")
     )[:256]
 
     # روابط التواصل (عدّلها في .env)
