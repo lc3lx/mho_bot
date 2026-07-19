@@ -317,7 +317,12 @@ class DatabaseManager:
             self.database_url,
             connect_args={"check_same_thread": False},
         )
-        self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
+        self.SessionLocal = sessionmaker(
+            autocommit=False,
+            autoflush=False,
+            bind=self.engine,
+            expire_on_commit=False,
+        )
         self.func = func  # إضافة func للاستعلامات المتقدمة
         
     def create_tables(self):
@@ -355,6 +360,14 @@ class DatabaseManager:
     def get_session(self):
         """الحصول على جلسة قاعدة البيانات"""
         return self.SessionLocal()
+
+    def _detach(self, session, obj):
+        """فصل الكائن عن الجلسة مع تحميل كل الأعمدة (يمنع DetachedInstanceError)"""
+        if obj is None:
+            return None
+        session.refresh(obj)
+        session.expunge(obj)
+        return obj
         
     def generate_referral_code(self):
         """توليد كود إحالة فريد"""
@@ -367,7 +380,7 @@ class DatabaseManager:
             # التحقق من وجود المستخدم
             existing_user = session.query(User).filter(User.telegram_id == str(telegram_id)).first()
             if existing_user:
-                return existing_user
+                return self._detach(session, existing_user)
                 
             # إنشاء مستخدم جديد
             referral_code = self.generate_referral_code()
@@ -383,8 +396,7 @@ class DatabaseManager:
             )
             session.add(user)
             session.commit()
-            session.refresh(user)
-            return user
+            return self._detach(session, user)
         finally:
             session.close()
             
@@ -397,10 +409,20 @@ class DatabaseManager:
                 # تحديث آخر نشاط
                 user.last_activity = datetime.utcnow()
                 session.commit()
-            return user
+                return self._detach(session, user)
+            return None
         finally:
             session.close()
-            
+
+    def get_user_by_db_id(self, user_id):
+        """الحصول على مستخدم بواسطة id الداخلي"""
+        session = self.get_session()
+        try:
+            user = session.query(User).filter(User.id == user_id).first()
+            return self._detach(session, user)
+        finally:
+            session.close()
+
     def update_user_balance(self, telegram_id, amount, transaction_type="manual", description="", method=None):
         """تحديث رصيد المستخدم"""
         session = self.get_session()

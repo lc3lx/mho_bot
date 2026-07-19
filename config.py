@@ -18,8 +18,8 @@ class Config:
     BOT_MODE = os.getenv("BOT_MODE", "webhook").lower()  # webhook | polling
     WEBHOOK_HOST = os.getenv("WEBHOOK_HOST", "127.0.0.1")
     WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT", "6001"))
-    WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "telegram-webhook").strip("/")
-    WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")  # https://domain.com/telegram-webhook
+    WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "botich").strip("/")
+    WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://www.alipride.com/botich")
     # Telegram يقبل فقط ASCII: A-Z a-z 0-9 _ - (isalnum يقبل العربي — لا تستخدمه)
     _raw_secret = os.getenv("WEBHOOK_SECRET", "").strip()
     WEBHOOK_SECRET = "".join(

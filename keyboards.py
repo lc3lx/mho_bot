@@ -58,6 +58,18 @@ class Keyboards:
             [InlineKeyboardButton("📢 قناتنا على التلغرام", url=Config.TELEGRAM_CHANNEL_URL)],
         ]
         return InlineKeyboardMarkup(keyboard)
+
+    @staticmethod
+    def start_step1():
+        """الخطوة 1: شحن أولاً ثم روابط التواصل"""
+        keyboard = [
+            [InlineKeyboardButton("📩 شحن البوت الآن", callback_data="deposit")],
+            [InlineKeyboardButton("🏆 استخدام كود هدية", callback_data="gift_code")],
+            [InlineKeyboardButton("📱 صفحتنا على الفيسبوك", url=Config.FACEBOOK_URL)],
+            [InlineKeyboardButton("📢 قناتنا على التلغرام", url=Config.TELEGRAM_CHANNEL_URL)],
+            [InlineKeyboardButton("⏭ متابعة للقائمة", callback_data="start_continue")],
+        ]
+        return InlineKeyboardMarkup(keyboard)
     
     @staticmethod
     def ichancy_menu(linked: bool = False):

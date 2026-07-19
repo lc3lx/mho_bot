@@ -40,8 +40,10 @@ WAITING_FOR_SYRIATEL_AMOUNT = "waiting_for_syriatel_amount"
 WAITING_FOR_SYRIATEL_TX = "waiting_for_syriatel_tx"
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالج أمر البدء — خطوتان مثل الصورة"""
+    """معالج أمر البدء — الخطوة 1 شحن أولاً، ثم القائمة بعد المتابعة"""
     user_id = update.effective_user.id
+    logger = logging.getLogger(__name__)
+    logger.info("استلام /start من user_id=%s", user_id)
     
     # التحقق من وجود كود إحالة
     referral_code = None
@@ -59,30 +61,64 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
         # معالجة الإحالة
-        if referral_code and referral_code != user.referral_code:
+        if user and referral_code and referral_code != user.referral_code:
             await handle_referral(user, referral_code)
+
+    if not user:
+        await update.message.reply_text("❌ تعذر إنشاء الحساب. حاول مرة أخرى.")
+        return
+
+    # حفظ بيانات العرض في context لتفادي مشاكل الجلسة
+    context.user_data["balance"] = user.balance or 0
+    context.user_data["telegram_id"] = user.telegram_id
     
-    # ── الرسالة 1: الخطوة الأولى + روابط ──
+    # ── الرسالة 1 فقط: الخطوة الأولى (الشحن) — بدون القائمة الكبيرة ──
     step1_message = Config.MESSAGES["start_step1"].format(
         facebook_url=Config.FACEBOOK_URL,
         telegram_channel_url=Config.TELEGRAM_CHANNEL_URL,
     )
     await update.message.reply_text(
         step1_message,
-        reply_markup=Keyboards.social_links(),
+        reply_markup=Keyboards.start_step1(),
         disable_web_page_preview=False,
     )
+    logger.info("تم إرسال الخطوة 1 (شحن) لـ user_id=%s", user_id)
 
-    # ── الرسالة 2: ترحيب + القائمة الرئيسية ──
+
+async def start_continue_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """بعد الخطوة 1 — فتح القائمة (مبسطة ثم المزيد للقائمة الكاملة)"""
+    user = db.get_user(update.effective_user.id)
+    if not user:
+        user = db.create_user(
+            telegram_id=update.effective_user.id,
+            username=update.effective_user.username,
+            first_name=update.effective_user.first_name,
+            last_name=update.effective_user.last_name,
+        )
+    if not user:
+        text = "❌ تعذر تحميل الحساب. أرسل /start من جديد."
+        if update.callback_query:
+            await update.callback_query.edit_message_text(text)
+        else:
+            await update.message.reply_text(text)
+        return
+
     welcome_message = Config.MESSAGES["welcome"].format(
         bot_name=Config.BOT_DISPLAY_NAME,
-        balance=format_currency(user.balance),
+        balance=format_currency(user.balance or 0),
         user_id=user.telegram_id,
     )
-    await update.message.reply_text(
-        welcome_message,
-        reply_markup=Keyboards.main_menu(),
-    )
+    # قائمة مبسطة — «المزيد من الخدمات» تفتح القائمة الكبيرة
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            welcome_message,
+            reply_markup=Keyboards.start_menu(),
+        )
+    else:
+        await update.message.reply_text(
+            welcome_message,
+            reply_markup=Keyboards.start_menu(),
+        )
 
 
 async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -348,6 +384,8 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         await main_menu_handler(update, context)
     elif data == "full_menu":
         await full_menu_handler(update, context)
+    elif data == "start_continue":
+        await start_continue_handler(update, context)
     
     # الإيداع والسحب
     elif data == "deposit":
