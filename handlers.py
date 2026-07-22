@@ -39,6 +39,47 @@ WAITING_FOR_SHAMCASH_CONFIRM = "waiting_for_shamcash_confirm"
 WAITING_FOR_SYRIATEL_AMOUNT = "waiting_for_syriatel_amount"
 WAITING_FOR_SYRIATEL_TX = "waiting_for_syriatel_tx"
 
+
+async def is_subscribed(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:
+    """التحقق من عضوية المستخدم في القناة المطلوبة."""
+    if user_id in Config.ADMIN_IDS:
+        return True
+
+    try:
+        member = await context.bot.get_chat_member(Config.REQUIRED_CHANNEL_ID, user_id)
+        if member.status in ("creator", "administrator", "member"):
+            return True
+        return member.status == "restricted" and bool(getattr(member, "is_member", False))
+    except TelegramError as exc:
+        logger.error(
+            "تعذر التحقق من اشتراك user_id=%s في %s: %s",
+            user_id,
+            Config.REQUIRED_CHANNEL_ID,
+            exc,
+        )
+        return False
+
+
+async def send_subscription_required(update: Update):
+    """إظهار بوابة الاشتراك الإلزامي."""
+    text = (
+        "🔒 يجب الاشتراك في قناتنا أولاً لاستخدام البوت.\n\n"
+        "1️⃣ اضغط «الاشتراك في القناة»\n"
+        "2️⃣ اشترك في القناة\n"
+        "3️⃣ ارجع واضغط «تحقق من الاشتراك»"
+    )
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            text,
+            reply_markup=Keyboards.required_subscription(),
+        )
+    else:
+        await update.message.reply_text(
+            text,
+            reply_markup=Keyboards.required_subscription(),
+        )
+
+
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالج أمر البدء — الخطوة 1 شحن أولاً، ثم القائمة بعد المتابعة"""
     user_id = update.effective_user.id
@@ -49,6 +90,13 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     referral_code = None
     if context.args and len(context.args) > 0:
         referral_code = context.args[0]
+        context.user_data["pending_referral_code"] = referral_code
+    else:
+        referral_code = context.user_data.get("pending_referral_code")
+
+    if not await is_subscribed(context, user_id):
+        await send_subscription_required(update)
+        return
     
     # إنشاء أو الحصول على المستخدم
     user = db.get_user(user_id)
@@ -65,7 +113,12 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await handle_referral(user, referral_code)
 
     if not user:
-        await update.message.reply_text("❌ تعذر إنشاء الحساب. حاول مرة أخرى.")
+        if update.callback_query:
+            await update.callback_query.edit_message_text(
+                "❌ تعذر إنشاء الحساب. أرسل /start وحاول مرة أخرى."
+            )
+        else:
+            await update.message.reply_text("❌ تعذر إنشاء الحساب. حاول مرة أخرى.")
         return
 
     # حفظ بيانات العرض في context لتفادي مشاكل الجلسة
@@ -77,11 +130,18 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         facebook_url=Config.FACEBOOK_URL,
         telegram_channel_url=Config.TELEGRAM_CHANNEL_URL,
     )
-    await update.message.reply_text(
-        step1_message,
-        reply_markup=Keyboards.start_step1(),
-        disable_web_page_preview=False,
-    )
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            step1_message,
+            reply_markup=Keyboards.start_step1(),
+            disable_web_page_preview=False,
+        )
+    else:
+        await update.message.reply_text(
+            step1_message,
+            reply_markup=Keyboards.start_step1(),
+            disable_web_page_preview=False,
+        )
     logger.info("تم إرسال الخطوة 1 (شحن) لـ user_id=%s", user_id)
 
 
@@ -123,6 +183,10 @@ async def start_continue_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالج القائمة الرئيسية"""
+    if not await is_subscribed(context, update.effective_user.id):
+        await send_subscription_required(update)
+        return
+
     user = db.get_user(update.effective_user.id)
     if not user:
         await start_handler(update, context)
@@ -375,9 +439,24 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالج الاستعلامات المضمنة"""
     query = update.callback_query
-    await query.answer()
-    
     data = query.data
+
+    # لا يُسمح باستخدام أي زر قبل الاشتراك بالقناة.
+    if data == "check_subscription":
+        if await is_subscribed(context, update.effective_user.id):
+            await query.answer("✅ تم التحقق من الاشتراك", show_alert=False)
+            await start_handler(update, context)
+        else:
+            await query.answer(
+                "❌ لم يتم العثور على اشتراكك. اشترك ثم حاول مجدداً.",
+                show_alert=True,
+            )
+        return
+
+    await query.answer()
+    if not await is_subscribed(context, update.effective_user.id):
+        await send_subscription_required(update)
+        return
     
     # القائمة الرئيسية
     if data == "main_menu":
@@ -556,6 +635,11 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالج الرسائل النصية"""
+    if not await is_subscribed(context, update.effective_user.id):
+        context.user_data.pop("state", None)
+        await send_subscription_required(update)
+        return
+
     if context.user_data.get("admin_operation") and update.effective_user.id in Config.ADMIN_IDS:
         await AdminHandler.handle_admin_input(update, context)
         return

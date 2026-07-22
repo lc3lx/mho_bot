@@ -60,6 +60,15 @@ class Keyboards:
         return InlineKeyboardMarkup(keyboard)
 
     @staticmethod
+    def required_subscription():
+        """بوابة الاشتراك الإلزامي قبل استخدام البوت"""
+        keyboard = [
+            [InlineKeyboardButton("📢 الاشتراك في القناة", url=Config.TELEGRAM_CHANNEL_URL)],
+            [InlineKeyboardButton("✅ تحقق من الاشتراك", callback_data="check_subscription")],
+        ]
+        return InlineKeyboardMarkup(keyboard)
+
+    @staticmethod
     def start_step1():
         """الخطوة 1: شحن أولاً ثم روابط التواصل"""
         keyboard = [

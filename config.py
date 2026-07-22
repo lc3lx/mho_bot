@@ -27,9 +27,10 @@ class Config:
         if c.isascii() and (c.isalnum() or c in "_-")
     )[:256]
 
-    # روابط التواصل (عدّلها في .env)
-    FACEBOOK_URL = os.getenv("FACEBOOK_URL", "https://facebook.com/NapoleonBot")
-    TELEGRAM_CHANNEL_URL = os.getenv("TELEGRAM_CHANNEL_URL", "https://t.me/NapoleonChannel")
+    # روابط التواصل والاشتراك الإلزامي
+    FACEBOOK_URL = os.getenv("FACEBOOK_URL", "https://www.facebook.com/share/1EPqQiSMun/")
+    TELEGRAM_CHANNEL_URL = os.getenv("TELEGRAM_CHANNEL_URL", "https://t.me/ESR_ichancy")
+    REQUIRED_CHANNEL_ID = os.getenv("REQUIRED_CHANNEL_ID", "@ESR_ichancy")
     TELEGRAM_SUPPORT_URL = os.getenv("TELEGRAM_SUPPORT_URL", "https://t.me/NapoleonSupport")
     
     # إعدادات قاعدة البيانات
