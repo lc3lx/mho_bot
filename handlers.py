@@ -40,43 +40,110 @@ WAITING_FOR_SYRIATEL_AMOUNT = "waiting_for_syriatel_amount"
 WAITING_FOR_SYRIATEL_TX = "waiting_for_syriatel_tx"
 
 
+async def check_channel_subscription(
+    context: ContextTypes.DEFAULT_TYPE, user_id: int
+) -> tuple[bool, str | None]:
+    """
+    التحقق من عضوية المستخدم في القناة المطلوبة.
+    يعيد: (مشترك؟, سبب الفشل أو None)
+    أسباب شائعة: not_subscribed | bot_not_admin | channel_error
+    """
+    if user_id in Config.ADMIN_IDS:
+        return True, None
+
+    channel_ids = Config.get_required_channel_ids()
+    if not channel_ids:
+        logger.error("REQUIRED_CHANNEL_ID غير مضبوط")
+        return False, "channel_error"
+
+    last_error = None
+    for chat_id in channel_ids:
+        try:
+            member = await context.bot.get_chat_member(chat_id, user_id)
+            status = getattr(member, "status", None)
+            if status in ("creator", "administrator", "member"):
+                return True, None
+            if status == "restricted" and bool(getattr(member, "is_member", False)):
+                return True, None
+            # left / kicked / غير عضو — تحقق ناجح لكن غير مشترك
+            return False, "not_subscribed"
+        except TelegramError as exc:
+            last_error = exc
+            err_text = str(exc).lower()
+            logger.error(
+                "تعذر التحقق من اشتراك user_id=%s في %s: %s",
+                user_id,
+                chat_id,
+                exc,
+            )
+            if any(
+                key in err_text
+                for key in (
+                    "member list is inaccessible",
+                    "chat not found",
+                    "bot is not a member",
+                    "not enough rights",
+                    "have no rights",
+                )
+            ):
+                # غالباً البوت ليس مشرفاً في القناة
+                return False, "bot_not_admin"
+            continue
+
+    if last_error:
+        return False, "bot_not_admin"
+    return False, "not_subscribed"
+
+
 async def is_subscribed(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:
     """التحقق من عضوية المستخدم في القناة المطلوبة."""
-    if user_id in Config.ADMIN_IDS:
-        return True
+    ok, _reason = await check_channel_subscription(context, user_id)
+    return ok
 
-    try:
-        member = await context.bot.get_chat_member(Config.REQUIRED_CHANNEL_ID, user_id)
-        if member.status in ("creator", "administrator", "member"):
-            return True
-        return member.status == "restricted" and bool(getattr(member, "is_member", False))
-    except TelegramError as exc:
-        logger.error(
-            "تعذر التحقق من اشتراك user_id=%s في %s: %s",
-            user_id,
-            Config.REQUIRED_CHANNEL_ID,
-            exc,
+
+def subscription_failure_message(reason: str | None) -> str:
+    """رسالة واضحة حسب سبب فشل التحقق."""
+    if reason == "bot_not_admin":
+        return (
+            "⚠️ تعذر التحقق من الاشتراك حالياً.\n\n"
+            "السبب المحتمل: البوت ليس مشرفاً في القناة.\n"
+            "أضِف البوت كمشرف في القناة ثم أعد المحاولة."
         )
-        return False
-
-
-async def send_subscription_required(update: Update):
-    """إظهار بوابة الاشتراك الإلزامي."""
-    text = (
-        "🔒 يجب الاشتراك في قناتنا أولاً لاستخدام البوت.\n\n"
-        "1️⃣ اضغط «الاشتراك في القناة»\n"
-        "2️⃣ اشترك في القناة\n"
-        "3️⃣ ارجع واضغط «تحقق من الاشتراك»"
+    if reason == "channel_error":
+        return "⚠️ إعدادات القناة غير مكتملة. تواصل مع الإدارة."
+    return (
+        "❌ لم يتم العثور على اشتراكك.\n"
+        "اشترك في القناة ثم اضغط «تحقق من الاشتراك» مجدداً."
     )
+
+
+async def send_subscription_required(update: Update, reason: str | None = None):
+    """إظهار بوابة الاشتراك الإلزامي."""
+    if reason == "bot_not_admin":
+        text = (
+            "⚠️ لا يمكن التحقق من الاشتراك حالياً.\n\n"
+            "يجب إضافة البوت كـ **مشرف** في القناة حتى يعمل التحقق.\n"
+            f"القناة: {Config.TELEGRAM_CHANNEL_URL}\n"
+            f"البوت: @{Config.BOT_USERNAME}"
+        )
+    else:
+        text = (
+            "🔒 يجب الاشتراك في قناتنا أولاً لاستخدام البوت.\n\n"
+            "1️⃣ اضغط «الاشتراك في القناة»\n"
+            "2️⃣ اشترك في القناة\n"
+            "3️⃣ ارجع واضغط «تحقق من الاشتراك»"
+        )
     if update.callback_query:
         await update.callback_query.edit_message_text(
             text,
             reply_markup=Keyboards.required_subscription(),
+            parse_mode="Markdown",
         )
     else:
         await update.message.reply_text(
             text,
             reply_markup=Keyboards.required_subscription(),
+            parse_mode="Markdown",
         )
 
 
@@ -94,8 +161,9 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         referral_code = context.user_data.get("pending_referral_code")
 
-    if not await is_subscribed(context, user_id):
-        await send_subscription_required(update)
+    subscribed, reason = await check_channel_subscription(context, user_id)
+    if not subscribed:
+        await send_subscription_required(update, reason)
         return
     
     # إنشاء أو الحصول على المستخدم
@@ -183,8 +251,11 @@ async def start_continue_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالج القائمة الرئيسية"""
-    if not await is_subscribed(context, update.effective_user.id):
-        await send_subscription_required(update)
+    subscribed, reason = await check_channel_subscription(
+        context, update.effective_user.id
+    )
+    if not subscribed:
+        await send_subscription_required(update, reason)
         return
 
     user = db.get_user(update.effective_user.id)
@@ -444,19 +515,27 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     # لا يُسمح باستخدام أي زر قبل الاشتراك بالقناة.
     if data == "check_subscription":
-        if await is_subscribed(context, update.effective_user.id):
+        subscribed, reason = await check_channel_subscription(
+            context, update.effective_user.id
+        )
+        if subscribed:
             await query.answer("✅ تم التحقق من الاشتراك", show_alert=False)
             await start_handler(update, context)
         else:
             await query.answer(
-                "❌ لم يتم العثور على اشتراكك. اشترك ثم حاول مجدداً.",
+                subscription_failure_message(reason)[:200],
                 show_alert=True,
             )
+            if reason == "bot_not_admin":
+                await send_subscription_required(update, reason)
         return
 
     await query.answer()
-    if not await is_subscribed(context, update.effective_user.id):
-        await send_subscription_required(update)
+    subscribed, reason = await check_channel_subscription(
+        context, update.effective_user.id
+    )
+    if not subscribed:
+        await send_subscription_required(update, reason)
         return
     
     # القائمة الرئيسية
@@ -636,9 +715,12 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالج الرسائل النصية"""
-    if not await is_subscribed(context, update.effective_user.id):
+    subscribed, reason = await check_channel_subscription(
+        context, update.effective_user.id
+    )
+    if not subscribed:
         context.user_data.pop("state", None)
-        await send_subscription_required(update)
+        await send_subscription_required(update, reason)
         return
 
     if context.user_data.get("admin_operation") and update.effective_user.id in Config.ADMIN_IDS:

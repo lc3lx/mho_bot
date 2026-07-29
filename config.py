@@ -30,9 +30,34 @@ class Config:
     # روابط التواصل والاشتراك الإلزامي
     FACEBOOK_URL = os.getenv("FACEBOOK_URL", "https://www.facebook.com/share/1EPqQiSMun/")
     TELEGRAM_CHANNEL_URL = os.getenv("TELEGRAM_CHANNEL_URL", "https://t.me/ESRteam")
-    REQUIRED_CHANNEL_ID = os.getenv("REQUIRED_CHANNEL_ID", "@ESRteam")
+    REQUIRED_CHANNEL_ID = os.getenv("REQUIRED_CHANNEL_ID", "@ESRteam").strip()
     TELEGRAM_SUPPORT_URL = os.getenv("TELEGRAM_SUPPORT_URL", "https://t.me/NapoleonSupport")
-    
+
+    @classmethod
+    def get_required_channel_ids(cls):
+        """معرّفات القناة للتحقق من الاشتراك (username + numeric إن وُجد)."""
+        ids = []
+        raw = (cls.REQUIRED_CHANNEL_ID or "").strip()
+        if raw:
+            if raw.lstrip("-").isdigit():
+                ids.append(int(raw))
+            else:
+                ids.append(raw if raw.startswith("@") else f"@{raw}")
+
+        # استخراج username من رابط القناة كاحتياطي
+        url = (cls.TELEGRAM_CHANNEL_URL or "").strip().rstrip("/")
+        if "t.me/" in url:
+            part = url.split("t.me/", 1)[1].split("?")[0].strip("/")
+            if part and not part.startswith("+"):
+                username = part if part.startswith("@") else f"@{part}"
+                if username not in ids:
+                    ids.append(username)
+
+        unique = []
+        for item in ids:
+            if item not in unique:
+                unique.append(item)
+        return unique
     # إعدادات قاعدة البيانات
     DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///data/telegram_bot.db")
     
