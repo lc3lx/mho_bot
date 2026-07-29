@@ -117,15 +117,23 @@ def subscription_failure_message(reason: str | None) -> str:
     )
 
 
-async def send_subscription_required(update: Update, reason: str | None = None):
+async def send_subscription_required(
+    update: Update,
+    reason: str | None = None,
+    bot_username: str | None = None,
+):
     """إظهار بوابة الاشتراك الإلزامي."""
+    bot_username = (bot_username or Config.BOT_USERNAME or "Napoleonrobert_bot").lstrip("@")
     if reason == "bot_not_admin":
-        bot_username = (Config.BOT_USERNAME or "").lstrip("@")
         text = (
-            "⚠️ لا يمكن التحقق من الاشتراك حالياً.\n\n"
-            "يجب إضافة البوت كمشرف في القناة حتى يعمل التحقق.\n"
-            f"القناة: {Config.TELEGRAM_CHANNEL_URL}\n"
-            f"البوت: @{bot_username}"
+            "⚠️ التحقق معطل مؤقتاً: البوت مو مشرف بالقناة.\n\n"
+            "اشتراكك وحدو ما يكفي. لازم تضيف البوت نفسه مشرف:\n"
+            f"1) افتح القناة {Config.TELEGRAM_CHANNEL_URL}\n"
+            "2) Administrators → Add Admin\n"
+            f"3) ابحث عن: @{bot_username}\n"
+            "4) ضيفو مشرف (أي صلاحية بسيطة تكفي)\n"
+            "5) ارجع واضغط تحقق من الاشتراك\n\n"
+            "مهم: ضيف البوت مو حساب شخصي."
         )
     else:
         text = (
@@ -134,16 +142,31 @@ async def send_subscription_required(update: Update, reason: str | None = None):
             "2️⃣ اشترك في القناة\n"
             "3️⃣ ارجع واضغط «تحقق من الاشتراك»"
         )
-    if update.callback_query:
-        await update.callback_query.edit_message_text(
-            text,
-            reply_markup=Keyboards.required_subscription(),
-        )
-    else:
-        await update.message.reply_text(
-            text,
-            reply_markup=Keyboards.required_subscription(),
-        )
+    try:
+        if update.callback_query:
+            await update.callback_query.edit_message_text(
+                text,
+                reply_markup=Keyboards.required_subscription(),
+            )
+        else:
+            await update.message.reply_text(
+                text,
+                reply_markup=Keyboards.required_subscription(),
+            )
+    except TelegramError as exc:
+        # تجاهل تكرار نفس الرسالة
+        if "message is not modified" in str(exc).lower():
+            return
+        # إذا فشل التعديل، أرسل رسالة جديدة
+        try:
+            chat = update.effective_chat
+            if chat:
+                await chat.send_message(
+                    text,
+                    reply_markup=Keyboards.required_subscription(),
+                )
+        except TelegramError:
+            logger.exception("فشل إرسال رسالة الاشتراك")
 
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -162,7 +185,9 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     subscribed, reason = await check_channel_subscription(context, user_id)
     if not subscribed:
-        await send_subscription_required(update, reason)
+        await send_subscription_required(
+            update, reason, getattr(context.bot, "username", None)
+        )
         return
     
     # إنشاء أو الحصول على المستخدم
@@ -254,7 +279,9 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context, update.effective_user.id
     )
     if not subscribed:
-        await send_subscription_required(update, reason)
+        await send_subscription_required(
+            update, reason, getattr(context.bot, "username", None)
+        )
         return
 
     user = db.get_user(update.effective_user.id)
@@ -526,7 +553,9 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
                 show_alert=True,
             )
             if reason == "bot_not_admin":
-                await send_subscription_required(update, reason)
+                await send_subscription_required(
+                    update, reason, getattr(context.bot, "username", None)
+                )
         return
 
     await query.answer()
@@ -534,7 +563,9 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         context, update.effective_user.id
     )
     if not subscribed:
-        await send_subscription_required(update, reason)
+        await send_subscription_required(
+            update, reason, getattr(context.bot, "username", None)
+        )
         return
     
     # القائمة الرئيسية
@@ -719,7 +750,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     if not subscribed:
         context.user_data.pop("state", None)
-        await send_subscription_required(update, reason)
+        await send_subscription_required(
+            update, reason, getattr(context.bot, "username", None)
+        )
         return
 
     if context.user_data.get("admin_operation") and update.effective_user.id in Config.ADMIN_IDS:
