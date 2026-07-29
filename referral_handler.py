@@ -21,7 +21,7 @@ class ReferralHandler:
     @staticmethod
     def build_referral_link(bot_username: str, user: User) -> str:
         """رابط الإحالة — يستخدم آيدي التليجرام مثل الصورة"""
-        username = bot_username or Config.BOT_USERNAME or "Napoleonrobert_bot"
+        username = bot_username or Config.BOT_USERNAME or "NapoleonRobert"
         return f"https://t.me/{username}?start={user.telegram_id}"
 
     @staticmethod

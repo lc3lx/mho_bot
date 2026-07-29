@@ -10,7 +10,7 @@ class Config:
     
     # إعدادات التليجرام
     BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-    BOT_USERNAME = os.getenv("BOT_USERNAME", "Napoleonrobert_bot")
+    BOT_USERNAME = os.getenv("BOT_USERNAME", "NapoleonRobert")
     BOT_DISPLAY_NAME = os.getenv("BOT_DISPLAY_NAME", "Napoleon_bot")
     ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
 
