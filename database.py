@@ -70,7 +70,7 @@ class User(Base):
     vip_level = Column(String(20), default='beginner')
     is_admin = Column(Boolean, default=False)
     is_banned = Column(Boolean, default=False)
-    ichancy_player_id = Column(String(100))
+    ichancy_player_id = Column(String(100), unique=True)
     ichancy_username = Column(String(100))
     ichancy_password = Column(String(100))
     last_syriatel_code = Column(String(50))
@@ -356,7 +356,18 @@ class DatabaseManager:
                     conn.execute(text("ALTER TABLE users ADD COLUMN ichancy_password VARCHAR(100)"))
                 if "last_syriatel_code" not in user_columns:
                     conn.execute(text("ALTER TABLE users ADD COLUMN last_syriatel_code VARCHAR(50)"))
-        
+
+            # حساب Ichancy واحد فقط لكل مستخدم — فهرس فريد على player_id
+            with self.engine.begin() as conn:
+                try:
+                    conn.execute(
+                        text(
+                            "CREATE UNIQUE INDEX IF NOT EXISTS "
+                            "ix_users_ichancy_player_id ON users(ichancy_player_id)"
+                        )
+                    )
+                except Exception:
+                    pass
     def get_session(self):
         """الحصول على جلسة قاعدة البيانات"""
         return self.SessionLocal()
@@ -419,6 +430,35 @@ class DatabaseManager:
         session = self.get_session()
         try:
             user = session.query(User).filter(User.id == user_id).first()
+            return self._detach(session, user)
+        finally:
+            session.close()
+
+    def get_user_by_ichancy_player_id(self, player_id):
+        """جلب مستخدم مرتبط بمعرف لاعب Ichancy"""
+        if not player_id:
+            return None
+        session = self.get_session()
+        try:
+            user = session.query(User).filter(
+                User.ichancy_player_id == str(player_id)
+            ).first()
+            return self._detach(session, user)
+        finally:
+            session.close()
+
+    def get_user_by_ichancy_username(self, username):
+        """جلب مستخدم مرتبط باسم مستخدم Ichancy"""
+        if not username:
+            return None
+        session = self.get_session()
+        try:
+            user = (
+                session.query(User)
+                .filter(User.ichancy_username.isnot(None))
+                .filter(User.ichancy_username.ilike(str(username).strip()))
+                .first()
+            )
             return self._detach(session, user)
         finally:
             session.close()

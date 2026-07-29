@@ -15,7 +15,7 @@ from telegram.error import TelegramError
 from database import DatabaseManager, User, Transaction
 from config import Config
 from keyboards import Keyboards
-from utils import format_currency, validate_amount, get_user_display_name, generate_transaction_reference
+from utils import format_currency, validate_amount, get_user_display_name, generate_transaction_reference, calculate_withdrawal_fee
 from apisyria_client import ApiSyriaClient, ApiSyriaError
 from tron_usdt_client import TronUsdtClient, TronUsdtError
 
@@ -1323,6 +1323,8 @@ class PaymentHandler:
             return
 
         method_info = Config.PAYMENT_METHODS[method]
+        fee, net_amount = calculate_withdrawal_fee(validated_amount)
+        fee_pct = Config.WITHDRAWAL_FEE_PERCENTAGE
         if method == "syriatel_cash":
             dest_prompt = "📱 اختر رقم سيريتل كاش المحفوظ أو أدخل رقماً جديداً:"
         elif method == "shamcash":
@@ -1336,6 +1338,8 @@ class PaymentHandler:
 ✅ تم تسجيل طلب السحب
 
 💸 المبلغ: {format_currency(validated_amount)}
+📉 رسوم البوت ({fee_pct:g}%): {format_currency(fee)}
+💵 المبلغ المستلم: {format_currency(net_amount)}
 🏦 الطريقة: {method_info['name']} {method_info['emoji']}
 
 ⏳ **يتطلب موافقة الإدمن** — سيتم تحويل المبلغ يدوياً بعد المراجعة
@@ -1420,6 +1424,8 @@ class PaymentHandler:
         user = db.get_user(update.effective_user.id)
         method_info = Config.PAYMENT_METHODS[method]
         reference = generate_transaction_reference()
+        fee, net_amount = calculate_withdrawal_fee(amount)
+        fee_pct = Config.WITHDRAWAL_FEE_PERCENTAGE
 
         session = db.get_session()
         try:
@@ -1442,6 +1448,9 @@ class PaymentHandler:
                 description=(
                     f"سحب إلى واقع - {method_info['name']}\n"
                     f"وجهة الاستلام: {destination}\n"
+                    f"المبلغ: {amount}\n"
+                    f"رسوم البوت ({fee_pct:g}%): {fee}\n"
+                    f"صافي التحويل: {net_amount}\n"
                     f"مرجع: {reference}"
                 ),
             )
@@ -1457,6 +1466,8 @@ class PaymentHandler:
 ✅ تم إرسال طلب السحب للإدارة
 
 💸 المبلغ: {format_currency(amount)}
+📉 رسوم البوت ({fee_pct:g}%): {format_currency(fee)}
+💵 المبلغ المستلم: {format_currency(net_amount)}
 🏦 الطريقة: {method_info['name']} {method_info['emoji']}
 📍 الوجهة: `{destination}`
 🔢 رقم الطلب: {transaction.id}
@@ -1504,6 +1515,8 @@ class PaymentHandler:
             session.refresh(transaction)
 
             method_info = Config.PAYMENT_METHODS[method]
+            fee, net_amount = calculate_withdrawal_fee(amount)
+            fee_pct = Config.WITHDRAWAL_FEE_PERCENTAGE
             if method == "syriatel_cash":
                 dest_prompt = "📱 أرسل **رقم سيريتل كاش** للمستفيد (مثال: 0999123456):"
             else:
@@ -1513,6 +1526,8 @@ class PaymentHandler:
 ✅ تم تسجيل طلب السحب
 
 💸 المبلغ: {format_currency(amount)}
+📉 رسوم البوت ({fee_pct:g}%): {format_currency(fee)}
+💵 المبلغ المستلم: {format_currency(net_amount)}
 🏦 الطريقة: {method_info['name']} {method_info['emoji']}
 🔢 رقم الطلب: {transaction.id}
 
@@ -1547,6 +1562,7 @@ class PaymentHandler:
             return
 
         destination = destination.strip()
+        fee, net_amount = calculate_withdrawal_fee(amount)
         await update.message.reply_text("⏳ جاري تنفيذ التحويل...")
 
         try:
@@ -1554,7 +1570,7 @@ class PaymentHandler:
                 result = await asyncio.to_thread(
                     api_client.syriatel_transfer,
                     destination,
-                    amount,
+                    net_amount,
                 )
                 transfer_data = result.get("data", {})
                 external_id = transfer_data.get("billcode") or f"SYR_{transaction_id}"
@@ -1562,7 +1578,7 @@ class PaymentHandler:
                 result = await asyncio.to_thread(
                     api_client.shamcash_transfer,
                     destination,
-                    amount,
+                    net_amount,
                     note=f"سحب بوت - طلب {transaction_id}",
                 )
                 transfer_data = result.get("data", {})
@@ -1760,6 +1776,10 @@ class PaymentHandler:
                     text=(
                         f"✅ تم إتمام عملية السحب بنجاح!\n"
                         f"💸 المبلغ: {format_currency(transaction.amount)}\n"
+                        f"📉 رسوم البوت ({Config.WITHDRAWAL_FEE_PERCENTAGE:g}%): "
+                        f"{format_currency(calculate_withdrawal_fee(transaction.amount)[0])}\n"
+                        f"💵 المبلغ المستلم: "
+                        f"{format_currency(calculate_withdrawal_fee(transaction.amount)[1])}\n"
                         f"💵 رصيدك الحالي: {format_currency(user.balance)}"
                     ),
                     reply_markup=Keyboards.main_menu()
@@ -1913,13 +1933,17 @@ class PaymentHandler:
         user = db.get_user_by_id(transaction.user_id)
         method_info = Config.PAYMENT_METHODS.get(transaction.method, {"name": transaction.method, "emoji": ""})
         dest = destination or transaction.withdraw_destination or "غير محدد"
+        fee, net_amount = calculate_withdrawal_fee(transaction.amount)
+        fee_pct = Config.WITHDRAWAL_FEE_PERCENTAGE
 
         admin_message = f"""
 🔔 طلب سحب إلى واقع — **يتطلب إجراء يدوي**
 
 👤 المستخدم: {get_user_display_name(user)}
 🆔 المعرف: {user.telegram_id}
-💸 المبلغ: {format_currency(transaction.amount)}
+💸 المبلغ المطلوب: {format_currency(transaction.amount)}
+📉 رسوم البوت ({fee_pct:g}%): {format_currency(fee)}
+💵 **حوّل للمستلم: {format_currency(net_amount)}**
 🏦 الطريقة: {method_info['name']} {method_info['emoji']}
 📍 وجهة الاستلام: {dest}
 🔢 رقم الطلب: {transaction.id}
@@ -1927,7 +1951,7 @@ class PaymentHandler:
 💵 رصيد المستخدم بعد الخصم: {format_currency(user.balance)}
 📅 التاريخ: {transaction.created_at.strftime('%Y-%m-%d %H:%M')}
 
-⚠️ حوّل المبلغ يدوياً ثم وافق من /admin
+⚠️ حوّل **صافي المبلغ** يدوياً ثم وافق من /admin
         """
 
         for admin_id in Config.ADMIN_IDS:

@@ -29,8 +29,8 @@ class Config:
 
     # روابط التواصل والاشتراك الإلزامي
     FACEBOOK_URL = os.getenv("FACEBOOK_URL", "https://www.facebook.com/share/1EPqQiSMun/")
-    TELEGRAM_CHANNEL_URL = os.getenv("TELEGRAM_CHANNEL_URL", "https://t.me/ESR_ichancy")
-    REQUIRED_CHANNEL_ID = os.getenv("REQUIRED_CHANNEL_ID", "@ESR_ichancy")
+    TELEGRAM_CHANNEL_URL = os.getenv("TELEGRAM_CHANNEL_URL", "https://t.me/ESRteam")
+    REQUIRED_CHANNEL_ID = os.getenv("REQUIRED_CHANNEL_ID", "@ESRteam")
     TELEGRAM_SUPPORT_URL = os.getenv("TELEGRAM_SUPPORT_URL", "https://t.me/NapoleonSupport")
     
     # إعدادات قاعدة البيانات
@@ -38,6 +38,9 @@ class Config:
     
     # إعدادات الإحالات
     REFERRAL_PERCENTAGE = float(os.getenv("REFERRAL_PERCENTAGE", "10"))  # نسبة الربح من الإحالات
+
+    # رسوم السحب لصاحب البوت (% من قيمة السحب)
+    WITHDRAWAL_FEE_PERCENTAGE = float(os.getenv("WITHDRAWAL_FEE_PERCENTAGE", "10"))
     
     # إعدادات API SYRIA - https://apisyria.com/api/docs
     APISYRIA_CONFIG = {

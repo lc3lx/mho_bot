@@ -11,7 +11,7 @@ from telegram.error import TelegramError
 from database import DatabaseManager, User, Transaction, GiftCode
 from config import Config
 from keyboards import Keyboards
-from utils import format_currency, get_user_display_name
+from utils import format_currency, get_user_display_name, calculate_withdrawal_fee
 
 logger = logging.getLogger(__name__)
 db = DatabaseManager()
@@ -232,6 +232,13 @@ PRIZE100 10000
                     message += f"{i}. {transaction.transaction_type.upper()}\n"
                     message += f"👤 {get_user_display_name(user)}\n"
                     message += f"💰 {format_currency(transaction.amount)}\n"
+                    if transaction.transaction_type == "withdraw":
+                        fee, net_amount = calculate_withdrawal_fee(transaction.amount)
+                        message += (
+                            f"📉 رسوم ({Config.WITHDRAWAL_FEE_PERCENTAGE:g}%): "
+                            f"{format_currency(fee)}\n"
+                            f"💵 حوّل: {format_currency(net_amount)}\n"
+                        )
                     if transaction.withdraw_destination:
                         message += f"📍 الوجهة: {transaction.withdraw_destination}\n"
                     message += f"📅 {transaction.created_at.strftime('%Y-%m-%d %H:%M')}\n"
@@ -645,7 +652,13 @@ PRIZE100 10000
                         f"بقيمة {format_currency(transaction.amount)}"
                     )
                     if action == "approve" and transaction.transaction_type == "withdraw":
+                        fee, net_amount = calculate_withdrawal_fee(transaction.amount)
                         dest = transaction.withdraw_destination or ""
+                        user_msg += (
+                            f"\n📉 رسوم البوت ({Config.WITHDRAWAL_FEE_PERCENTAGE:g}%): "
+                            f"{format_currency(fee)}"
+                            f"\n💵 المبلغ المحوّل: {format_currency(net_amount)}"
+                        )
                         if dest:
                             user_msg += f"\n📍 تم التحويل إلى: {dest}"
                     elif action == "reject" and transaction.transaction_type == "withdraw":

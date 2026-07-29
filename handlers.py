@@ -336,6 +336,7 @@ async def withdraw_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 💵 رصيدك الحالي: {format_currency(user.balance)}
 💰 الحد الأدنى: {format_currency(Config.MIN_WITHDRAWAL)}
 💰 الحد الأقصى: {format_currency(Config.MAX_WITHDRAWAL)}
+📉 رسوم السحب: {Config.WITHDRAWAL_FEE_PERCENTAGE:g}% لصاحب البوت
 
 ⏳ **يتطلب موافقة الإدمن** — سيتم تحويل المبلغ يدوياً
 
@@ -1138,6 +1139,7 @@ async def handle_payment_method(update: Update, context: ContextTypes.DEFAULT_TY
 💵 رصيدك الحالي: {format_currency(user.balance)}
 💰 الحد الأدنى: {format_currency(Config.MIN_WITHDRAWAL)}
 💰 الحد الأقصى: {format_currency(Config.MAX_WITHDRAWAL)}
+📉 رسوم السحب: {Config.WITHDRAWAL_FEE_PERCENTAGE:g}% لصاحب البوت
 
 ⏳ **يتطلب موافقة الإدمن** — تحويل يدوي
 

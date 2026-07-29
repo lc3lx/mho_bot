@@ -26,6 +26,15 @@ class IchancyHandler:
     """إنشاء حساب ichancy + شحن من البوت + سحب للمنصة"""
 
     @staticmethod
+    def _already_linked_message(user: User) -> str:
+        return (
+            "✅ لديك حساب Ichancy واحد مرتبط مسبقاً.\n\n"
+            f"👤 المستخدم: `{user.ichancy_username or '—'}`\n"
+            f"🆔 Id: `{user.ichancy_player_id}`\n\n"
+            "لا يمكن إنشاء أو ربط حساب ثانٍ."
+        )
+
+    @staticmethod
     def _format_remaining(seconds: int) -> str:
         minutes, secs = divmod(max(0, seconds), 60)
         if minutes and secs:
@@ -125,6 +134,7 @@ class IchancyHandler:
         text = (
             "2️⃣ الخطوة الثانية\n"
             "بعد إتمام الشحن، يجب عليك إنشاء حساب.\n\n"
+            "⚠️ كل مستخدم يحق له حساب Ichancy واحد فقط، ويُربط بحسابك في التليجرام.\n\n"
             "اضغط الزر لإنشاء حساب Ichancy."
         )
         markup = Keyboards.ichancy_create_prompt()
@@ -182,8 +192,9 @@ class IchancyHandler:
         user = db.get_user(update.effective_user.id)
         if user.ichancy_player_id:
             await update.callback_query.edit_message_text(
-                "✅ لديك حساب Ichancy مسبقاً.",
+                IchancyHandler._already_linked_message(user),
                 reply_markup=Keyboards.ichancy_account_menu(),
+                parse_mode="Markdown",
             )
             return
 
@@ -196,6 +207,7 @@ class IchancyHandler:
 
         text = (
             "🔷 إنشاء حساب iChancy - اسم المستخدم\n\n"
+            "⚠️ مسموح بحساب واحد فقط لكل مستخدم.\n\n"
             "يرجى اختيار اسم مستخدم يحقق الشروط التالية:\n"
             "1. أن يحتوي على أحرف إنجليزية فقط.\n"
             "2. أن يحتوي على أرقام لتجنب التشابه.\n"
@@ -214,10 +226,29 @@ class IchancyHandler:
     async def process_username(
         update: Update, context: ContextTypes.DEFAULT_TYPE, username: str
     ):
+        user = db.get_user(update.effective_user.id)
+        if user and user.ichancy_player_id:
+            context.user_data.clear()
+            await update.message.reply_text(
+                IchancyHandler._already_linked_message(user),
+                reply_markup=Keyboards.ichancy_account_menu(),
+                parse_mode="Markdown",
+            )
+            return
+
         username, err = IchancyHandler.validate_username(username)
         if err:
             await update.message.reply_text(
                 err, reply_markup=Keyboards.cancel_operation(), parse_mode="Markdown"
+            )
+            return
+
+        taken = db.get_user_by_ichancy_username(username)
+        if taken and str(taken.telegram_id) != str(update.effective_user.id):
+            await update.message.reply_text(
+                "❌ اسم المستخدم هذا مرتبط بمستخدم آخر في البوت.\n"
+                "اختر اسماً مختلفاً.",
+                reply_markup=Keyboards.cancel_operation(),
             )
             return
 
@@ -251,6 +282,17 @@ class IchancyHandler:
             )
             return
 
+        # منع إنشاء حساب ثانٍ حتى لو تجاوز زر البداية
+        existing = db.get_user(update.effective_user.id)
+        if existing and existing.ichancy_player_id:
+            context.user_data.clear()
+            await update.message.reply_text(
+                IchancyHandler._already_linked_message(existing),
+                reply_markup=Keyboards.ichancy_account_menu(),
+                parse_mode="Markdown",
+            )
+            return
+
         wait_msg = await update.message.reply_text("⏳ انتظر ريثما يتم انشاء الحساب")
 
         email = f"{username.lower()}@gmail.com"
@@ -271,11 +313,38 @@ class IchancyHandler:
             if not player_id:
                 raise IchancyError("تم التسجيل لكن تعذر جلب معرف اللاعب")
 
+            owner = db.get_user_by_ichancy_player_id(player_id)
+            if owner and str(owner.telegram_id) != str(update.effective_user.id):
+                context.user_data.clear()
+                try:
+                    await wait_msg.delete()
+                except Exception:
+                    pass
+                await update.message.reply_text(
+                    "❌ هذا الحساب مرتبط بمستخدم تليجرام آخر.\n"
+                    "كل مستخدم يحق له حساب واحد فقط.",
+                    reply_markup=Keyboards.main_menu(),
+                )
+                return
+
             session = db.get_session()
             try:
                 user = session.query(User).filter(
                     User.telegram_id == str(update.effective_user.id)
                 ).first()
+                if user.ichancy_player_id:
+                    context.user_data.clear()
+                    try:
+                        await wait_msg.delete()
+                    except Exception:
+                        pass
+                    await update.message.reply_text(
+                        IchancyHandler._already_linked_message(user),
+                        reply_markup=Keyboards.ichancy_account_menu(),
+                        parse_mode="Markdown",
+                    )
+                    return
+
                 user.ichancy_player_id = player_id
                 user.ichancy_username = username
                 user.ichancy_password = password
@@ -294,7 +363,8 @@ class IchancyHandler:
                 "معلومات الحساب هي:\n\n"
                 f"اسم المستخدم: `{username}`\n"
                 f"كلمة السر: `{password}`\n\n"
-                "اضغط على اسم المستخدم وكلمة المرور للنسخ",
+                "اضغط على اسم المستخدم وكلمة المرور للنسخ\n\n"
+                "⚠️ هذا حسابك الوحيد المرتبط بهذا البوت.",
                 parse_mode="Markdown",
                 reply_markup=Keyboards.ichancy_account_menu(),
             )
@@ -441,9 +511,20 @@ class IchancyHandler:
 
     @staticmethod
     async def start_link_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """ربط حساب موجود (احتياطي)"""
+        """ربط حساب موجود (احتياطي) — مرة واحدة فقط لكل مستخدم"""
+        user = db.get_user(update.effective_user.id)
+        if user and user.ichancy_player_id:
+            await update.callback_query.edit_message_text(
+                IchancyHandler._already_linked_message(user),
+                reply_markup=Keyboards.ichancy_account_menu(),
+                parse_mode="Markdown",
+            )
+            return
+
         message = """
 🔗 ربط حساب ichancy
+
+⚠️ مسموح بحساب واحد فقط لكل مستخدم تليجرام.
 
 أرسل **معرف اللاعب (playerId)** أو **اسم المستخدم** على ichancy
         """
@@ -459,6 +540,16 @@ class IchancyHandler:
     async def process_link_account(
         update: Update, context: ContextTypes.DEFAULT_TYPE, player_ref: str
     ):
+        existing = db.get_user(update.effective_user.id)
+        if existing and existing.ichancy_player_id:
+            context.user_data.clear()
+            await update.message.reply_text(
+                IchancyHandler._already_linked_message(existing),
+                reply_markup=Keyboards.ichancy_account_menu(),
+                parse_mode="Markdown",
+            )
+            return
+
         player_ref = player_ref.strip()
         if len(player_ref) < 3:
             await update.message.reply_text(
@@ -485,11 +576,40 @@ class IchancyHandler:
                 )
                 return
 
+        owner = db.get_user_by_ichancy_player_id(resolved_id)
+        if owner and str(owner.telegram_id) != str(update.effective_user.id):
+            context.user_data.clear()
+            await update.message.reply_text(
+                "❌ هذا الحساب مرتبط بمستخدم تليجرام آخر.\n"
+                "كل حساب Ichancy يُربط بمستخدم واحد فقط.",
+                reply_markup=Keyboards.main_menu(),
+            )
+            return
+
+        if display_name:
+            name_owner = db.get_user_by_ichancy_username(display_name)
+            if name_owner and str(name_owner.telegram_id) != str(update.effective_user.id):
+                context.user_data.clear()
+                await update.message.reply_text(
+                    "❌ اسم المستخدم هذا مرتبط بمستخدم آخر في البوت.",
+                    reply_markup=Keyboards.main_menu(),
+                )
+                return
+
         session = db.get_session()
         try:
             user = session.query(User).filter(
                 User.telegram_id == str(update.effective_user.id)
             ).first()
+            if user.ichancy_player_id:
+                context.user_data.clear()
+                await update.message.reply_text(
+                    IchancyHandler._already_linked_message(user),
+                    reply_markup=Keyboards.ichancy_account_menu(),
+                    parse_mode="Markdown",
+                )
+                return
+
             user.ichancy_player_id = resolved_id
             user.ichancy_username = display_name
             session.commit()
@@ -498,7 +618,8 @@ class IchancyHandler:
 
         context.user_data.clear()
         await update.message.reply_text(
-            f"✅ تم ربط الحساب!\n🎰 Id: `{resolved_id}`\n👤 `{display_name}`",
+            f"✅ تم ربط الحساب!\n🎰 Id: `{resolved_id}`\n👤 `{display_name}`\n\n"
+            "⚠️ هذا حسابك الوحيد المرتبط بهذا البوت.",
             reply_markup=Keyboards.ichancy_account_menu(),
             parse_mode="Markdown",
         )

@@ -11,6 +11,15 @@ def format_currency(amount: float) -> str:
     """تنسيق العملة"""
     return f"{amount:,.2f}"
 
+def calculate_withdrawal_fee(amount: float, fee_percentage: float = None) -> tuple[float, float]:
+    """حساب رسوم السحب: (الرسوم، صافي المبلغ للمستلم)"""
+    from config import Config
+    if fee_percentage is None:
+        fee_percentage = Config.WITHDRAWAL_FEE_PERCENTAGE
+    fee = round(amount * (fee_percentage / 100), 2)
+    net = round(amount - fee, 2)
+    return fee, net
+
 def validate_amount(amount_str: str, min_amount: float = 0, max_amount: float = float('inf')) -> tuple[bool, float, str]:
     """التحقق من صحة المبلغ"""
     try:
