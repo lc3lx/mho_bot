@@ -20,6 +20,107 @@ def calculate_withdrawal_fee(amount: float, fee_percentage: float = None) -> tup
     net = round(amount - fee, 2)
     return fee, net
 
+
+async def safe_edit_callback_message(
+    update,
+    text: str,
+    reply_markup=None,
+    parse_mode=None,
+    context=None,
+    disable_web_page_preview=None,
+):
+    """
+    تعديل رسالة الكولباك بأمان.
+    رسائل الصور/الفيديو لا تُعدَّل بـ editMessageText — نحذفها ونرسل نصاً جديداً.
+    """
+    from telegram.error import TelegramError
+
+    query = getattr(update, "callback_query", None)
+    if not query or not query.message:
+        target = getattr(update, "effective_message", None) or getattr(update, "message", None)
+        if target:
+            kwargs = {"text": text, "reply_markup": reply_markup}
+            if parse_mode:
+                kwargs["parse_mode"] = parse_mode
+            if disable_web_page_preview is not None:
+                kwargs["disable_web_page_preview"] = disable_web_page_preview
+            await target.reply_text(**kwargs)
+        return
+
+    message = query.message
+    bot = context.bot if context is not None else query.get_bot()
+    is_media = bool(
+        message.photo
+        or message.video
+        or message.document
+        or message.animation
+        or message.sticker
+        or message.voice
+        or message.audio
+    )
+
+    send_kwargs = {
+        "chat_id": message.chat_id,
+        "text": text,
+        "reply_markup": reply_markup,
+    }
+    if parse_mode:
+        send_kwargs["parse_mode"] = parse_mode
+    if disable_web_page_preview is not None:
+        send_kwargs["disable_web_page_preview"] = disable_web_page_preview
+
+    if is_media:
+        try:
+            await message.delete()
+        except TelegramError:
+            pass
+        await bot.send_message(**send_kwargs)
+        return
+
+    try:
+        edit_kwargs = {"text": text, "reply_markup": reply_markup}
+        if parse_mode:
+            edit_kwargs["parse_mode"] = parse_mode
+        if disable_web_page_preview is not None:
+            edit_kwargs["disable_web_page_preview"] = disable_web_page_preview
+        await query.edit_message_text(**edit_kwargs)
+    except TelegramError as exc:
+        err = str(exc).lower()
+        if any(
+            key in err
+            for key in (
+                "no text",
+                "message is not modified",
+                "message to edit not found",
+                "message can't be edited",
+            )
+        ):
+            try:
+                await message.delete()
+            except TelegramError:
+                pass
+            await bot.send_message(**send_kwargs)
+            return
+        raise
+
+
+def is_benign_telegram_error(error) -> bool:
+    """أخطاء تيليجرام المتوقعة التي لا تستدعي إزعاج المستخدم."""
+    if error is None:
+        return False
+    err = str(error).lower()
+    return any(
+        key in err
+        for key in (
+            "no text in the message to edit",
+            "message is not modified",
+            "message to delete not found",
+            "message to edit not found",
+            "query is too old",
+            "query id is invalid",
+        )
+    )
+
 def validate_amount(amount_str: str, min_amount: float = 0, max_amount: float = float('inf')) -> tuple[bool, float, str]:
     """التحقق من صحة المبلغ"""
     try:

@@ -15,7 +15,7 @@ from telegram.error import TelegramError
 from database import DatabaseManager, User, Transaction
 from config import Config
 from keyboards import Keyboards
-from utils import format_currency, validate_amount, get_user_display_name, generate_transaction_reference, calculate_withdrawal_fee
+from utils import format_currency, validate_amount, get_user_display_name, generate_transaction_reference, calculate_withdrawal_fee, safe_edit_callback_message
 from apisyria_client import ApiSyriaClient, ApiSyriaError
 from tron_usdt_client import TronUsdtClient, TronUsdtError
 
@@ -540,16 +540,20 @@ class PaymentHandler:
         if not codes:
             msg = "❌ لم تُضبط أكواد سيريتل. أضف APISYRIA_SYRIATEL_CODES في .env"
             if update.callback_query:
-                await update.callback_query.edit_message_text(msg, reply_markup=Keyboards.main_menu())
+                await safe_edit_callback_message(
+                    update, msg, reply_markup=Keyboards.main_menu(), context=context
+                )
             return
 
         if use_previous:
             user = db.get_user(update.effective_user.id)
             prev = getattr(user, "last_syriatel_code", None)
             if not prev or prev not in codes:
-                await update.callback_query.edit_message_text(
+                await safe_edit_callback_message(
+                    update,
                     "❌ لا يوجد رقم تاجر سابق محفوظ.",
                     reply_markup=Keyboards.syriatel_deposit_menu(False),
+                    context=context,
                 )
                 return
             context.user_data["syriatel_force_code"] = prev
@@ -566,16 +570,9 @@ class PaymentHandler:
         context.user_data["deposit_started_at"] = datetime.utcnow().isoformat()
 
         if update.callback_query:
-            try:
-                await update.callback_query.edit_message_text(
-                    text, reply_markup=Keyboards.cancel_operation()
-                )
-            except TelegramError:
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    text=text,
-                    reply_markup=Keyboards.cancel_operation(),
-                )
+            await safe_edit_callback_message(
+                update, text, reply_markup=Keyboards.cancel_operation(), context=context
+            )
         else:
             await update.message.reply_text(text, reply_markup=Keyboards.cancel_operation())
 

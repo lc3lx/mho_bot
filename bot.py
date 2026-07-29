@@ -161,6 +161,12 @@ class TelegramBot:
     
     async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """معالج الأخطاء"""
+        from utils import is_benign_telegram_error
+
+        if is_benign_telegram_error(context.error):
+            logger.warning("خطأ تيليجرام متوقع (تم تجاهله): %s", context.error)
+            return
+
         logger.error(f"حدث خطأ: {context.error}")
         
         if update and update.effective_message:

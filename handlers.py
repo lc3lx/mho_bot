@@ -11,7 +11,7 @@ from telegram.error import TelegramError
 from database import DatabaseManager, User, Transaction
 from config import Config
 from keyboards import Keyboards
-from utils import format_currency, validate_amount, get_user_display_name
+from utils import format_currency, validate_amount, get_user_display_name, safe_edit_callback_message
 from payment_handler import PaymentHandler
 from referral_handler import ReferralHandler
 from admin_handler import AdminHandler
@@ -73,7 +73,7 @@ async def check_channel_subscription(
         except TelegramError as exc:
             last_error = exc
             err_text = str(exc).lower()
-            logger.error(
+            logger.warning(
                 "تعذر التحقق من اشتراك user_id=%s في %s: %s",
                 user_id,
                 chat_id,
@@ -275,9 +275,11 @@ async def start_continue_handler(update: Update, context: ContextTypes.DEFAULT_T
     )
     # قائمة مبسطة — «المزيد من الخدمات» تفتح القائمة الكبيرة
     if update.callback_query:
-        await update.callback_query.edit_message_text(
+        await safe_edit_callback_message(
+            update,
             welcome_message,
             reply_markup=Keyboards.start_menu(),
+            context=context,
         )
     else:
         await update.message.reply_text(
@@ -310,8 +312,11 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message:
         await update.message.reply_text(message, reply_markup=Keyboards.main_menu())
     else:
-        await update.callback_query.edit_message_text(
-            message, reply_markup=Keyboards.main_menu()
+        await safe_edit_callback_message(
+            update,
+            message,
+            reply_markup=Keyboards.main_menu(),
+            context=context,
         )
 
 
@@ -328,8 +333,8 @@ async def full_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 رقم الايدي الخاص بك: {user.telegram_id}
 """
     if update.callback_query:
-        await update.callback_query.edit_message_text(
-            message, reply_markup=Keyboards.main_menu()
+        await safe_edit_callback_message(
+            update, message, reply_markup=Keyboards.main_menu(), context=context
         )
     else:
         await update.message.reply_text(message, reply_markup=Keyboards.main_menu())
@@ -417,9 +422,11 @@ async def deposit_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 """
 
     if update.callback_query:
-        await update.callback_query.edit_message_text(
+        await safe_edit_callback_message(
+            update,
             message,
             reply_markup=Keyboards.payment_methods("deposit"),
+            context=context,
         )
     else:
         await update.message.reply_text(
@@ -454,9 +461,11 @@ async def withdraw_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     
     if update.callback_query:
-        await update.callback_query.edit_message_text(
+        await safe_edit_callback_message(
+            update,
             message,
-            reply_markup=Keyboards.payment_methods("withdraw")
+            reply_markup=Keyboards.payment_methods("withdraw"),
+            context=context,
         )
     else:
         await update.message.reply_text(
@@ -1282,8 +1291,10 @@ async def handle_payment_method(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data['operation'] = operation
     context.user_data['method'] = method
     
-    await update.callback_query.edit_message_text(
+    await safe_edit_callback_message(
+        update,
         message,
-        reply_markup=Keyboards.cancel_operation()
+        reply_markup=Keyboards.cancel_operation(),
+        context=context,
     )
 
