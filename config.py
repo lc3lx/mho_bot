@@ -32,6 +32,10 @@ class Config:
     TELEGRAM_CHANNEL_URL = os.getenv("TELEGRAM_CHANNEL_URL", "https://t.me/ESRteam")
     REQUIRED_CHANNEL_ID = os.getenv("REQUIRED_CHANNEL_ID", "@ESRteam").strip()
     TELEGRAM_SUPPORT_URL = os.getenv("TELEGRAM_SUPPORT_URL", "https://t.me/NapoleonSupport")
+    # true = فرض الاشتراك | false = تعطيل البوابة بالكامل
+    REQUIRE_CHANNEL_SUBSCRIPTION = os.getenv(
+        "REQUIRE_CHANNEL_SUBSCRIPTION", "true"
+    ).strip().lower() in ("1", "true", "yes", "on")
 
     @classmethod
     def get_required_channel_ids(cls):

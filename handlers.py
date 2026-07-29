@@ -48,13 +48,16 @@ async def check_channel_subscription(
     يعيد: (مشترك؟, سبب الفشل أو None)
     أسباب شائعة: not_subscribed | bot_not_admin | channel_error
     """
+    if not Config.REQUIRE_CHANNEL_SUBSCRIPTION:
+        return True, None
+
     if user_id in Config.ADMIN_IDS:
         return True, None
 
     channel_ids = Config.get_required_channel_ids()
     if not channel_ids:
-        logger.error("REQUIRED_CHANNEL_ID غير مضبوط")
-        return False, "channel_error"
+        logger.error("REQUIRED_CHANNEL_ID غير مضبوط — تخطي فرض الاشتراك")
+        return True, "channel_error"
 
     last_error = None
     for chat_id in channel_ids:
@@ -86,12 +89,22 @@ async def check_channel_subscription(
                     "have no rights",
                 )
             ):
-                # غالباً البوت ليس مشرفاً في القناة
-                return False, "bot_not_admin"
+                # البوت مو مشرف: لا نحبس كل المستخدمين — نسمح بالمرور مع تحذير
+                logger.warning(
+                    "تخطي فرض الاشتراك: البوت ليس مشرفاً في القناة %s "
+                    "(أضف @%s كمشرف لتفعيل التحقق)",
+                    chat_id,
+                    (getattr(context.bot, "username", None) or Config.BOT_USERNAME or "").lstrip("@"),
+                )
+                return True, None
             continue
 
     if last_error:
-        return False, "bot_not_admin"
+        logger.warning(
+            "تخطي فرض الاشتراك بسبب خطأ API: %s",
+            last_error,
+        )
+        return True, None
     return False, "not_subscribed"
 
 
