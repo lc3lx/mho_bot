@@ -120,11 +120,12 @@ def subscription_failure_message(reason: str | None) -> str:
 async def send_subscription_required(update: Update, reason: str | None = None):
     """إظهار بوابة الاشتراك الإلزامي."""
     if reason == "bot_not_admin":
+        bot_username = (Config.BOT_USERNAME or "").lstrip("@")
         text = (
             "⚠️ لا يمكن التحقق من الاشتراك حالياً.\n\n"
-            "يجب إضافة البوت كـ **مشرف** في القناة حتى يعمل التحقق.\n"
+            "يجب إضافة البوت كمشرف في القناة حتى يعمل التحقق.\n"
             f"القناة: {Config.TELEGRAM_CHANNEL_URL}\n"
-            f"البوت: @{Config.BOT_USERNAME}"
+            f"البوت: @{bot_username}"
         )
     else:
         text = (
@@ -137,13 +138,11 @@ async def send_subscription_required(update: Update, reason: str | None = None):
         await update.callback_query.edit_message_text(
             text,
             reply_markup=Keyboards.required_subscription(),
-            parse_mode="Markdown",
         )
     else:
         await update.message.reply_text(
             text,
             reply_markup=Keyboards.required_subscription(),
-            parse_mode="Markdown",
         )
 
 
