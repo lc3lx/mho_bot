@@ -39,45 +39,6 @@ WAITING_FOR_SHAMCASH_CONFIRM = "waiting_for_shamcash_confirm"
 WAITING_FOR_SYRIATEL_AMOUNT = "waiting_for_syriatel_amount"
 WAITING_FOR_SYRIATEL_TX = "waiting_for_syriatel_tx"
 
-# أزرار/حالات مسموحة قبل إنشاء حساب Ichancy (الشحن اختياري)
-PRE_ICHANCY_CALLBACKS = {
-    "check_subscription",
-    "deposit",
-    "gift_code",
-    "cancel_operation",
-    "shamcash_cur_syp",
-    "shamcash_cur_usd",
-    "shamcash_confirm_send",
-    "shamcash_confirm_cancel",
-    "syriatel_manual_auto",
-    "syriatel_continue",
-    "syriatel_prev_code",
-    "open_facebook",
-    "ichancy_hub",
-    "ichancy_to_bot",
-    "ichancy_create_start",
-    "contact",
-    "message_admin",
-    "main_menu",
-    "start_continue",
-}
-PRE_ICHANCY_CALLBACK_PREFIXES = (
-    "deposit_",
-    "syriatel_pick_",
-)
-PRE_ICHANCY_STATES = {
-    WAITING_FOR_AMOUNT,
-    WAITING_FOR_TX_NUMBER,
-    WAITING_FOR_GIFT_CODE,
-    WAITING_FOR_SHAMCASH_TX,
-    WAITING_FOR_SHAMCASH_AMOUNT,
-    WAITING_FOR_SHAMCASH_CONFIRM,
-    WAITING_FOR_SYRIATEL_AMOUNT,
-    WAITING_FOR_SYRIATEL_TX,
-    WAITING_FOR_ICHANCY_USERNAME,
-    WAITING_FOR_ICHANCY_PASSWORD,
-}
-
 
 def user_is_funded(user) -> bool:
     """هل أكمل المستخدم شحناً ناجحاً مرة واحدة؟ (اختياري — لم يعد قيداً)"""
@@ -91,20 +52,16 @@ def user_has_ichancy(user) -> bool:
     return bool(user and user.ichancy_player_id)
 
 
-def is_pre_ichancy_callback(data: str) -> bool:
-    if data in PRE_ICHANCY_CALLBACKS:
-        return True
-    return any(data.startswith(prefix) for prefix in PRE_ICHANCY_CALLBACK_PREFIXES)
+def user_accepted_terms(user) -> bool:
+    """هل ضغط المستخدم زر الموافقة على الآثار الجانبية؟"""
+    return bool(user and getattr(user, "terms_accepted_at", None))
 
 
 def get_user_stage(user, telegram_id: int | None = None) -> str:
     """
-    مرحلة المستخدم بعد الاشتراك:
-    ichancy | ready
-    الشحن لم يعد خطوة إجبارية.
+    مرحلة المستخدم بعد الاشتراك.
+    لا يوجد قيد شحن ولا قيد حساب Ichancy — القائمة مفتوحة للجميع.
     """
-    if not user or not user_has_ichancy(user):
-        return "ichancy"
     return "ready"
 
 
@@ -112,10 +69,10 @@ def stage_markup_for_user(user, telegram_id: int | None = None):
     return Keyboards.stage_markup(get_user_stage(user, telegram_id))
 
 
-async def send_ichancy_required(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """إجبار إنشاء حساب Ichancy قبل باقي الخدمات."""
-    text = Config.MESSAGES["ichancy_required"]
-    markup = Keyboards.ichancy_required_menu()
+async def send_consent_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """رسالة «دخّلني» + زر الموافقة — تظهر لمن لم يوافق بعد."""
+    text = Config.MESSAGES["first_start_consent"]
+    markup = Keyboards.first_start_consent()
     try:
         if update.callback_query:
             await safe_edit_callback_message(
@@ -125,22 +82,15 @@ async def send_ichancy_required(update: Update, context: ContextTypes.DEFAULT_TY
             await update.effective_message.reply_text(text, reply_markup=markup)
         elif update.effective_user:
             await context.bot.send_message(
-                chat_id=update.effective_user.id,
-                text=text,
-                reply_markup=markup,
+                chat_id=update.effective_user.id, text=text, reply_markup=markup
             )
     except TelegramError:
-        logger.exception("فشل إرسال رسالة إجبار حساب Ichancy")
+        logger.exception("فشل إرسال بوابة الموافقة")
 
 
 async def show_user_home(update: Update, context: ContextTypes.DEFAULT_TYPE, user):
     """توجيه المستخدم لشاشة مرحلته الحالية فقط (رسالة واحدة واضحة)."""
-    tid = update.effective_user.id if update.effective_user else None
-    stage = get_user_stage(user, tid)
-    if stage == "ready":
-        await show_funded_home(update, context, user)
-        return
-    await send_ichancy_required(update, context)
+    await show_funded_home(update, context, user)
 
 
 async def check_channel_subscription(
@@ -313,7 +263,7 @@ async def show_funded_home(update: Update, context: ContextTypes.DEFAULT_TYPE, u
 
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """بوابة الشروط → اشتراك → Ichancy → القائمة (الشحن اختياري)."""
+    """موافقة → اشتراك → القائمة الرئيسية (الشحن وحساب Ichancy اختياريان)."""
     user_id = update.effective_user.id
     logger.info("استلام /start من user_id=%s", user_id)
 
@@ -341,10 +291,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        await update.effective_message.reply_text(
-            "🚀 دخّلني",
-            reply_markup=Keyboards.first_start_consent(),
-        )
+    if not user_accepted_terms(user):
+        await send_consent_gate(update, context)
         return
 
     subscribed, reason = await check_channel_subscription(context, user_id)
@@ -360,11 +308,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
         await interactive_answer(update.callback_query, "✅ تم فك القفل — أهلاً فيك")
 
-    if user_has_ichancy(user):
-        await show_funded_home(update, context, user)
-        return
-
-    await send_ichancy_required(update, context)
+    await show_funded_home(update, context, user)
 
 
 async def start_continue_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -400,12 +344,8 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user = db.get_user(update.effective_user.id)
-    if not user:
+    if not user or not user_accepted_terms(user):
         await start_handler(update, context)
-        return
-
-    if not user_has_ichancy(user):
-        await send_ichancy_required(update, context)
         return
 
     message = Config.MESSAGES["main_menu"].format(
@@ -428,12 +368,8 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def full_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """عرض القائمة الكاملة للخدمات"""
     user = db.get_user(update.effective_user.id)
-    if not user:
+    if not user or not user_accepted_terms(user):
         await start_handler(update, context)
-        return
-
-    if not user_has_ichancy(user):
-        await send_ichancy_required(update, context)
         return
 
     message = Config.MESSAGES["main_menu"].format(
@@ -595,8 +531,8 @@ async def withdraw_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def referral_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالج نظام الإحالات"""
     user = db.get_user(update.effective_user.id)
-    if not user or not user_has_ichancy(user):
-        await send_ichancy_required(update, context)
+    if not user:
+        await start_handler(update, context)
         return
     await ReferralHandler.show_referral_menu(update, context)
 
@@ -687,6 +623,13 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     data = query.data
 
     if data == "accept_side_effects":
+        db.create_user(
+            telegram_id=update.effective_user.id,
+            username=update.effective_user.username,
+            first_name=update.effective_user.first_name,
+            last_name=update.effective_user.last_name,
+        )
+        db.accept_terms(update.effective_user.id)
         await interactive_answer(query, "🚀 تم قبول الآثار الجانبية")
         await start_handler(update, context)
         return
@@ -748,16 +691,10 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         )
         return
 
-    # بوابة Ichancy: قبل إنشاء الحساب لا يُسمح إلا بإنشاء الحساب / شحن اختياري / دعم
+    # بوابة الموافقة: قبل الضغط على «أوافق» لا شيء متاح
     user = db.get_user(update.effective_user.id)
-    is_admin = update.effective_user.id in Config.ADMIN_IDS
-    if (
-        user
-        and not user_has_ichancy(user)
-        and not is_pre_ichancy_callback(data)
-        and not (is_admin and (data.startswith("admin_") or data == "cancel_admin_operation"))
-    ):
-        await send_ichancy_required(update, context)
+    if user and not user_accepted_terms(user):
+        await send_consent_gate(update, context)
         return
 
     # القائمة الرئيسية
@@ -962,17 +899,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = db.get_user(update.effective_user.id)
     user_state = context.user_data.get('state')
 
-    # قبل إنشاء Ichancy: اسمح فقط بإنشاء الحساب أو شحن اختياري / هدية
-    if (
-        user
-        and not user_has_ichancy(user)
-        and user_state not in PRE_ICHANCY_STATES
-        and not (
-            update.effective_user.id in Config.ADMIN_IDS
-            and context.user_data.get("admin_operation")
-        )
-    ):
-        await send_ichancy_required(update, context)
+    if user and not user_accepted_terms(user):
+        await send_consent_gate(update, context)
         return
 
     if user_state == WAITING_FOR_AMOUNT:
@@ -1049,7 +977,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user:
             await show_user_home(update, context, user)
         else:
-            await send_ichancy_required(update, context)
+            await start_handler(update, context)
 
 # دوال مساعدة
 
@@ -1336,22 +1264,12 @@ async def handle_gift_code_input(update: Update, context: ContextTypes.DEFAULT_T
         session.commit()
 
         context.user_data.clear()
-        has_ichancy = bool(db_user.ichancy_player_id)
-        if has_ichancy:
-            await update.message.reply_text(
-                f"✅ تم قبول الكود!\n"
-                f"🏆 الجائزة: {format_currency(gift_code.amount)}\n"
-                f"💰 رصيدك الآن: {format_currency(db_user.balance)}",
-                reply_markup=Keyboards.start_menu(),
-            )
-        else:
-            await update.message.reply_text(
-                f"✅ تم قبول الكود!\n"
-                f"🏆 الجائزة: {format_currency(gift_code.amount)}\n"
-                f"💰 رصيدك الآن: {format_currency(db_user.balance)}\n\n"
-                f"{Config.MESSAGES['ichancy_required']}",
-                reply_markup=Keyboards.ichancy_required_menu(),
-            )
+        await update.message.reply_text(
+            f"✅ تم قبول الكود!\n"
+            f"🏆 الجائزة: {format_currency(gift_code.amount)}\n"
+            f"💰 رصيدك الآن: {format_currency(db_user.balance)}",
+            reply_markup=Keyboards.start_menu(),
+        )
 
     finally:
         session.close()

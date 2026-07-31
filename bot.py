@@ -107,7 +107,7 @@ class TelegramBot:
         
     async def balance_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """أمر عرض الرصيد"""
-        from handlers import user_has_ichancy, send_ichancy_required
+        from handlers import user_accepted_terms, send_consent_gate
 
         user = self.db.get_user(update.effective_user.id)
         if not user:
@@ -118,8 +118,8 @@ class TelegramBot:
                 last_name=update.effective_user.last_name
             )
 
-        if not user or not user_has_ichancy(user):
-            await send_ichancy_required(update, context)
+        if not user or not user_accepted_terms(user):
+            await send_consent_gate(update, context)
             return
         
         message = f"""
@@ -139,11 +139,11 @@ class TelegramBot:
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """أمر المساعدة"""
-        from handlers import user_has_ichancy, send_ichancy_required
+        from handlers import user_accepted_terms, send_consent_gate
 
         user = self.db.get_user(update.effective_user.id)
-        if not user or not user_has_ichancy(user):
-            await send_ichancy_required(update, context)
+        if not user or not user_accepted_terms(user):
+            await send_consent_gate(update, context)
             return
 
         help_text = """

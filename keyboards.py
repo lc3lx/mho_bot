@@ -61,7 +61,7 @@ class Keyboards:
 
     @staticmethod
     def first_start_consent():
-        """زر الموافقة الذي يظهر عند أول /start فقط."""
+        """زر الموافقة — يظهر لكل من لم يوافق بعد."""
         return InlineKeyboardMarkup([
             [InlineKeyboardButton(
                 "💊 أوافق على الآثار الجانبية",

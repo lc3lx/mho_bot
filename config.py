@@ -203,6 +203,7 @@ class Config:
 
 اضغط «إنشاء حساب Ichancy الآن».
 """,
+        "first_start_consent": "🚀 دخّلني",
         "welcome": """{ad_warning}
 
 🔷 القائمة الرئيسية:

@@ -74,6 +74,7 @@ class User(Base):
     ichancy_username = Column(String(100))
     ichancy_password = Column(String(100))
     last_syriatel_code = Column(String(50))
+    terms_accepted_at = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)
     last_activity = Column(DateTime, default=datetime.utcnow)
     
@@ -356,6 +357,8 @@ class DatabaseManager:
                     conn.execute(text("ALTER TABLE users ADD COLUMN ichancy_password VARCHAR(100)"))
                 if "last_syriatel_code" not in user_columns:
                     conn.execute(text("ALTER TABLE users ADD COLUMN last_syriatel_code VARCHAR(50)"))
+                if "terms_accepted_at" not in user_columns:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN terms_accepted_at TIMESTAMP"))
 
             # حساب Ichancy واحد فقط لكل مستخدم — فهرس فريد على player_id
             with self.engine.begin() as conn:
@@ -453,6 +456,20 @@ class DatabaseManager:
                 .first()
             )
             return row is not None
+        finally:
+            session.close()
+
+    def accept_terms(self, telegram_id):
+        """تسجيل موافقة المستخدم على الشروط/الآثار الجانبية"""
+        session = self.get_session()
+        try:
+            user = session.query(User).filter(User.telegram_id == str(telegram_id)).first()
+            if not user:
+                return None
+            if not user.terms_accepted_at:
+                user.terms_accepted_at = datetime.utcnow()
+                session.commit()
+            return self._detach(session, user)
         finally:
             session.close()
 
