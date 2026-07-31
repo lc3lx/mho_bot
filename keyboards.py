@@ -197,26 +197,51 @@ class Keyboards:
     
     @staticmethod
     def admin_panel():
-        """لوحة تحكم الإدمن"""
+        """لوحة تحكم الإدمن — تحكم كامل"""
         keyboard = [
             [
                 InlineKeyboardButton("💰 إضافة رصيد", callback_data="admin_add_balance"),
-                InlineKeyboardButton("💸 خصم رصيد", callback_data="admin_deduct_balance")
+                InlineKeyboardButton("💸 خصم رصيد", callback_data="admin_deduct_balance"),
             ],
             [
+                InlineKeyboardButton("⏳ المعاملات المعلقة", callback_data="admin_view_pending"),
                 InlineKeyboardButton("📊 إحصائيات", callback_data="admin_stats"),
-                InlineKeyboardButton("📜 سجل المعاملات", callback_data="admin_transactions")
+            ],
+            [
+                InlineKeyboardButton("✅ موافقة معاملة", callback_data="admin_approve_transaction"),
+                InlineKeyboardButton("❌ رفض معاملة", callback_data="admin_reject_transaction"),
+            ],
+            [
+                InlineKeyboardButton("👥 إدارة المستخدمين", callback_data="admin_users"),
+                InlineKeyboardButton("ℹ️ معلومات مستخدم", callback_data="admin_user_info"),
             ],
             [
                 InlineKeyboardButton("🏆 إنشاء كود جائزة", callback_data="admin_create_gift_code"),
-                InlineKeyboardButton("📧 الرسائل", callback_data="admin_messages")
+                InlineKeyboardButton("📢 رسالة جماعية", callback_data="admin_broadcast"),
             ],
             [
+                InlineKeyboardButton("📩 رسائل الدعم", callback_data="admin_messages"),
                 InlineKeyboardButton("💱 أسعار الصرف", callback_data="admin_settings"),
-                InlineKeyboardButton("👥 قائمة المستخدمين", callback_data="admin_users")
             ],
-            [InlineKeyboardButton("🔙 العودة للقائمة الرئيسية", callback_data="main_menu")]
+            [InlineKeyboardButton("🌐 بروكسي Ichancy", callback_data="admin_proxy")],
+            [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu")],
         ]
+        return InlineKeyboardMarkup(keyboard)
+
+    @staticmethod
+    def admin_proxy_menu(enabled: bool = False):
+        """إدارة بروكسي Ichancy"""
+        keyboard = [
+            [InlineKeyboardButton("✏️ تعيين / تغيير البروكسي", callback_data="admin_proxy_set")],
+            [InlineKeyboardButton("🧪 اختبار البروكسي الحالي", callback_data="admin_proxy_test")],
+        ]
+        if enabled:
+            keyboard.append(
+                [InlineKeyboardButton("🛑 تعطيل البروكسي", callback_data="admin_proxy_disable")]
+            )
+        keyboard.append(
+            [InlineKeyboardButton("🔙 لوحة الإدمن", callback_data="admin_panel")]
+        )
         return InlineKeyboardMarkup(keyboard)
 
     @staticmethod
@@ -289,7 +314,7 @@ class Keyboards:
     def contact_menu():
         """قائمة التواصل"""
         keyboard = [
-            [InlineKeyboardButton("📧 إرسال رسالة للإدمن", callback_data="send_admin_message")],
+            [InlineKeyboardButton("📧 إرسال رسالة للإدمن", callback_data="message_admin")],
             [InlineKeyboardButton("📞 معلومات التواصل", callback_data="contact_info")],
             [InlineKeyboardButton("❓ الأسئلة الشائعة", callback_data="faq")],
             [InlineKeyboardButton("🔙 العودة للقائمة الرئيسية", callback_data="main_menu")]
@@ -420,17 +445,18 @@ class Keyboards:
         keyboard = [
             [
                 InlineKeyboardButton("💰 إضافة رصيد", callback_data="admin_add_balance"),
-                InlineKeyboardButton("💸 خصم رصيد", callback_data="admin_deduct_balance")
+                InlineKeyboardButton("💸 خصم رصيد", callback_data="admin_deduct_balance"),
             ],
             [
                 InlineKeyboardButton("ℹ️ معلومات مستخدم", callback_data="admin_user_info"),
-                InlineKeyboardButton("🚫 حظر مستخدم", callback_data="admin_ban_user")
+                InlineKeyboardButton("📊 إحصائيات المستخدمين", callback_data="admin_user_stats"),
             ],
             [
-                InlineKeyboardButton("📊 إحصائيات المستخدمين", callback_data="admin_user_stats"),
-                InlineKeyboardButton("📧 إرسال رسالة جماعية", callback_data="admin_broadcast")
+                InlineKeyboardButton("🚫 حظر مستخدم", callback_data="admin_ban_user"),
+                InlineKeyboardButton("✅ فك حظر مستخدم", callback_data="admin_unban_user"),
             ],
-            [InlineKeyboardButton("🔙 العودة للوحة الإدمن", callback_data="admin_panel")]
+            [InlineKeyboardButton("📢 رسالة جماعية", callback_data="admin_broadcast")],
+            [InlineKeyboardButton("🔙 العودة للوحة الإدمن", callback_data="admin_panel")],
         ]
         return InlineKeyboardMarkup(keyboard)
     

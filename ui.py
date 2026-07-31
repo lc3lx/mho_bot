@@ -8,9 +8,13 @@
 
 import asyncio
 import html as _html
+import os
 
 from telegram.constants import ChatAction
 from telegram.error import TelegramError
+
+# حد تيليجرام لطول الكابشن المرفق بوسائط
+CAPTION_LIMIT = 1024
 
 DIVIDER = "━━━━━━━━━━━━━━━━"
 DIVIDER_SOFT = "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈"
@@ -65,6 +69,79 @@ async def typing(context, chat_id: str | int) -> None:
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
     except TelegramError:
         pass
+
+
+def _banner_source(banner: str):
+    """
+    يقبل file_id أو رابط https أو مسار ملف محلي.
+    يعيد كائناً صالحاً للإرسال، أو None إذا كان المسار المحلي مفقوداً.
+    """
+    if not banner:
+        return None
+    if banner.startswith(("http://", "https://")):
+        return banner
+    if os.path.exists(banner):
+        return open(banner, "rb")
+    # يُفترض أنه file_id
+    return banner
+
+
+async def show_banner_screen(update, context, text, reply_markup, banner: str) -> bool:
+    """
+    عرض شاشة ببانر متحرك فوق النص (مثل البوتات الاحترافية).
+
+    إذا كانت الرسالة الحالية تحمل وسائط أصلاً نعدّل الكابشن فقط — بدون وميض.
+    يعيد False عند الفشل ليُكمل المستدعي بالمسار النصي العادي.
+    """
+    if not banner or len(text) > CAPTION_LIMIT:
+        return False
+
+    query = getattr(update, "callback_query", None)
+    message = getattr(query, "message", None) if query else None
+    bot = context.bot
+
+    if message and (message.animation or message.photo or message.video):
+        try:
+            await query.edit_message_caption(
+                caption=text, reply_markup=reply_markup, parse_mode="HTML"
+            )
+            return True
+        except TelegramError as exc:
+            # نفس المحتوى تماماً — الشاشة معروضة بالفعل، لا داعي لإعادة الإرسال
+            if "not modified" in str(exc).lower():
+                return True
+
+    chat_id = None
+    if message:
+        chat_id = message.chat_id
+    elif getattr(update, "effective_chat", None):
+        chat_id = update.effective_chat.id
+    if chat_id is None:
+        return False
+
+    if message:
+        try:
+            await message.delete()
+        except TelegramError:
+            pass
+
+    source = _banner_source(banner)
+    if source is None:
+        return False
+    try:
+        await bot.send_animation(
+            chat_id=chat_id,
+            animation=source,
+            caption=text,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+        )
+        return True
+    except TelegramError:
+        return False
+    finally:
+        if hasattr(source, "close"):
+            source.close()
 
 
 async def animate(query, frames=OPEN_FRAMES, delay: float = 0.18, reply_markup=None) -> None:

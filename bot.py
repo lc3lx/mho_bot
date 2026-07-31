@@ -19,6 +19,7 @@ from handlers import (
     referral_handler, gift_handler, admin_handler, transaction_handler,
     contact_handler, callback_query_handler, message_handler
 )
+from contact_handler import ContactHandler
 from payment_handler import PaymentHandler
 
 # إعداد التسجيل
@@ -78,12 +79,19 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("referral", referral_handler))
         self.application.add_handler(CommandHandler("help", self.help_command))
         self.application.add_handler(CommandHandler("admin", admin_handler))
+        self.application.add_handler(CommandHandler("reply", ContactHandler.admin_reply_to_user))
+        self.application.add_handler(CommandHandler("messages", ContactHandler.view_messages))
         
         # معالج الاستعلامات المضمنة
         self.application.add_handler(CallbackQueryHandler(callback_query_handler))
         
         # معالج الرسائل النصية
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+
+        # التقاط file_id لأي GIF/فيديو يرسله الإدمن — لضبط بانر القوائم
+        self.application.add_handler(
+            MessageHandler(filters.ANIMATION | filters.VIDEO, self.banner_file_id)
+        )
         
         # معالج الأخطاء
         self.application.add_error_handler(self.error_handler)
@@ -172,6 +180,26 @@ class TelegramBot:
             reply_markup=Keyboards.main_menu()
         )
     
+    async def banner_file_id(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """يرد على الإدمن بـ file_id للوسيط المرسل ليضعه في MENU_BANNER"""
+        if update.effective_user.id not in Config.ADMIN_IDS:
+            return
+
+        media = update.message.animation or update.message.video
+        if not media:
+            return
+
+        await update.message.reply_text(
+            "🎬 <b>file_id للبانر</b>\n"
+            "━━━━━━━━━━━━━━━━\n"
+            f"<code>{media.file_id}</code>\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "<i>انسخه وحطه في ملف .env:</i>\n"
+            "<code>MENU_BANNER=&lt;الصق هنا&gt;</code>\n"
+            "<i>ثم أعد تشغيل البوت.</i>",
+            parse_mode="HTML",
+        )
+
     async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """معالج الأخطاء"""
         from utils import is_benign_telegram_error, user_facing_error_message

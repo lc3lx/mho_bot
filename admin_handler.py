@@ -2,6 +2,7 @@
 معالج صلاحيات الإدمن
 """
 
+import asyncio
 import logging
 from datetime import datetime, timedelta
 from telegram import Update
@@ -11,10 +12,38 @@ from telegram.error import TelegramError
 from database import DatabaseManager, User, Transaction, GiftCode
 from config import Config
 from keyboards import Keyboards
-from utils import format_currency, get_user_display_name, calculate_withdrawal_fee
+from utils import (
+    format_currency,
+    get_user_display_name,
+    calculate_withdrawal_fee,
+    safe_edit_callback_message,
+)
+from ichancy_handler import ichancy_client
+from ichancy_client import IchancyClient
+import html as _html
 
 logger = logging.getLogger(__name__)
 db = DatabaseManager()
+
+
+async def _admin_edit(
+    update: Update, text: str, reply_markup=None, context=None, parse_mode=None
+):
+    """تعديل/إرسال رسالة لوحة الإدمن بأمان (نص أو وسائط)."""
+    if update.callback_query:
+        await safe_edit_callback_message(
+            update,
+            text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            context=context,
+        )
+    elif update.effective_message:
+        kwargs = {"text": text, "reply_markup": reply_markup}
+        if parse_mode:
+            kwargs["parse_mode"] = parse_mode
+        await update.effective_message.reply_text(**kwargs)
+
 
 class AdminHandler:
     """فئة معالج صلاحيات الإدمن"""
@@ -25,16 +54,24 @@ class AdminHandler:
         user_id = update.effective_user.id
         
         if user_id not in Config.ADMIN_IDS:
-            await update.message.reply_text("❌ ليس لديك صلاحية للوصول إلى لوحة الإدمن")
+            target = update.effective_message or (
+                update.callback_query.message if update.callback_query else None
+            )
+            if target:
+                await target.reply_text("❌ ليس لديك صلاحية للوصول إلى لوحة الإدمن")
             return
         
         # إحصائيات عامة
         session = db.get_session()
         try:
             total_users = session.query(User).count()
+            banned_users = session.query(User).filter(User.is_banned == True).count()
             total_balance = session.query(User).with_entities(db.func.sum(User.balance)).scalar() or 0
             today_transactions = session.query(Transaction).filter(
                 Transaction.created_at >= datetime.now().date()
+            ).count()
+            pending_count = session.query(Transaction).filter(
+                Transaction.status == "pending"
             ).count()
             
             message = f"""
@@ -42,22 +79,17 @@ class AdminHandler:
 
 📊 إحصائيات عامة:
 👥 إجمالي المستخدمين: {total_users}
+🚫 المحظورون: {banned_users}
 💰 إجمالي الأرصدة: {format_currency(total_balance)}
 📈 معاملات اليوم: {today_transactions}
+⏳ معاملات معلقة: {pending_count}
 
 اختر العملية المطلوبة:
             """
             
-            if update.callback_query:
-                await update.callback_query.edit_message_text(
-                    message,
-                    reply_markup=Keyboards.admin_panel()
-                )
-            else:
-                await update.message.reply_text(
-                    message,
-                    reply_markup=Keyboards.admin_panel()
-                )
+            await _admin_edit(
+                update, message, reply_markup=Keyboards.admin_panel(), context=context
+            )
         finally:
             session.close()
     
@@ -70,9 +102,11 @@ class AdminHandler:
 اختر العملية المطلوبة:
         """
         
-        await update.callback_query.edit_message_text(
+        await _admin_edit(
+            update,
             message,
-            reply_markup=Keyboards.user_management_menu()
+            reply_markup=Keyboards.user_management_menu(),
+            context=context,
         )
     
     @staticmethod
@@ -128,6 +162,74 @@ class AdminHandler:
             message,
             reply_markup=Keyboards.cancel_admin_operation()
         )
+
+    @staticmethod
+    async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """حظر مستخدم"""
+        context.user_data["admin_operation"] = "ban_user"
+        await _admin_edit(
+            update,
+            "🚫 حظر مستخدم\n\nأرسل معرف التليجرام للمستخدم المراد حظره:",
+            reply_markup=Keyboards.cancel_admin_operation(),
+            context=context,
+        )
+
+    @staticmethod
+    async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """فك حظر مستخدم"""
+        context.user_data["admin_operation"] = "unban_user"
+        await _admin_edit(
+            update,
+            "✅ فك حظر مستخدم\n\nأرسل معرف التليجرام للمستخدم:",
+            reply_markup=Keyboards.cancel_admin_operation(),
+            context=context,
+        )
+
+    @staticmethod
+    async def user_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """إحصائيات المستخدمين"""
+        session = db.get_session()
+        try:
+            total = session.query(User).count()
+            banned = session.query(User).filter(User.is_banned == True).count()
+            with_ichancy = session.query(User).filter(
+                User.ichancy_player_id.isnot(None)
+            ).count()
+            funded = (
+                session.query(User.id)
+                .join(Transaction, Transaction.user_id == User.id)
+                .filter(
+                    Transaction.status == "completed",
+                    Transaction.transaction_type.in_(("deposit", "gift_code", "manual")),
+                    Transaction.amount > 0,
+                )
+                .distinct()
+                .count()
+            )
+            top = session.query(User).order_by(User.balance.desc()).limit(5).all()
+            lines = [
+                "📊 إحصائيات المستخدمين",
+                "",
+                f"👥 الإجمالي: {total}",
+                f"🚫 المحظورون: {banned}",
+                f"🎰 لديهم Ichancy: {with_ichancy}",
+                f"💵 شحنوا مرة على الأقل: {funded}",
+                "",
+                "🏆 أعلى 5 أرصدة:",
+            ]
+            for i, u in enumerate(top, 1):
+                lines.append(
+                    f"{i}. {get_user_display_name(u)} — "
+                    f"{format_currency(u.balance or 0)} (ID {u.telegram_id})"
+                )
+            await _admin_edit(
+                update,
+                "\n".join(lines),
+                reply_markup=Keyboards.admin_back_menu(),
+                context=context,
+            )
+        finally:
+            session.close()
     
     @staticmethod
     async def create_gift_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -244,9 +346,11 @@ PRIZE100 10000
                     message += f"📅 {transaction.created_at.strftime('%Y-%m-%d %H:%M')}\n"
                     message += f"🆔 ID: {transaction.id}\n\n"
             
-            await update.callback_query.edit_message_text(
+            await _admin_edit(
+                update,
                 message,
-                reply_markup=Keyboards.pending_transactions_menu()
+                reply_markup=Keyboards.pending_transactions_menu(),
+                context=context,
             )
         finally:
             session.close()
@@ -319,6 +423,10 @@ PRIZE100 10000
             await AdminHandler._handle_transaction_action(update, context, text, 'reject')
         elif operation == 'broadcast':
             await AdminHandler._handle_broadcast(update, context, text)
+        elif operation == 'ban_user':
+            await AdminHandler._handle_ban_action(update, context, text, ban=True)
+        elif operation == 'unban_user':
+            await AdminHandler._handle_ban_action(update, context, text, ban=False)
         elif operation == 'set_shamcash_rate':
             ok = await AdminHandler._handle_set_rate(
                 update, context, text, "shamcash_usd_rate"
@@ -329,6 +437,10 @@ PRIZE100 10000
             ok = await AdminHandler._handle_set_rate(
                 update, context, text, "usdt_syp_rate"
             )
+            if not ok:
+                return
+        elif operation == 'set_proxy':
+            ok = await AdminHandler._handle_set_proxy(update, context, text)
             if not ok:
                 return
         
@@ -397,6 +509,157 @@ PRIZE100 10000
             reply_markup=Keyboards.admin_panel(),
         )
         return True
+
+    @staticmethod
+    async def proxy_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """شاشة حالة بروكسي Ichancy"""
+        status = ichancy_client.get_proxy_status()
+        source_label = {
+            "admin": "لوحة الأدمن",
+            "env": "ملف .env",
+        }.get(status["source"], status["source"])
+        enabled = status["enabled"]
+        message = f"""
+🌐 بروكسي Ichancy
+
+الحالة: {"✅ مفعّل" if enabled else "⏹ معطّل / اتصال مباشر"}
+الرابط: <code>{_html.escape(status["masked"])}</code>
+المصدر: {source_label}
+المحرك: {status["backend"]}
+يوزر مضبوط: {"نعم" if status["user_set"] else "لا"}
+
+• التعيين يختبر البروكسي أولاً ثم يحفظه ويطبّقه فوراً
+• إذا فشل الاختبار يبقى البروكسي الحالي كما هو
+• التعطيل قرار صريح ولن يرجع تلقائياً لـ .env
+        """
+        await _admin_edit(
+            update,
+            message,
+            reply_markup=Keyboards.admin_proxy_menu(enabled=enabled),
+            context=context,
+            parse_mode="HTML",
+        )
+
+    @staticmethod
+    async def start_set_proxy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """طلب رابط بروكسي جديد من الأدمن"""
+        context.user_data["admin_operation"] = "set_proxy"
+        await _admin_edit(
+            update,
+            "🌐 تعيين بروكسي Ichancy\n\n"
+            "أرسل الرابط بسطر واحد:\n"
+            "<code>socks5h://user:pass@host:port</code>\n"
+            "أو\n"
+            "<code>http://host:port</code>\n\n"
+            "الأنواع المسموحة: http / https / socks5 / socks5h\n"
+            "⚠️ سيتم اختباره على Ichancy قبل الحفظ.",
+            reply_markup=Keyboards.cancel_admin_operation(),
+            context=context,
+            parse_mode="HTML",
+        )
+
+    @staticmethod
+    async def _handle_set_proxy(
+        update: Update, context: ContextTypes.DEFAULT_TYPE, text: str
+    ) -> bool:
+        try:
+            cfg, masked = IchancyClient.validate_proxy_input(text)
+        except ValueError as exc:
+            await update.message.reply_text(
+                f"❌ {exc}",
+                reply_markup=Keyboards.cancel_admin_operation(),
+                parse_mode="HTML",
+            )
+            return False
+
+        wait = await update.message.reply_text(
+            f"🧪 جاري اختبار البروكسي…\n<code>{masked}</code>\n"
+            "لن يتغيّر الحالي إذا فشل الاختبار.",
+            parse_mode="HTML",
+        )
+        result = await asyncio.to_thread(
+            ichancy_client.apply_and_persist_proxy, cfg, test_first=True
+        )
+        try:
+            await wait.delete()
+        except TelegramError:
+            pass
+
+        if not result.ok:
+            await update.message.reply_text(
+                f"❌ فشل الاختبار — لم يُحفظ شيء\n"
+                f"السبب: {_html.escape(result.message)}\n"
+                f"البروكسي: <code>{_html.escape(result.masked_proxy)}</code>\n"
+                f"المدة: {result.elapsed_ms}ms",
+                reply_markup=Keyboards.admin_proxy_menu(
+                    enabled=ichancy_client.get_proxy_status()["enabled"]
+                ),
+                parse_mode="HTML",
+            )
+            return True
+
+        await update.message.reply_text(
+            f"✅ تم اعتماد البروكسي وتطبيقه فوراً\n"
+            f"<code>{_html.escape(result.masked_proxy)}</code>\n"
+            f"{_html.escape(result.message)}\n"
+            f"المدة: {result.elapsed_ms}ms",
+            reply_markup=Keyboards.admin_proxy_menu(enabled=True),
+            parse_mode="HTML",
+        )
+        return True
+
+    @staticmethod
+    async def test_current_proxy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """اختبار الإعداد الفعّال دون تعديل"""
+        status = ichancy_client.get_proxy_status()
+        await _admin_edit(
+            update,
+            f"🧪 جاري اختبار البروكسي الحالي…\n<code>{status['masked']}</code>",
+            reply_markup=Keyboards.admin_proxy_menu(enabled=status["enabled"]),
+            context=context,
+            parse_mode="HTML",
+        )
+        result = await asyncio.to_thread(ichancy_client.test_proxy_config, None)
+        icon = "✅" if result.ok else "❌"
+        await _admin_edit(
+            update,
+            f"{icon} نتيجة الاختبار\n"
+            f"البروكسي: <code>{_html.escape(result.masked_proxy)}</code>\n"
+            f"{_html.escape(result.message)}\n"
+            f"المدة: {result.elapsed_ms}ms"
+            + (f"\nHTTP: {result.http_status}" if result.http_status else ""),
+            reply_markup=Keyboards.admin_proxy_menu(
+                enabled=ichancy_client.get_proxy_status()["enabled"]
+            ),
+            context=context,
+            parse_mode="HTML",
+        )
+
+    @staticmethod
+    async def disable_proxy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """تعطيل البروكسي بشكل صريح"""
+        await _admin_edit(
+            update,
+            "🛑 جاري تعطيل البروكسي والعودة للاتصال المباشر…",
+            reply_markup=Keyboards.admin_proxy_menu(enabled=False),
+            context=context,
+        )
+        result = await asyncio.to_thread(ichancy_client.disable_and_persist_proxy)
+        warn = ""
+        if not result.ok:
+            warn = (
+                "\n\n⚠️ التعطيل تم حفظه، لكن الاتصال المباشر فشل "
+                f"({result.message}). قد تحتاج بروكسي شغال."
+            )
+        await _admin_edit(
+            update,
+            "⏹ تم تعطيل بروكسي Ichancy.\n"
+            "الطلبات الآن مباشرة من السيرفر.\n"
+            "لن يرجع تلقائياً لبروكسي .env."
+            + warn,
+            reply_markup=Keyboards.admin_proxy_menu(enabled=False),
+            context=context,
+        )
     
     @staticmethod
     async def _handle_balance_operation(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, operation: str):
@@ -685,6 +948,61 @@ PRIZE100 10000
             )
     
     @staticmethod
+    async def _handle_ban_action(
+        update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, ban: bool
+    ):
+        """حظر أو فك حظر مستخدم بالآيدي"""
+        try:
+            telegram_id = int(text.strip())
+        except ValueError:
+            await update.message.reply_text(
+                "❌ أرسل رقم آيدي صحيح.",
+                reply_markup=Keyboards.cancel_admin_operation(),
+            )
+            return
+
+        if telegram_id in Config.ADMIN_IDS:
+            await update.message.reply_text(
+                "❌ لا يمكن حظر حساب إدمن.",
+                reply_markup=Keyboards.admin_panel(),
+            )
+            return
+
+        session = db.get_session()
+        try:
+            user = session.query(User).filter(User.telegram_id == str(telegram_id)).first()
+            if not user:
+                await update.message.reply_text(
+                    "❌ المستخدم غير موجود.",
+                    reply_markup=Keyboards.admin_panel(),
+                )
+                return
+
+            user.is_banned = ban
+            session.commit()
+            label = "حظر" if ban else "فك حظر"
+            await update.message.reply_text(
+                f"✅ تم {label} المستخدم {get_user_display_name(user)}\n"
+                f"🆔 {user.telegram_id}",
+                reply_markup=Keyboards.admin_panel(),
+            )
+            try:
+                if ban:
+                    await context.bot.send_message(
+                        chat_id=telegram_id,
+                        text="🚫 تم حظر حسابك من استخدام البوت.\nتواصل مع الدعم إن كنت تظن أن هذا خطأ.",
+                    )
+                else:
+                    await context.bot.send_message(
+                        chat_id=telegram_id,
+                        text="✅ تم فك الحظر عن حسابك. أرسل /start للمتابعة.",
+                    )
+            except TelegramError:
+                pass
+        finally:
+            session.close()
+
+    @staticmethod
     async def _handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
         """معالجة الرسالة الجماعية"""
         session = db.get_session()
@@ -694,6 +1012,8 @@ PRIZE100 10000
             failed_count = 0
             
             for user in users:
+                if user.is_banned:
+                    continue
                 try:
                     await context.bot.send_message(
                         chat_id=user.telegram_id,

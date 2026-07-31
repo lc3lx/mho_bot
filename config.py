@@ -14,6 +14,9 @@ class Config:
     BOT_DISPLAY_NAME = os.getenv("BOT_DISPLAY_NAME", "Napoleon_bot")
     # تأثيرات حركية عند فتح القائمة — أطفئها إذا صار البوت بطيء
     UI_ANIMATIONS = os.getenv("UI_ANIMATIONS", "true").strip().lower() in ("1", "true", "yes")
+    # بانر متحرك أعلى الشاشات: file_id أو رابط https أو مسار ملف GIF/MP4 محلي
+    MENU_BANNER = os.getenv("MENU_BANNER", "").strip()
+    CONSENT_BANNER = os.getenv("CONSENT_BANNER", "").strip() or MENU_BANNER
     ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
 
     # تشغيل على VPS: webhook (موصى به للأداء) أو polling
@@ -485,14 +488,45 @@ class Config:
             return float(default)
 
     @classmethod
-    def get_usdt_syp_rate(cls) -> float:
-        """سعر صرف USDT → ل.س (من DB أو .env)"""
+    def get_ichancy_proxy_config(cls) -> dict:
+        """
+        إعداد بروكسي Ichancy الفعّال.
+        إذا ضبط الأدمن override من اللوحة → يُستخدم DB (حتى لو فارغ = معطّل).
+        وإلا → قيم .env الافتراضية.
+        """
         from database import DatabaseManager
+
         db = DatabaseManager()
-        default = str(cls.USDT_CONFIG.get("syp_rate", 15000))
-        raw = db.get_setting("usdt_syp_rate", default)
-        try:
-            return float(raw)
-        except (TypeError, ValueError):
-            return float(default)
+        override = db.get_setting("ichancy_proxy_override")
+        if override == "1":
+            return {
+                "proxy_url": (db.get_setting("ichancy_proxy_url", "") or "").strip(),
+                "proxy_user": (db.get_setting("ichancy_proxy_user", "") or "").strip(),
+                "proxy_pass": (db.get_setting("ichancy_proxy_pass", "") or "").strip(),
+                "source": "admin",
+            }
+        return {
+            "proxy_url": (cls.ICHANCY_CONFIG.get("proxy_url") or "").strip(),
+            "proxy_user": (cls.ICHANCY_CONFIG.get("proxy_user") or "").strip(),
+            "proxy_pass": (cls.ICHANCY_CONFIG.get("proxy_pass") or "").strip(),
+            "source": "env",
+        }
+
+    @classmethod
+    def save_ichancy_proxy_config(
+        cls, proxy_url: str = "", proxy_user: str = "", proxy_pass: str = ""
+    ) -> None:
+        """حفظ بروكسي من لوحة الأدمن (override صريح)."""
+        from database import DatabaseManager
+
+        db = DatabaseManager()
+        db.set_setting("ichancy_proxy_override", "1")
+        db.set_setting("ichancy_proxy_url", (proxy_url or "").strip())
+        db.set_setting("ichancy_proxy_user", (proxy_user or "").strip())
+        db.set_setting("ichancy_proxy_pass", (proxy_pass or "").strip())
+
+    @classmethod
+    def disable_ichancy_proxy_config(cls) -> None:
+        """تعطيل البروكسي من الأدمن بشكل صريح (لا يرجع لـ .env)."""
+        cls.save_ichancy_proxy_config("", "", "")
 

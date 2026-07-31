@@ -2030,9 +2030,10 @@ class PaymentHandler:
 💰 المبلغ: {format_currency(transaction.amount)}
 🏦 الطريقة: {method_info['name']} {method_info['emoji']}
 🔢 المرجع: {reference}
+🆔 رقم المعاملة: {transaction.id}
 📅 التاريخ: {transaction.created_at.strftime('%Y-%m-%d %H:%M')}
 
-استخدم /admin لإدارة الطلبات
+للموافقة: من /admin → موافقة معاملة → أرسل {transaction.id}
         """
 
         for admin_id in Config.ADMIN_IDS:

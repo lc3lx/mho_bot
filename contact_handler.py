@@ -11,7 +11,7 @@ from telegram.error import TelegramError
 from database import DatabaseManager, User, Message
 from config import Config
 from keyboards import Keyboards
-from utils import get_user_display_name
+from utils import get_user_display_name, safe_edit_callback_message
 
 logger = logging.getLogger(__name__)
 db = DatabaseManager()
@@ -306,17 +306,35 @@ class ContactHandler:
             ).order_by(Message.created_at.desc()).limit(10).all()
             
             if not unread_messages:
-                message = "✅ لا توجد رسائل جديدة"
+                text = "✅ لا توجد رسائل جديدة\n\nللرد على مستخدم:\n/reply آيدي الرسالة"
             else:
-                message = "📩 الرسائل الجديدة:\n\n"
+                text = "📩 الرسائل الجديدة:\n\n"
                 for i, msg in enumerate(unread_messages, 1):
                     user = session.query(User).filter(User.id == msg.user_id).first()
-                    message += f"{i}. من: {get_user_display_name(user)}\n"
-                    message += f"📅 {msg.created_at.strftime('%Y-%m-%d %H:%M')}\n"
-                    message += f"💬 {msg.content[:100]}{'...' if len(msg.content) > 100 else ''}\n"
-                    message += f"🔗 /reply {user.telegram_id} رسالتك\n\n"
+                    text += f"{i}. من: {get_user_display_name(user)}\n"
+                    text += f"🆔 {user.telegram_id if user else '—'}\n"
+                    text += f"📅 {msg.created_at.strftime('%Y-%m-%d %H:%M')}\n"
+                    text += f"💬 {msg.content[:100]}{'...' if len(msg.content) > 100 else ''}\n"
+                    if user:
+                        text += f"🔗 /reply {user.telegram_id} رسالتك\n\n"
+                    else:
+                        text += "\n"
+                # تمييزها مقروءة بعد العرض
+                for msg in unread_messages:
+                    msg.is_read = True
+                session.commit()
             
-            await update.message.reply_text(message)
+            if update.callback_query:
+                await safe_edit_callback_message(
+                    update,
+                    text,
+                    reply_markup=Keyboards.admin_back_menu(),
+                    context=context,
+                )
+            else:
+                await update.message.reply_text(
+                    text, reply_markup=Keyboards.admin_back_menu()
+                )
             
         finally:
             session.close()

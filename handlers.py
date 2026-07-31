@@ -59,6 +59,11 @@ def user_has_ichancy(user) -> bool:
     return bool(user and user.ichancy_player_id)
 
 
+def user_is_banned(user) -> bool:
+    """هل المستخدم محظور؟"""
+    return bool(user and getattr(user, "is_banned", False))
+
+
 def user_accepted_terms(user) -> bool:
     """هل ضغط المستخدم زر الموافقة على الآثار الجانبية؟"""
     return bool(user and getattr(user, "terms_accepted_at", None))
@@ -80,6 +85,8 @@ async def send_consent_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """رسالة «دخّلني» + زر الموافقة — تظهر لمن لم يوافق بعد."""
     text = Config.MESSAGES["first_start_consent"]
     markup = Keyboards.first_start_consent()
+    if await ui.show_banner_screen(update, context, text, markup, Config.CONSENT_BANNER):
+        return
     try:
         if update.callback_query:
             await safe_edit_callback_message(
@@ -264,14 +271,23 @@ def build_home_card(user) -> str:
 async def show_funded_home(update: Update, context: ContextTypes.DEFAULT_TYPE, user):
     """القائمة الرئيسية."""
     welcome_message = build_home_card(user)
+    markup = Keyboards.start_menu()
+
+    if await ui.show_banner_screen(
+        update, context, welcome_message, markup, Config.MENU_BANNER
+    ):
+        if update.callback_query:
+            await interactive_answer(update.callback_query, "🔓 القائمة الرئيسية")
+        return
+
     if update.callback_query:
         await interactive_answer(update.callback_query, "🔓 جاري فتح القائمة…")
         if Config.UI_ANIMATIONS:
-            await ui.animate(update.callback_query, reply_markup=Keyboards.start_menu())
+            await ui.animate(update.callback_query, reply_markup=markup)
         await safe_edit_callback_message(
             update,
             welcome_message,
-            reply_markup=Keyboards.start_menu(),
+            reply_markup=markup,
             parse_mode="HTML",
             context=context,
         )
@@ -320,6 +336,25 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "❌ تعذر إنشاء الحساب. أرسل /start وحاول مرة أخرى."
             )
             return
+
+    if user_is_banned(user) and user_id not in Config.ADMIN_IDS:
+        text = "🚫 حسابك محظور من استخدام البوت.\nتواصل مع الدعم إن كنت تظن أن هذا خطأ."
+        if update.callback_query:
+            await interactive_answer(update.callback_query, "حساب محظور", alert=True)
+            await safe_edit_callback_message(update, text, context=context)
+        elif update.effective_message:
+            await update.effective_message.reply_text(text)
+        return
+
+    # الإدمن يتجاوز بوابة الموافقة والاشتراك
+    if user_id in Config.ADMIN_IDS:
+        if not user_accepted_terms(user):
+            db.accept_terms(user_id)
+            user = db.get_user(user_id)
+        context.user_data["balance"] = user.balance or 0
+        context.user_data["telegram_id"] = user.telegram_id
+        await show_funded_home(update, context, user)
+        return
 
     if not user_accepted_terms(user):
         await send_consent_gate(update, context)
@@ -402,17 +437,17 @@ async def full_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     message = build_home_card(user)
+    markup = Keyboards.main_menu()
+    if await ui.show_banner_screen(update, context, message, markup, Config.MENU_BANNER):
+        return
+
     if update.callback_query:
         await safe_edit_callback_message(
-            update,
-            message,
-            reply_markup=Keyboards.main_menu(),
-            parse_mode="HTML",
-            context=context,
+            update, message, reply_markup=markup, parse_mode="HTML", context=context
         )
     else:
         await update.message.reply_text(
-            message, reply_markup=Keyboards.main_menu(), parse_mode="HTML"
+            message, reply_markup=markup, parse_mode="HTML"
         )
 
 
@@ -751,15 +786,24 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     subscribed, reason = await check_channel_subscription(
         context, update.effective_user.id
     )
-    if not subscribed:
+    is_admin = update.effective_user.id in Config.ADMIN_IDS
+    if not subscribed and not is_admin:
         await send_subscription_required(
             update, reason, getattr(context.bot, "username", None), context=context
         )
         return
 
-    # بوابة الموافقة: قبل الضغط على «أوافق» لا شيء متاح
+    # بوابة الموافقة: قبل الضغط على «أوافق» لا شيء متاح (الإدمن مستثنى)
     user = db.get_user(update.effective_user.id)
-    if user and not user_accepted_terms(user):
+    if user_is_banned(user) and not is_admin:
+        await interactive_answer(query, "حساب محظور", alert=True)
+        await safe_edit_callback_message(
+            update,
+            "🚫 حسابك محظور من استخدام البوت.",
+            context=context,
+        )
+        return
+    if user and not user_accepted_terms(user) and not is_admin:
         await send_consent_gate(update, context)
         return
 
@@ -807,17 +851,25 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             return
         if data == "admin_panel":
             await AdminHandler.admin_panel(update, context)
+        elif data == "admin_users":
+            await AdminHandler.user_management(update, context)
         elif data == "admin_add_balance":
             await AdminHandler.add_balance(update, context)
         elif data == "admin_deduct_balance":
             await AdminHandler.deduct_balance(update, context)
         elif data == "admin_user_info":
             await AdminHandler.user_info(update, context)
+        elif data == "admin_ban_user":
+            await AdminHandler.ban_user(update, context)
+        elif data == "admin_unban_user":
+            await AdminHandler.unban_user(update, context)
+        elif data == "admin_user_stats":
+            await AdminHandler.user_stats(update, context)
         elif data == "admin_create_gift_code":
             await AdminHandler.create_gift_code(update, context)
         elif data == "admin_stats":
             await AdminHandler.view_statistics(update, context)
-        elif data == "admin_view_pending":
+        elif data in ("admin_view_pending", "admin_transactions"):
             await AdminHandler.pending_transactions(update, context)
         elif data == "admin_approve_transaction":
             await AdminHandler.approve_transaction(update, context)
@@ -825,8 +877,18 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             await AdminHandler.reject_transaction(update, context)
         elif data == "admin_broadcast":
             await AdminHandler.broadcast_message(update, context)
+        elif data == "admin_messages":
+            await ContactHandler.view_messages(update, context)
         elif data == "admin_settings":
             await AdminHandler.settings_menu(update, context)
+        elif data == "admin_proxy":
+            await AdminHandler.proxy_menu(update, context)
+        elif data == "admin_proxy_set":
+            await AdminHandler.start_set_proxy(update, context)
+        elif data == "admin_proxy_test":
+            await AdminHandler.test_current_proxy(update, context)
+        elif data == "admin_proxy_disable":
+            await AdminHandler.disable_proxy(update, context)
         elif data == "admin_rate_shamcash":
             await AdminHandler.start_set_rate(update, context, "shamcash")
         elif data == "admin_rate_usdt":
@@ -834,6 +896,8 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         elif data == "cancel_admin_operation":
             context.user_data.pop("admin_operation", None)
             await AdminHandler.admin_panel(update, context)
+        else:
+            await update.callback_query.answer("⚠️ زر غير معروف", show_alert=True)
     
     # نظام الإحالات
     elif data == "referrals":
@@ -950,24 +1014,30 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالج الرسائل النصية"""
+    is_admin = update.effective_user.id in Config.ADMIN_IDS
+
+    if context.user_data.get("admin_operation") and is_admin:
+        await AdminHandler.handle_admin_input(update, context)
+        return
+
+    user = db.get_user(update.effective_user.id)
+    if user_is_banned(user) and not is_admin:
+        await update.message.reply_text("🚫 حسابك محظور من استخدام البوت.")
+        return
+
     subscribed, reason = await check_channel_subscription(
         context, update.effective_user.id
     )
-    if not subscribed:
+    if not subscribed and not is_admin:
         context.user_data.pop("state", None)
         await send_subscription_required(
             update, reason, getattr(context.bot, "username", None), context=context
         )
         return
 
-    if context.user_data.get("admin_operation") and update.effective_user.id in Config.ADMIN_IDS:
-        await AdminHandler.handle_admin_input(update, context)
-        return
-
-    user = db.get_user(update.effective_user.id)
     user_state = context.user_data.get('state')
 
-    if user and not user_accepted_terms(user):
+    if user and not user_accepted_terms(user) and not is_admin:
         await send_consent_gate(update, context)
         return
 
@@ -1384,15 +1454,17 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
     
     session = db.get_session()
     try:
-        from database import AdminMessage
+        from database import Message
         
-        admin_message = AdminMessage(
+        admin_message = Message(
             user_id=user.id,
-            message=(
+            message_type="user_to_admin",
+            content=(
                 f"[طلب استرداد حوالة]\n{message_text}"
                 if is_refund
                 else message_text
             ),
+            is_read=False,
         )
         session.add(admin_message)
         session.commit()
@@ -1406,7 +1478,12 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
             try:
                 await context.bot.send_message(
                     chat_id=admin_id,
-                    text=f"{admin_header}\n🆔 {user.telegram_id}\n\n{message_text}",
+                    text=(
+                        f"{admin_header}\n"
+                        f"🆔 {user.telegram_id}\n\n"
+                        f"{message_text}\n\n"
+                        f"للرد: /reply {user.telegram_id} نص الرد"
+                    ),
                 )
             except TelegramError:
                 logger.warning(f"لا يمكن إرسال إشعار للإدمن {admin_id}")
