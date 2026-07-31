@@ -74,12 +74,10 @@ PRE_ICHANCY_CALLBACKS = PRE_FUNDING_CALLBACKS | {
     "ichancy_hub",
     "ichancy_to_bot",
     "ichancy_create_start",
-    "ichancy_link_account",
 }
 PRE_ICHANCY_STATES = PRE_FUNDING_STATES | {
     WAITING_FOR_ICHANCY_USERNAME,
     WAITING_FOR_ICHANCY_PASSWORD,
-    WAITING_FOR_ICHANCY_PLAYER_ID,
 }
 
 
@@ -123,7 +121,7 @@ async def send_deposit_required(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def send_ichancy_required(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """إجبار إنشاء/ربط حساب Ichancy بعد الشحن."""
+    """إجبار إنشاء حساب Ichancy بعد الشحن."""
     text = Config.MESSAGES.get(
         "ichancy_required",
         "2️⃣ الخطوة الثانية\n"
@@ -755,6 +753,12 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     await query.answer()
+
+    # اعتراض دفاعي للأزرار القديمة قبل جميع بوابات التسجيل.
+    if data == "ichancy_link_account":
+        await IchancyHandler.start_link_account(update, context)
+        return
+
     subscribed, reason = await check_channel_subscription(
         context, update.effective_user.id
     )
@@ -810,8 +814,6 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         await IchancyHandler.hub(update, context)
     elif data == "ichancy_create_start":
         await IchancyHandler.start_create_account(update, context)
-    elif data == "ichancy_link_account":
-        await IchancyHandler.start_link_account(update, context)
     elif data == "ichancy_topup_start":
         await IchancyHandler.start_topup(update, context)
     elif data == "ichancy_withdraw_start":
@@ -991,7 +993,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_deposit_required(update, context)
         return
 
-    # بعد الشحن وقبل Ichancy: اسمح فقط بإنشاء/ربط الحساب أو متابعة شحن
+    # بعد الشحن وقبل Ichancy: اسمح فقط بإنشاء الحساب أو متابعة الشحن
     if (
         user
         and not is_admin
@@ -1075,7 +1077,7 @@ async def handle_withdraw_destination_input(update: Update, context: ContextType
 
 
 async def handle_ichancy_player_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ربط حساب ichancy"""
+    """رفض إدخال ربط حساب Ichancy قديم دفاعياً."""
     player_id = update.message.text.strip()
     await IchancyHandler.process_link_account(update, context, player_id)
 

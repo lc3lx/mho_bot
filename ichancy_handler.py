@@ -31,7 +31,7 @@ class IchancyHandler:
             "✅ لديك حساب Ichancy واحد مرتبط مسبقاً.\n\n"
             f"👤 المستخدم: `{user.ichancy_username or '—'}`\n"
             f"🆔 Id: `{user.ichancy_player_id}`\n\n"
-            "لا يمكن إنشاء أو ربط حساب ثانٍ."
+            "لا يمكن إنشاء حساب ثانٍ."
         )
 
     @staticmethod
@@ -519,125 +519,22 @@ class IchancyHandler:
 
     @staticmethod
     async def start_link_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """ربط حساب موجود (احتياطي) — مرة واحدة فقط لكل مستخدم"""
-        user = db.get_user(update.effective_user.id)
-        if not db.user_has_funded(user.id) and update.effective_user.id not in Config.ADMIN_IDS:
-            await update.callback_query.edit_message_text(
-                "🔒 يجب شحن البوت أولاً قبل ربط حساب Ichancy.",
-                reply_markup=Keyboards.deposit_required_menu(),
-            )
-            return
-
-        if user and user.ichancy_player_id:
-            await update.callback_query.edit_message_text(
-                IchancyHandler._already_linked_message(user),
-                reply_markup=Keyboards.ichancy_account_menu(),
-                parse_mode="Markdown",
-            )
-            return
-
-        message = """
-🔗 ربط حساب ichancy
-
-⚠️ مسموح بحساب واحد فقط لكل مستخدم تليجرام.
-
-أرسل **معرف اللاعب (playerId)** أو **اسم المستخدم** على ichancy
-        """
-        context.user_data["state"] = "waiting_for_ichancy_player_id"
-        context.user_data["operation"] = "link_ichancy"
+        """رفض ربط الحسابات الموجودة عند استدعاء callback قديم."""
+        context.user_data.clear()
         await update.callback_query.edit_message_text(
-            message,
-            reply_markup=Keyboards.cancel_operation(),
-            parse_mode="Markdown",
+            "ربط حساب موجود غير مسموح؛ أنشئ حسابك من داخل البوت",
+            reply_markup=Keyboards.ichancy_create_prompt(),
         )
 
     @staticmethod
     async def process_link_account(
         update: Update, context: ContextTypes.DEFAULT_TYPE, player_ref: str
     ):
-        existing = db.get_user(update.effective_user.id)
-        if existing and existing.ichancy_player_id:
-            context.user_data.clear()
-            await update.message.reply_text(
-                IchancyHandler._already_linked_message(existing),
-                reply_markup=Keyboards.ichancy_account_menu(),
-                parse_mode="Markdown",
-            )
-            return
-
-        player_ref = player_ref.strip()
-        if len(player_ref) < 3:
-            await update.message.reply_text(
-                "❌ المعرف قصير جداً.",
-                reply_markup=Keyboards.cancel_operation(),
-            )
-            return
-
-        resolved_id = player_ref
-        display_name = player_ref
-
-        if ichancy_client.is_configured:
-            await update.message.reply_text("⏳ جاري التحقق من الحساب على ichancy...")
-            try:
-                player = await asyncio.to_thread(
-                    ichancy_client.verify_player, player_ref
-                )
-                resolved_id = str(player.get("playerId") or player_ref)
-                display_name = player.get("username") or resolved_id
-            except IchancyError as exc:
-                await update.message.reply_text(
-                    f"❌ لم يتم العثور على الحساب:\n{exc.message}",
-                    reply_markup=Keyboards.cancel_operation(),
-                )
-                return
-
-        owner = db.get_user_by_ichancy_player_id(resolved_id)
-        if owner and str(owner.telegram_id) != str(update.effective_user.id):
-            context.user_data.clear()
-            await update.message.reply_text(
-                "❌ هذا الحساب مرتبط بمستخدم تليجرام آخر.\n"
-                "كل حساب Ichancy يُربط بمستخدم واحد فقط.",
-                reply_markup=Keyboards.main_menu(),
-            )
-            return
-
-        if display_name:
-            name_owner = db.get_user_by_ichancy_username(display_name)
-            if name_owner and str(name_owner.telegram_id) != str(update.effective_user.id):
-                context.user_data.clear()
-                await update.message.reply_text(
-                    "❌ اسم المستخدم هذا مرتبط بمستخدم آخر في البوت.",
-                    reply_markup=Keyboards.main_menu(),
-                )
-                return
-
-        session = db.get_session()
-        try:
-            user = session.query(User).filter(
-                User.telegram_id == str(update.effective_user.id)
-            ).first()
-            if user.ichancy_player_id:
-                context.user_data.clear()
-                await update.message.reply_text(
-                    IchancyHandler._already_linked_message(user),
-                    reply_markup=Keyboards.ichancy_account_menu(),
-                    parse_mode="Markdown",
-                )
-                return
-
-            user.ichancy_player_id = resolved_id
-            user.ichancy_username = display_name
-            session.commit()
-        finally:
-            session.close()
-
+        """رفض مسار ربط الحسابات القديمة دون أي كتابة في قاعدة البيانات."""
         context.user_data.clear()
         await update.message.reply_text(
-            f"✅ تم ربط الحساب!\n🎰 Id: `{resolved_id}`\n👤 `{display_name}`\n\n"
-            "⚠️ هذا حسابك الوحيد المرتبط بهذا البوت.\n"
-            "✅ تم فتح باقي خدمات البوت.",
-            reply_markup=Keyboards.start_menu(),
-            parse_mode="Markdown",
+            "ربط حساب موجود غير مسموح؛ أنشئ حسابك من داخل البوت",
+            reply_markup=Keyboards.ichancy_create_prompt(),
         )
 
     @staticmethod
@@ -716,7 +613,7 @@ class IchancyHandler:
         if not user.ichancy_player_id:
             context.user_data.clear()
             await update.message.reply_text(
-                "❌ يجب ربط حساب ichancy أولاً",
+                "❌ يجب إنشاء حساب Ichancy أولاً",
                 reply_markup=Keyboards.main_menu(),
             )
             return

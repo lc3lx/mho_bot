@@ -1743,7 +1743,7 @@ class PaymentHandler:
                         chat_id=telegram_id,
                         text=(
                             "2️⃣ الخطوة الثانية — حساب Ichancy\n\n"
-                            "الآن أنشئ حساب Ichancy (أو اربط حساباً موجوداً) "
+                            "الآن أنشئ حساب Ichancy من داخل البوت "
                             "لإكمال التسجيل وفتح باقي الخدمات."
                         ),
                         reply_markup=Keyboards.ichancy_required_menu(),

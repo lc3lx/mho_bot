@@ -91,10 +91,9 @@ class Keyboards:
 
     @staticmethod
     def ichancy_required_menu():
-        """إجبار إنشاء/ربط حساب Ichancy بعد الشحن"""
+        """إجبار إنشاء حساب Ichancy بعد الشحن"""
         keyboard = [
             [InlineKeyboardButton("⚡️ إنشاء حساب Ichancy", callback_data="ichancy_create_start")],
-            [InlineKeyboardButton("🔗 ربط حساب موجود", callback_data="ichancy_link_account")],
             [InlineKeyboardButton("📩 شحن إضافي", callback_data="deposit")],
         ]
         return InlineKeyboardMarkup(keyboard)
@@ -107,7 +106,9 @@ class Keyboards:
     @staticmethod
     def ichancy_create_prompt():
         """زر إنشاء حساب Ichancy"""
-        return Keyboards.ichancy_required_menu()
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚡️ إنشاء حساب Ichancy", callback_data="ichancy_create_start")],
+        ])
 
     @staticmethod
     def ichancy_account_menu():
