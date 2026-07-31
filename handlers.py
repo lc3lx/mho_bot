@@ -658,7 +658,7 @@ async def withdraw_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 💰 الحد الأقصى: {format_currency(Config.MAX_WITHDRAWAL)}
 📉 رسوم السحب: {Config.WITHDRAWAL_FEE_PERCENTAGE:g}% لصاحب البوت
 
-⏳ **يتطلب موافقة الإدمن** — سيتم تحويل المبلغ يدوياً
+⏳ يتطلب موافقة الإدمن — سيتم تحويل المبلغ يدوياً
 
 اختر طريقة الاستلام:
     """
@@ -960,16 +960,22 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             update, context, account.account_value
         )
     elif data.startswith("withdraw_manual_dest_"):
+        from utils import tg_bold, tg_code
         method = data.replace("withdraw_manual_dest_", "", 1)
         if method == "syriatel_cash":
-            prompt = "📱 أرسل **رقم سيريتل كاش** لاستلام المبلغ (مثال: `0999123456`):"
+            prompt = (
+                f"📱 أرسل {tg_bold('رقم سيريتل كاش')} لاستلام المبلغ "
+                f"(مثال: {tg_code('0999123456')}):"
+            )
         else:
-            prompt = "💳 أرسل **عنوان حساب شام كاش** لاستلام المبلغ:"
+            prompt = f"💳 أرسل {tg_bold('عنوان حساب شام كاش')} لاستلام المبلغ:"
         context.user_data["state"] = WAITING_FOR_WITHDRAW_DESTINATION
-        await query.edit_message_text(
+        await safe_edit_callback_message(
+            update,
             prompt,
             reply_markup=Keyboards.cancel_operation(),
-            parse_mode="Markdown",
+            context=context,
+            parse_mode="HTML",
         )
 
     # شام كاش — شحن مثل الصور
@@ -1597,7 +1603,7 @@ async def handle_payment_method(update: Update, context: ContextTypes.DEFAULT_TY
 💰 الحد الأقصى: {format_currency(Config.MAX_WITHDRAWAL)}
 📉 رسوم السحب: {Config.WITHDRAWAL_FEE_PERCENTAGE:g}% لصاحب البوت
 
-⏳ **يتطلب موافقة الإدمن** — تحويل يدوي
+⏳ يتطلب موافقة الإدمن — تحويل يدوي
 
 📝 الخطوات:
 1. أرسل المبلغ الذي تريد سحبه

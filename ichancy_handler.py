@@ -14,7 +14,7 @@ from telegram.ext import ContextTypes
 from database import DatabaseManager, User, Transaction
 from config import Config
 from keyboards import Keyboards
-from utils import format_currency, validate_amount, generate_transaction_reference, safe_edit_callback_message, user_facing_error_message
+from utils import format_currency, validate_amount, generate_transaction_reference, safe_edit_callback_message, user_facing_error_message, tg_code
 from ichancy_client import IchancyClient, IchancyError
 
 logger = logging.getLogger(__name__)
@@ -29,8 +29,8 @@ class IchancyHandler:
     def _already_linked_message(user: User) -> str:
         return (
             "✅ لديك حساب Ichancy واحد مرتبط مسبقاً.\n\n"
-            f"👤 المستخدم: `{user.ichancy_username or '—'}`\n"
-            f"🆔 Id: `{user.ichancy_player_id}`\n\n"
+            f"👤 المستخدم: {tg_code(user.ichancy_username or '—')}\n"
+            f"🆔 Id: {tg_code(user.ichancy_player_id)}\n\n"
             "لا يمكن إنشاء حساب ثانٍ."
         )
 
@@ -166,9 +166,9 @@ class IchancyHandler:
 
         text = (
             "🔐 معلومات حسابك في ايشانسي\n\n"
-            f"👤 Username: `{username}`\n"
-            f"🔑 Password: `{password}`\n"
-            f"🆔 Id: `{player_id}`\n"
+            f"👤 Username: {tg_code(username)}\n"
+            f"🔑 Password: {tg_code(password)}\n"
+            f"🆔 Id: {tg_code(player_id)}\n"
             f"💰 Balance: {platform_balance}\n\n"
             "اضغط على اسم المستخدم وكلمة المرور للنسخ"
         )
@@ -179,13 +179,13 @@ class IchancyHandler:
                 text,
                 reply_markup=Keyboards.ichancy_account_menu(),
                 context=context,
-                parse_mode="Markdown",
+                parse_mode="HTML",
             )
         else:
             await update.message.reply_text(
                 text,
                 reply_markup=Keyboards.ichancy_account_menu(),
-                parse_mode="Markdown",
+                parse_mode="HTML",
             )
 
     # توافق مع الاسم القديم
@@ -222,7 +222,7 @@ class IchancyHandler:
                 IchancyHandler._already_linked_message(user),
                 reply_markup=Keyboards.ichancy_account_menu(),
                 context=context,
-                parse_mode="Markdown",
+                parse_mode="HTML",
             )
             return
 
@@ -241,8 +241,8 @@ class IchancyHandler:
             "الشروط:\n"
             "1) أحرف إنجليزية فقط\n"
             "2) يفضّل إضافة أرقام\n"
-            "3) بدون رموز خاصة مثل .?!-+_()*^%$#@\n\n"
-            "مثال: `Walter12`\n\n"
+            "3) بدون رموز خاصة\n\n"
+            f"مثال: {tg_code('Walter12')}\n\n"
             "أرسل اسم المستخدم الآن، أو اضغط إلغاء للرجوع."
         )
         context.user_data["state"] = "waiting_for_ichancy_username"
@@ -252,7 +252,7 @@ class IchancyHandler:
             text,
             reply_markup=Keyboards.cancel_operation(),
             context=context,
-            parse_mode="Markdown",
+            parse_mode="HTML",
         )
 
     @staticmethod
@@ -265,14 +265,14 @@ class IchancyHandler:
             await update.message.reply_text(
                 IchancyHandler._already_linked_message(user),
                 reply_markup=Keyboards.ichancy_account_menu(),
-                parse_mode="Markdown",
+                parse_mode="HTML",
             )
             return
 
         username, err = IchancyHandler.validate_username(username)
         if err:
             await update.message.reply_text(
-                err, reply_markup=Keyboards.cancel_operation(), parse_mode="Markdown"
+                err, reply_markup=Keyboards.cancel_operation()
             )
             return
 
@@ -322,7 +322,7 @@ class IchancyHandler:
             await update.message.reply_text(
                 IchancyHandler._already_linked_message(existing),
                 reply_markup=Keyboards.ichancy_account_menu(),
-                parse_mode="Markdown",
+                parse_mode="HTML",
             )
             return
 
@@ -374,7 +374,7 @@ class IchancyHandler:
                     await update.message.reply_text(
                         IchancyHandler._already_linked_message(user),
                         reply_markup=Keyboards.ichancy_account_menu(),
-                        parse_mode="Markdown",
+                        parse_mode="HTML",
                     )
                     return
 
@@ -394,12 +394,12 @@ class IchancyHandler:
             await update.message.reply_text(
                 "✅ تم إنشاء حسابك بنجاح\n"
                 "معلومات الحساب هي:\n\n"
-                f"اسم المستخدم: `{username}`\n"
-                f"كلمة السر: `{password}`\n\n"
+                f"اسم المستخدم: {tg_code(username)}\n"
+                f"كلمة السر: {tg_code(password)}\n\n"
                 "اضغط على اسم المستخدم وكلمة المرور للنسخ\n\n"
                 "⚠️ هذا حسابك الوحيد المرتبط بهذا البوت.\n"
                 "✅ تم فتح باقي خدمات البوت.",
-                parse_mode="Markdown",
+                parse_mode="HTML",
                 reply_markup=Keyboards.start_menu(),
             )
 
@@ -618,7 +618,7 @@ class IchancyHandler:
         message = f"""
 ⬇️ سحب رصيد الحساب إلى محفظة البوت
 
-🎰 Id: `{user.ichancy_player_id}`
+🎰 Id: {tg_code(user.ichancy_player_id)}
 ⏱ بعد السحب: انتظار {cooldown_minutes} دقيقة قبل سحب آخر
 
 أرسل المبلغ الذي تريد سحبه من ichancy ({currency}):
@@ -630,7 +630,7 @@ class IchancyHandler:
             message,
             reply_markup=Keyboards.cancel_operation(),
             context=context,
-            parse_mode="Markdown",
+            parse_mode="HTML",
         )
 
     @staticmethod

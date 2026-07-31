@@ -69,8 +69,8 @@ class SavedAccountsHandler:
         message = f"""
 📱 حساباتي المحفوظة
 
-• سيريتل كاش: حتى **{sy_max}** أرقام — الحالي {sy_count}/{sy_max}
-• شام كاش: **حساب واحد فقط** — الحالي {sc_count}/{sc_max}
+• سيريتل كاش: حتى {sy_max} أرقام — الحالي {sy_count}/{sy_max}
+• شام كاش: حساب واحد فقط — الحالي {sc_count}/{sc_max}
 
 تُستخدم عند السحب إلى الواقع.
 
@@ -81,13 +81,11 @@ class SavedAccountsHandler:
             await update.callback_query.edit_message_text(
                 message,
                 reply_markup=Keyboards.saved_accounts_menu(),
-                parse_mode="Markdown",
             )
         else:
             await update.message.reply_text(
                 message,
                 reply_markup=Keyboards.saved_accounts_menu(),
-                parse_mode="Markdown",
             )
 
     @staticmethod
@@ -108,7 +106,8 @@ class SavedAccountsHandler:
         else:
             lines = [f"📋 حسابات {label} ({len(accounts)}/{max_n}):\n"]
             for i, acc in enumerate(accounts, 1):
-                lines.append(f"{i}. `{acc.account_value}`")
+                from utils import tg_code
+                lines.append(f"{i}. {tg_code(acc.account_value)}")
             text = "\n".join(lines)
             if account_type == "shamcash":
                 text += "\n\n⚠️ شام كاش: حساب واحد فقط — احذف الحالي لتغييره."
@@ -118,7 +117,7 @@ class SavedAccountsHandler:
         await update.callback_query.edit_message_text(
             text,
             reply_markup=Keyboards.saved_accounts_list(account_type, accounts, max_n),
-            parse_mode="Markdown",
+            parse_mode="HTML",
         )
 
     @staticmethod

@@ -2,6 +2,7 @@
 أدوات مساعدة للبوت
 """
 
+import html
 import re
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
@@ -10,6 +11,17 @@ from database import User, Transaction
 def format_currency(amount: float) -> str:
     """تنسيق العملة"""
     return f"{amount:,.2f}"
+
+
+def tg_code(value) -> str:
+    """نص قابل للنسخ داخل رسالة HTML"""
+    return f"<code>{html.escape(str(value), quote=False)}</code>"
+
+
+def tg_bold(value) -> str:
+    """نص عريض داخل رسالة HTML"""
+    return f"<b>{html.escape(str(value), quote=False)}</b>"
+
 
 def calculate_withdrawal_fee(amount: float, fee_percentage: float = None) -> tuple[float, float]:
     """حساب رسوم السحب: (الرسوم، صافي المبلغ للمستلم)"""
@@ -32,6 +44,7 @@ async def safe_edit_callback_message(
     """
     تعديل رسالة الكولباك بأمان.
     رسائل الصور/الفيديو لا تُعدَّل بـ editMessageText — نحذفها ونرسل نصاً جديداً.
+    عند فشل التنسيق (Markdown/HTML) نعيد الإرسال كنص عادي.
     """
     from telegram.error import TelegramError
 
@@ -44,7 +57,14 @@ async def safe_edit_callback_message(
                 kwargs["parse_mode"] = parse_mode
             if disable_web_page_preview is not None:
                 kwargs["disable_web_page_preview"] = disable_web_page_preview
-            await target.reply_text(**kwargs)
+            try:
+                await target.reply_text(**kwargs)
+            except TelegramError as exc:
+                if parse_mode and "parse" in str(exc).lower():
+                    kwargs.pop("parse_mode", None)
+                    await target.reply_text(**kwargs)
+                else:
+                    raise
         return
 
     message = query.message
@@ -69,12 +89,25 @@ async def safe_edit_callback_message(
     if disable_web_page_preview is not None:
         send_kwargs["disable_web_page_preview"] = disable_web_page_preview
 
+    async def _send_plain():
+        plain = dict(send_kwargs)
+        plain.pop("parse_mode", None)
+        # أزل وسوم HTML الظاهرة إن فشل التنسيق
+        plain["text"] = re.sub(r"</?[^>]+>", "", text)
+        await bot.send_message(**plain)
+
     if is_media:
         try:
             await message.delete()
         except TelegramError:
             pass
-        await bot.send_message(**send_kwargs)
+        try:
+            await bot.send_message(**send_kwargs)
+        except TelegramError as exc:
+            if parse_mode and "parse" in str(exc).lower():
+                await _send_plain()
+            else:
+                raise
         return
 
     try:
@@ -86,6 +119,18 @@ async def safe_edit_callback_message(
         await query.edit_message_text(**edit_kwargs)
     except TelegramError as exc:
         err = str(exc).lower()
+        if parse_mode and "parse" in err:
+            try:
+                edit_plain = {
+                    "text": re.sub(r"</?[^>]+>", "", text),
+                    "reply_markup": reply_markup,
+                }
+                if disable_web_page_preview is not None:
+                    edit_plain["disable_web_page_preview"] = disable_web_page_preview
+                await query.edit_message_text(**edit_plain)
+                return
+            except TelegramError:
+                pass
         if any(
             key in err
             for key in (
@@ -93,13 +138,20 @@ async def safe_edit_callback_message(
                 "message is not modified",
                 "message to edit not found",
                 "message can't be edited",
+                "parse",
             )
         ):
             try:
                 await message.delete()
             except TelegramError:
                 pass
-            await bot.send_message(**send_kwargs)
+            try:
+                await bot.send_message(**send_kwargs)
+            except TelegramError as send_exc:
+                if parse_mode and "parse" in str(send_exc).lower():
+                    await _send_plain()
+                else:
+                    raise
             return
         raise
 

@@ -15,7 +15,7 @@ from telegram.error import TelegramError
 from database import DatabaseManager, User, Transaction
 from config import Config
 from keyboards import Keyboards
-from utils import format_currency, validate_amount, get_user_display_name, generate_transaction_reference, calculate_withdrawal_fee, safe_edit_callback_message, user_facing_error_message
+from utils import format_currency, validate_amount, get_user_display_name, generate_transaction_reference, calculate_withdrawal_fee, safe_edit_callback_message, user_facing_error_message, tg_code, tg_bold
 from apisyria_client import ApiSyriaClient, ApiSyriaError
 from tron_usdt_client import TronUsdtClient, TronUsdtError
 
@@ -178,7 +178,7 @@ class PaymentHandler:
                 f"اشحن البوت عن طريق شام كاش بالدولار الأمريكي.\n"
                 f"الحد الأدنى لشحن شام كاش بالدولار هو {min_amount:.2f} $.\n\n"
                 f"قم بالتحويل إلى العنوان المرفق (انقر على العنوان للنسخ):\n"
-                f"`{account}`\n\n"
+                f"{tg_code(account)}\n\n"
                 f"⏰ المهلة: {timeout} دقيقة فقط\n"
                 f"ثم ادخل رقم عملية التحويل كما هو موضح بالصورة المرفقة"
             )
@@ -194,7 +194,7 @@ class PaymentHandler:
                 f"اشحن البوت عن طريق شام كاش بالليرة السورية.\n"
                 f"الحد الأدنى لشحن شام كاش بالليرة السورية هو {format_currency(min_amount)}.\n\n"
                 f"قم بالتحويل إلى العنوان المرفق (انقر على العنوان للنسخ):\n"
-                f"`{account}`\n\n"
+                f"{tg_code(account)}\n\n"
                 f"⏰ المهلة: {timeout} دقيقة فقط\n"
                 f"ثم ادخل رقم عملية التحويل كما هو موضح بالصورة المرفقة"
             )
@@ -223,14 +223,14 @@ class PaymentHandler:
                     chat_id=chat_id,
                     photo=InputFile(photo, filename="shamcash_tx_guide.png"),
                     caption=text,
-                    parse_mode="Markdown",
+                    parse_mode="HTML",
                     reply_markup=Keyboards.cancel_operation(),
                 )
         else:
             msg = await context.bot.send_message(
                 chat_id=chat_id,
                 text=text,
-                parse_mode="Markdown",
+                parse_mode="HTML",
                 reply_markup=Keyboards.cancel_operation(),
             )
         track_payment_guide_message(context, msg)
@@ -309,7 +309,7 @@ class PaymentHandler:
                 f"• سعر الصرف الحالي: {format_currency(rate)}\n"
                 f"• المبلغ بالدولار: {amount:.2f} $\n"
                 f"• المبلغ بالليرة تقريباً: {format_currency(syp_amount)}\n"
-                f"• رقم العملية: `{tx_number}`\n\n"
+                f"• رقم العملية: {tg_code(tx_number)}\n\n"
                 f"يرجى التأكد من صحة المعلومات قبل الضغط على إرسال"
             )
             context.user_data["amount"] = amount
@@ -327,7 +327,7 @@ class PaymentHandler:
                 f"معلومات الطلب:\n"
                 f"• العملة: الليرة السورية\n"
                 f"• المبلغ: {format_currency(amount)}\n"
-                f"• رقم العملية: `{tx_number}`\n\n"
+                f"• رقم العملية: {tg_code(tx_number)}\n\n"
                 f"يرجى التأكد من صحة المعلومات قبل الضغط على إرسال"
             )
             context.user_data["amount"] = amount
@@ -336,7 +336,7 @@ class PaymentHandler:
         context.user_data["state"] = "waiting_for_shamcash_confirm"
         await update.message.reply_text(
             summary,
-            parse_mode="Markdown",
+            parse_mode="HTML",
             reply_markup=Keyboards.shamcash_confirm_keyboard(),
         )
 
@@ -769,10 +769,10 @@ class PaymentHandler:
         digits = Config.SYRIATEL_DEPOSIT["tx_digits"]
         text = (
             "شحن سيرياتيل كاش - شحن يدوي\n\n"
-            f"الكود المختار: `{code}`\n"
+            f"الكود المختار: {tg_code(code)}\n"
             f"المبلغ: {format_currency(amount)}\n\n"
             f"الخطوة الثالثة: الرجاء إدخال رقم العملية "
-            f"(مثال: `600987123674` — {digits} رقماً)."
+            f"(مثال: {tg_code('600987123674')} — {digits} رقماً)."
         )
 
         # حفظ آخر كود
@@ -788,15 +788,17 @@ class PaymentHandler:
             session.close()
 
         if update.callback_query:
-            await update.callback_query.edit_message_text(
+            await safe_edit_callback_message(
+                update,
                 text,
-                parse_mode="Markdown",
+                parse_mode="HTML",
                 reply_markup=Keyboards.cancel_operation(),
+                context=context,
             )
         else:
             await update.message.reply_text(
                 text,
-                parse_mode="Markdown",
+                parse_mode="HTML",
                 reply_markup=Keyboards.cancel_operation(),
             )
 
@@ -1069,17 +1071,17 @@ class PaymentHandler:
 💵 المبلغ بالليرة: {format_currency(syp_amount)}
 💱 سعر الصرف: {format_currency(rate)} ل.س = 1 USDT
 
-⚠️ **مهم جداً — حوّل المبلغ بالضبط:**
-💰 `{usdt_display}` USDT
+⚠️ {tg_bold("مهم جداً — حوّل المبلغ بالضبط:")}
+💰 {tg_code(usdt_display)} USDT
 
-❗ لا تقرب ولا تقرب المبلغ — الفواصل العشرية فريدة لحسابك
+❗ لا تقرّب ولا تغيّر المبلغ — الفواصل العشرية فريدة لحسابك
 ❗ إذا حوّلت مبلغاً مختلفاً لن يُقبل الإيداع تلقائياً
 
 📋 تفاصيل التحويل:
-• الشبكة: **TRC20** (TRON) فقط
-• العملة: **USDT**
+• الشبكة: {tg_bold("TRC20")} (TRON) فقط
+• العملة: {tg_bold("USDT")}
 • العنوان:
-`{wallet}`
+{tg_code(wallet)}
 
 ⏰ صالح لمدة {timeout} دقيقة
 🔄 البوت يراقب المحفظة تلقائياً ويضيف الرصيد فور وصول التحويل
@@ -1091,7 +1093,7 @@ class PaymentHandler:
             await update.message.reply_text(
                 message,
                 reply_markup=Keyboards.main_menu(),
-                parse_mode="Markdown",
+                parse_mode="HTML",
             )
         finally:
             session.close()
@@ -1221,11 +1223,11 @@ class PaymentHandler:
 
 {instructions}
 
-⏰ **المؤقت: {timeout} دقيقة فقط**
+⏰ {tg_bold(f"المؤقت: {timeout} دقيقة فقط")}
 حوّل المبلغ وأرسل رقم العملية خلال هذه المدة.
 بعد انتهاء الوقت يُلغى الطلب تلقائياً.
 
-🔍 بعد التحويل أرسل **رقم العملية** من التطبيق للتحقق الفوري.
+🔍 بعد التحويل أرسل {tg_bold("رقم العملية")} من التطبيق للتحقق الفوري.
             """
 
             context.user_data["state"] = "waiting_for_tx_number"
@@ -1235,7 +1237,9 @@ class PaymentHandler:
             context.user_data["amount"] = amount
             context.user_data["deposit_started_at"] = datetime.utcnow().isoformat()
 
-            await update.message.reply_text(message, reply_markup=Keyboards.cancel_operation())
+            await update.message.reply_text(
+                message, reply_markup=Keyboards.cancel_operation(), parse_mode="HTML"
+            )
         finally:
             session.close()
 
@@ -1439,9 +1443,9 @@ class PaymentHandler:
         elif method == "shamcash":
             dest_prompt = "💳 اختر حساب شام كاش المحفوظ أو أدخل حساباً جديداً:"
         elif method == "usdt":
-            dest_prompt = "💰 أرسل **عنوان محفظة USDT (TRC20)** لاستلام المبلغ:"
+            dest_prompt = f"💰 أرسل {tg_bold('عنوان محفظة USDT (TRC20)')} لاستلام المبلغ:"
         else:
-            dest_prompt = "📝 أرسل **بيانات الاستلام** (رقم أو عنوان):"
+            dest_prompt = f"📝 أرسل {tg_bold('بيانات الاستلام')} (رقم أو عنوان):"
 
         message = f"""
 ✅ تم تسجيل طلب السحب
@@ -1451,7 +1455,7 @@ class PaymentHandler:
 💵 المبلغ المستلم: {format_currency(net_amount)}
 🏦 الطريقة: {method_info['name']} {method_info['emoji']}
 
-⏳ **يتطلب موافقة الإدمن** — سيتم تحويل المبلغ يدوياً بعد المراجعة
+⏳ {tg_bold("يتطلب موافقة الإدمن")} — سيتم تحويل المبلغ يدوياً بعد المراجعة
 
 {dest_prompt}
         """
@@ -1467,13 +1471,13 @@ class PaymentHandler:
             await update.message.reply_text(
                 message,
                 reply_markup=Keyboards.withdraw_destination_choices(accounts, method),
-                parse_mode="Markdown",
+                parse_mode="HTML",
             )
         else:
             await update.message.reply_text(
                 message,
                 reply_markup=Keyboards.cancel_operation(),
-                parse_mode="Markdown",
+                parse_mode="HTML",
             )
 
     @staticmethod
@@ -1578,16 +1582,16 @@ class PaymentHandler:
 📉 رسوم البوت ({fee_pct:g}%): {format_currency(fee)}
 💵 المبلغ المستلم: {format_currency(net_amount)}
 🏦 الطريقة: {method_info['name']} {method_info['emoji']}
-📍 الوجهة: `{destination}`
+📍 الوجهة: {tg_code(destination)}
 🔢 رقم الطلب: {transaction.id}
-⏳ الحالة: **بانتظار موافقة الإدمن**
+⏳ الحالة: {tg_bold("بانتظار موافقة الإدمن")}
 {save_note}
 
 💵 تم خصم المبلغ مؤقتاً من رصيدك
 ⏰ سيتم التحويل خلال 24 ساعة بعد الموافقة
                 """,
                 reply_markup=Keyboards.main_menu(),
-                parse_mode="Markdown",
+                parse_mode="HTML",
             )
 
             await PaymentHandler.notify_admin_withdrawal(
@@ -1627,9 +1631,9 @@ class PaymentHandler:
             fee, net_amount = calculate_withdrawal_fee(amount)
             fee_pct = Config.WITHDRAWAL_FEE_PERCENTAGE
             if method == "syriatel_cash":
-                dest_prompt = "📱 أرسل **رقم سيريتل كاش** للمستفيد (مثال: 0999123456):"
+                dest_prompt = "📱 أرسل رقم سيريتل كاش للمستفيد (مثال: 0999123456):"
             else:
-                dest_prompt = "💳 أرسل **عنوان حساب شام كاش** للمستفيد:"
+                dest_prompt = "💳 أرسل عنوان حساب شام كاش للمستفيد:"
 
             message = f"""
 ✅ تم تسجيل طلب السحب
