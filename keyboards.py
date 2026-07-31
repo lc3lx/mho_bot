@@ -60,6 +60,16 @@ class Keyboards:
         return InlineKeyboardMarkup(keyboard)
 
     @staticmethod
+    def first_start_consent():
+        """زر الموافقة الذي يظهر عند أول /start فقط."""
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                "💊 أوافق على الآثار الجانبية",
+                callback_data="accept_side_effects",
+            )],
+        ])
+
+    @staticmethod
     def required_subscription():
         """بوابة الشروط + اشتراك بقناة واحدة فقط"""
         keyboard = [

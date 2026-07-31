@@ -205,12 +205,10 @@ class Config:
 """,
         "welcome": """{ad_warning}
 
-☠️ {bot_name} — القائمة الرئيسية
+🔷 القائمة الرئيسية:
 
 رصيدك في البوت: {balance}
-رقم الآيدي: {user_id}
-
-اختر من الأزرار… ولا تضغط عشوائي.
+رقم الايدي الخاص بك: {user_id}
 """,
         "main_menu": """{ad_warning}
 
@@ -230,58 +228,38 @@ class Config:
         "session_expired": "⏱ انتهت الجلسة.\nابدأ من جديد من الأزرار.",
     }
     
-    # أزرار الواجهة الكاملة — ترتيب قريب من شاشة المرجع
-    MAIN_BUTTONS = [
-        [{"text": "⚡️ معلومات حساب Ichancy", "callback": "ichancy_hub"}],
+    # القائمة الرئيسية — نفس ترتيب شاشة المرجع
+    START_MENU_BUTTONS = [
+        [{"text": "⚡️ معلومات الحساب", "callback": "ichancy_hub"}],
         [
-            {"text": "📥 شحن محفظة البوت", "callback": "deposit"},
-            {"text": "📤 سحب حوالة", "callback": "withdraw"},
+            {"text": "⬇️ شحن محفظة البوت", "callback": "deposit"},
+            {"text": "⬆️ السحب من محفظة البوت", "callback": "withdraw"},
         ],
         [
-            {"text": "📊 شحن حساب Ichancy", "callback": "ichancy_topup_start"},
-            {"text": "📉 سحب من Ichancy", "callback": "ichancy_withdraw_start"},
+            {"text": "📊 شحن حساب ichancy", "callback": "ichancy_topup_start"},
+            {"text": "📉 سحب من ichancy", "callback": "ichancy_withdraw_start"},
         ],
-        [{"text": "💼 محفظة البوت — إهداء رصيد", "callback": "gift_balance"}],
+        [{"text": "💼 محفظة البوت (حجز - اهداء)", "callback": "gift_balance"}],
         [{"text": "📌 معلومات الملف الشخصي", "callback": "profile"}],
         [
             {"text": "✉️ تواصل مع الدعم", "callback": "contact"},
-            {"text": "🗑 استرداد حوالة", "callback": "refund_request"},
+            {"text": "🧾 استرداد حوالة", "callback": "refund_request"},
         ],
         [
-            {"text": "📖 الشروط والأحكام", "callback": "terms"},
+            {"text": "🗺 الدليل الشامل", "callback": "terms"},
             {"text": "📱 فيسبوك", "url": "FACEBOOK_URL"},
         ],
         [
             {"text": "🏆 أكواد الجوائز", "callback": "gift_code"},
-            {"text": "👥 برنامج الإحالات", "callback": "referrals"},
+            {"text": "💠 برنامج الإحالات", "callback": "referrals"},
         ],
         [{"text": "📜 عرض السجل المالي", "callback": "transactions"}],
-        [{"text": "🟢 شحن USDT", "callback": "deposit_usdt"}],
-    ]
-
-    # قائمة بعد اكتمال التسجيل
-    START_MENU_BUTTONS = [
-        [{"text": "⚡️ معلومات حساب Ichancy", "callback": "ichancy_hub"}],
-        [
-            {"text": "📥 شحن محفظة البوت", "callback": "deposit"},
-            {"text": "📤 سحب حوالة", "callback": "withdraw"},
-        ],
-        [
-            {"text": "📊 شحن حساب Ichancy", "callback": "ichancy_topup_start"},
-            {"text": "📉 سحب من Ichancy", "callback": "ichancy_withdraw_start"},
-        ],
-        [{"text": "💼 إهداء رصيد", "callback": "gift_balance"}],
-        [{"text": "📌 معلومات الملف الشخصي", "callback": "profile"}],
-        [
-            {"text": "✉️ تواصل مع الدعم", "callback": "contact"},
-            {"text": "🏆 أكواد الجوائز", "callback": "gift_code"},
-        ],
-        [
-            {"text": "👥 الإحالات", "callback": "referrals"},
-            {"text": "📜 السجل المالي", "callback": "transactions"},
-        ],
+        [{"text": "💵 الانتقال لقسم الدولار ↗️", "callback": "deposit_usdt"}],
         [{"text": "📋 المزيد من الخدمات", "callback": "full_menu"}],
     ]
+
+    # الواجهة الكاملة — نفس الترتيب بدون زر «المزيد»
+    MAIN_BUTTONS = START_MENU_BUTTONS[:-1]
 
     # حد الحسابات المحفوظة: سيريتل 10 — شام كاش 1 فقط
     MAX_SAVED_SYRIATEL = int(os.getenv("MAX_SAVED_SYRIATEL", "10"))

@@ -324,13 +324,6 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         referral_code = context.user_data.get("pending_referral_code")
 
-    subscribed, reason = await check_channel_subscription(context, user_id)
-    if not subscribed:
-        await send_subscription_required(
-            update, reason, getattr(context.bot, "username", None), context=context
-        )
-        return
-
     user = db.get_user(user_id)
     if not user:
         user = db.create_user(
@@ -342,12 +335,23 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user and referral_code and referral_code != user.referral_code:
             await handle_referral(user, referral_code)
 
-    if not user:
-        msg = "❌ تعذر إنشاء الحساب. أرسل /start وحاول مرة أخرى."
-        if update.callback_query:
-            await safe_edit_callback_message(update, msg, context=context)
-        else:
-            await update.message.reply_text(msg)
+        if not user:
+            await update.effective_message.reply_text(
+                "❌ تعذر إنشاء الحساب. أرسل /start وحاول مرة أخرى."
+            )
+            return
+
+        await update.effective_message.reply_text(
+            "🚀 دخّلني",
+            reply_markup=Keyboards.first_start_consent(),
+        )
+        return
+
+    subscribed, reason = await check_channel_subscription(context, user_id)
+    if not subscribed:
+        await send_subscription_required(
+            update, reason, getattr(context.bot, "username", None), context=context
+        )
         return
 
     context.user_data["balance"] = user.balance or 0
@@ -681,6 +685,11 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     """معالج الاستعلامات المضمنة"""
     query = update.callback_query
     data = query.data
+
+    if data == "accept_side_effects":
+        await interactive_answer(query, "🚀 تم قبول الآثار الجانبية")
+        await start_handler(update, context)
+        return
 
     # لا يُسمح باستخدام أي زر قبل الاشتراك بالقناة.
     if data == "check_subscription":
