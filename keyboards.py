@@ -70,30 +70,44 @@ class Keyboards:
 
     @staticmethod
     def start_step1():
-        """الخطوة 1: شحن أولاً ثم روابط التواصل"""
+        """الخطوة 1: خيارات الشحن فقط قبل فتح الخدمات"""
         keyboard = [
             [InlineKeyboardButton("📩 شحن البوت الآن", callback_data="deposit")],
             [InlineKeyboardButton("🏆 استخدام كود هدية", callback_data="gift_code")],
             [InlineKeyboardButton("📱 صفحتنا على الفيسبوك", url=Config.FACEBOOK_URL)],
             [InlineKeyboardButton("📢 قناتنا على التلغرام", url=Config.TELEGRAM_CHANNEL_URL)],
-            [InlineKeyboardButton("⏭ متابعة للقائمة", callback_data="start_continue")],
+        ]
+        return InlineKeyboardMarkup(keyboard)
+
+    @staticmethod
+    def deposit_required_menu():
+        """رسالة إجبار الشحن قبل باقي الخدمات"""
+        keyboard = [
+            [InlineKeyboardButton("📩 شحن البوت الآن", callback_data="deposit")],
+            [InlineKeyboardButton("🏆 استخدام كود هدية", callback_data="gift_code")],
+            [InlineKeyboardButton("📢 قناتنا على التلغرام", url=Config.TELEGRAM_CHANNEL_URL)],
+        ]
+        return InlineKeyboardMarkup(keyboard)
+
+    @staticmethod
+    def ichancy_required_menu():
+        """إجبار إنشاء/ربط حساب Ichancy بعد الشحن"""
+        keyboard = [
+            [InlineKeyboardButton("⚡️ إنشاء حساب Ichancy", callback_data="ichancy_create_start")],
+            [InlineKeyboardButton("🔗 ربط حساب موجود", callback_data="ichancy_link_account")],
+            [InlineKeyboardButton("📩 شحن إضافي", callback_data="deposit")],
         ]
         return InlineKeyboardMarkup(keyboard)
     
     @staticmethod
     def ichancy_menu(linked: bool = False):
         """توافق خلفي — يوجّه لقائمة الحساب"""
-        return Keyboards.ichancy_account_menu() if linked else Keyboards.ichancy_create_prompt()
+        return Keyboards.ichancy_account_menu() if linked else Keyboards.ichancy_required_menu()
 
     @staticmethod
     def ichancy_create_prompt():
         """زر إنشاء حساب Ichancy"""
-        keyboard = [
-            [InlineKeyboardButton("⚡️ إنشاء حساب Ichancy", callback_data="ichancy_create_start")],
-            [InlineKeyboardButton("🔗 ربط حساب موجود", callback_data="ichancy_link_account")],
-            [InlineKeyboardButton("↪️ رجوع", callback_data="main_menu")],
-        ]
-        return InlineKeyboardMarkup(keyboard)
+        return Keyboards.ichancy_required_menu()
 
     @staticmethod
     def ichancy_account_menu():

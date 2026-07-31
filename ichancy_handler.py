@@ -190,6 +190,13 @@ class IchancyHandler:
     async def start_create_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """بدء إنشاء حساب — طلب اسم المستخدم"""
         user = db.get_user(update.effective_user.id)
+        if not db.user_has_funded(user.id) and update.effective_user.id not in Config.ADMIN_IDS:
+            await update.callback_query.edit_message_text(
+                "🔒 يجب شحن البوت أولاً قبل إنشاء حساب Ichancy.",
+                reply_markup=Keyboards.deposit_required_menu(),
+            )
+            return
+
         if user.ichancy_player_id:
             await update.callback_query.edit_message_text(
                 IchancyHandler._already_linked_message(user),
@@ -364,16 +371,17 @@ class IchancyHandler:
                 f"اسم المستخدم: `{username}`\n"
                 f"كلمة السر: `{password}`\n\n"
                 "اضغط على اسم المستخدم وكلمة المرور للنسخ\n\n"
-                "⚠️ هذا حسابك الوحيد المرتبط بهذا البوت.",
+                "⚠️ هذا حسابك الوحيد المرتبط بهذا البوت.\n"
+                "✅ تم فتح باقي خدمات البوت.",
                 parse_mode="Markdown",
-                reply_markup=Keyboards.ichancy_account_menu(),
+                reply_markup=Keyboards.start_menu(),
             )
 
         except IchancyError as exc:
             context.user_data.clear()
             await update.message.reply_text(
                 f"❌ فشل إنشاء الحساب:\n{exc.message}",
-                reply_markup=Keyboards.main_menu(),
+                reply_markup=Keyboards.ichancy_required_menu(),
             )
 
     @staticmethod
@@ -513,6 +521,13 @@ class IchancyHandler:
     async def start_link_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """ربط حساب موجود (احتياطي) — مرة واحدة فقط لكل مستخدم"""
         user = db.get_user(update.effective_user.id)
+        if not db.user_has_funded(user.id) and update.effective_user.id not in Config.ADMIN_IDS:
+            await update.callback_query.edit_message_text(
+                "🔒 يجب شحن البوت أولاً قبل ربط حساب Ichancy.",
+                reply_markup=Keyboards.deposit_required_menu(),
+            )
+            return
+
         if user and user.ichancy_player_id:
             await update.callback_query.edit_message_text(
                 IchancyHandler._already_linked_message(user),
@@ -619,8 +634,9 @@ class IchancyHandler:
         context.user_data.clear()
         await update.message.reply_text(
             f"✅ تم ربط الحساب!\n🎰 Id: `{resolved_id}`\n👤 `{display_name}`\n\n"
-            "⚠️ هذا حسابك الوحيد المرتبط بهذا البوت.",
-            reply_markup=Keyboards.ichancy_account_menu(),
+            "⚠️ هذا حسابك الوحيد المرتبط بهذا البوت.\n"
+            "✅ تم فتح باقي خدمات البوت.",
+            reply_markup=Keyboards.start_menu(),
             parse_mode="Markdown",
         )
 

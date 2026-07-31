@@ -434,6 +434,28 @@ class DatabaseManager:
         finally:
             session.close()
 
+    def user_has_funded(self, user_id: int) -> bool:
+        """هل أكمل المستخدم شحناً ناجحاً مرة واحدة على الأقل؟"""
+        if not user_id:
+            return False
+        session = self.get_session()
+        try:
+            row = (
+                session.query(Transaction.id)
+                .filter(
+                    Transaction.user_id == user_id,
+                    Transaction.status == "completed",
+                    Transaction.amount > 0,
+                    Transaction.transaction_type.in_(
+                        ("deposit", "gift_code", "manual")
+                    ),
+                )
+                .first()
+            )
+            return row is not None
+        finally:
+            session.close()
+
     def get_user_by_ichancy_player_id(self, player_id):
         """جلب مستخدم مرتبط بمعرف لاعب Ichancy"""
         if not player_id:

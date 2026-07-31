@@ -39,6 +39,157 @@ WAITING_FOR_SHAMCASH_CONFIRM = "waiting_for_shamcash_confirm"
 WAITING_FOR_SYRIATEL_AMOUNT = "waiting_for_syriatel_amount"
 WAITING_FOR_SYRIATEL_TX = "waiting_for_syriatel_tx"
 
+# أزرار/حالات مسموحة قبل أول شحن ناجح
+PRE_FUNDING_CALLBACKS = {
+    "check_subscription",
+    "deposit",
+    "gift_code",
+    "cancel_operation",
+    "shamcash_cur_syp",
+    "shamcash_cur_usd",
+    "shamcash_confirm_send",
+    "shamcash_confirm_cancel",
+    "syriatel_manual_auto",
+    "syriatel_continue",
+    "syriatel_prev_code",
+    "open_facebook",
+}
+PRE_FUNDING_CALLBACK_PREFIXES = (
+    "deposit_",
+    "syriatel_pick_",
+)
+PRE_FUNDING_STATES = {
+    WAITING_FOR_AMOUNT,
+    WAITING_FOR_TX_NUMBER,
+    WAITING_FOR_GIFT_CODE,
+    WAITING_FOR_SHAMCASH_TX,
+    WAITING_FOR_SHAMCASH_AMOUNT,
+    WAITING_FOR_SHAMCASH_CONFIRM,
+    WAITING_FOR_SYRIATEL_AMOUNT,
+    WAITING_FOR_SYRIATEL_TX,
+}
+
+# بعد الشحن وقبل إنشاء حساب Ichancy
+PRE_ICHANCY_CALLBACKS = PRE_FUNDING_CALLBACKS | {
+    "ichancy_hub",
+    "ichancy_to_bot",
+    "ichancy_create_start",
+    "ichancy_link_account",
+}
+PRE_ICHANCY_STATES = PRE_FUNDING_STATES | {
+    WAITING_FOR_ICHANCY_USERNAME,
+    WAITING_FOR_ICHANCY_PASSWORD,
+    WAITING_FOR_ICHANCY_PLAYER_ID,
+}
+
+
+def user_is_funded(user) -> bool:
+    """هل أكمل المستخدم شحناً ناجحاً مرة واحدة؟"""
+    if not user:
+        return False
+    return db.user_has_funded(user.id)
+
+
+def user_has_ichancy(user) -> bool:
+    """هل لدى المستخدم حساب Ichancy مرتبط؟"""
+    return bool(user and user.ichancy_player_id)
+
+
+def is_pre_funding_callback(data: str) -> bool:
+    if data in PRE_FUNDING_CALLBACKS:
+        return True
+    return any(data.startswith(prefix) for prefix in PRE_FUNDING_CALLBACK_PREFIXES)
+
+
+def is_pre_ichancy_callback(data: str) -> bool:
+    if data in PRE_ICHANCY_CALLBACKS:
+        return True
+    return is_pre_funding_callback(data)
+
+
+async def send_deposit_required(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """إجبار المستخدم على الشحن قبل باقي الخدمات."""
+    text = Config.MESSAGES["deposit_required"]
+    markup = Keyboards.deposit_required_menu()
+    try:
+        if update.callback_query:
+            await safe_edit_callback_message(
+                update, text, reply_markup=markup, context=context
+            )
+        elif update.effective_message:
+            await update.effective_message.reply_text(text, reply_markup=markup)
+    except TelegramError:
+        logger.exception("فشل إرسال رسالة إجبار الشحن")
+
+
+async def send_ichancy_required(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """إجبار إنشاء/ربط حساب Ichancy بعد الشحن."""
+    text = Config.MESSAGES.get(
+        "ichancy_required",
+        "2️⃣ الخطوة الثانية\n"
+        "تم الشحن بنجاح. أنشئ حساب Ichancy الآن لإكمال التسجيل.",
+    )
+    markup = Keyboards.ichancy_required_menu()
+    try:
+        if update.callback_query:
+            await safe_edit_callback_message(
+                update, text, reply_markup=markup, context=context
+            )
+        elif update.effective_message:
+            await update.effective_message.reply_text(text, reply_markup=markup)
+        else:
+            await context.bot.send_message(
+                chat_id=update.effective_user.id,
+                text=text,
+                reply_markup=markup,
+            )
+    except TelegramError:
+        logger.exception("فشل إرسال رسالة إجبار حساب Ichancy")
+
+
+async def show_user_home(update: Update, context: ContextTypes.DEFAULT_TYPE, user):
+    """
+    توجيه المستخدم حسب مرحلته:
+    1) غير مشحون → شحن
+    2) مشحون بلا Ichancy → إنشاء حساب
+    3) مكتمل → القائمة
+    """
+    is_admin = update.effective_user and update.effective_user.id in Config.ADMIN_IDS
+    if is_admin or (user_is_funded(user) and user_has_ichancy(user)):
+        await show_funded_home(update, context, user)
+        return
+    if user_is_funded(user) and not user_has_ichancy(user):
+        await send_ichancy_required(update, context)
+        return
+    await send_deposit_required(update, context)
+
+
+async def show_funded_home(update: Update, context: ContextTypes.DEFAULT_TYPE, user):
+    """القائمة بعد اكتمال الشحن + حساب Ichancy."""
+    welcome_message = Config.MESSAGES["welcome"].format(
+        bot_name=Config.BOT_DISPLAY_NAME,
+        balance=format_currency(user.balance or 0),
+        user_id=user.telegram_id,
+    )
+    if update.callback_query:
+        await safe_edit_callback_message(
+            update,
+            welcome_message,
+            reply_markup=Keyboards.start_menu(),
+            context=context,
+        )
+    elif update.effective_message:
+        await update.effective_message.reply_text(
+            welcome_message,
+            reply_markup=Keyboards.start_menu(),
+        )
+    else:
+        await context.bot.send_message(
+            chat_id=user.telegram_id,
+            text=welcome_message,
+            reply_markup=Keyboards.start_menu(),
+        )
+
 
 async def check_channel_subscription(
     context: ContextTypes.DEFAULT_TYPE, user_id: int
@@ -59,7 +210,11 @@ async def check_channel_subscription(
         logger.error("REQUIRED_CHANNEL_ID غير مضبوط — تخطي فرض الاشتراك")
         return True, "channel_error"
 
+    bot_name = (
+        getattr(context.bot, "username", None) or Config.BOT_USERNAME or ""
+    ).lstrip("@")
     last_error = None
+
     for chat_id in channel_ids:
         try:
             member = await context.bot.get_chat_member(chat_id, user_id)
@@ -72,40 +227,31 @@ async def check_channel_subscription(
             return False, "not_subscribed"
         except TelegramError as exc:
             last_error = exc
-            err_text = str(exc).lower()
             logger.warning(
                 "تعذر التحقق من اشتراك user_id=%s في %s: %s",
                 user_id,
                 chat_id,
                 exc,
             )
-            if any(
-                key in err_text
-                for key in (
-                    "member list is inaccessible",
-                    "chat not found",
-                    "bot is not a member",
-                    "not enough rights",
-                    "have no rights",
-                )
-            ):
-                # البوت مو مشرف: لا نحبس كل المستخدمين — نسمح بالمرور مع تحذير
-                logger.warning(
-                    "تخطي فرض الاشتراك: البوت ليس مشرفاً في القناة %s "
-                    "(أضف @%s كمشرف لتفعيل التحقق)",
-                    chat_id,
-                    (getattr(context.bot, "username", None) or Config.BOT_USERNAME or "").lstrip("@"),
-                )
-                return True, None
             continue
 
-    if last_error:
-        logger.warning(
-            "تخطي فرض الاشتراك بسبب خطأ API: %s",
+    # وصلنا هنا يعني كل المحاولات فشلت — غالباً البوت ليس مشرفاً في القناة
+    if Config.SUBSCRIPTION_STRICT_MODE:
+        logger.error(
+            "فشل التحقق من الاشتراك (%s). أضف @%s كمشرف في القناة %s",
             last_error,
+            bot_name,
+            Config.REQUIRED_CHANNEL_ID,
         )
-        return True, None
-    return False, "not_subscribed"
+        return False, "bot_not_admin"
+
+    logger.warning(
+        "تخطي فرض الاشتراك (SUBSCRIPTION_STRICT_MODE=false): %s — "
+        "أضف @%s كمشرف في القناة لتفعيل التحقق",
+        last_error,
+        bot_name,
+    )
+    return True, None
 
 
 async def is_subscribed(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:
@@ -229,16 +375,30 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # حفظ بيانات العرض في context لتفادي مشاكل الجلسة
     context.user_data["balance"] = user.balance or 0
     context.user_data["telegram_id"] = user.telegram_id
-    
-    # ── الرسالة 1 فقط: الخطوة الأولى (الشحن) — بدون القائمة الكبيرة ──
+
+    is_admin = update.effective_user.id in Config.ADMIN_IDS
+
+    # فلو محكوم: شحن → Ichancy → قائمة
+    if is_admin or (user_is_funded(user) and user_has_ichancy(user)):
+        await show_funded_home(update, context, user)
+        logger.info("تم إرسال القائمة للمستخدم المكتمل user_id=%s", user_id)
+        return
+
+    if user_is_funded(user) and not user_has_ichancy(user):
+        await send_ichancy_required(update, context)
+        logger.info("تم إرسال خطوة Ichancy لـ user_id=%s", user_id)
+        return
+
     step1_message = Config.MESSAGES["start_step1"].format(
         facebook_url=Config.FACEBOOK_URL,
         telegram_channel_url=Config.TELEGRAM_CHANNEL_URL,
     )
     if update.callback_query:
-        await update.callback_query.edit_message_text(
+        await safe_edit_callback_message(
+            update,
             step1_message,
             reply_markup=Keyboards.start_step1(),
+            context=context,
             disable_web_page_preview=False,
         )
     else:
@@ -251,7 +411,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def start_continue_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """بعد الخطوة 1 — فتح القائمة (مبسطة ثم المزيد للقائمة الكاملة)"""
+    """توجيه حسب مرحلة المستخدم"""
     user = db.get_user(update.effective_user.id)
     if not user:
         user = db.create_user(
@@ -263,29 +423,12 @@ async def start_continue_handler(update: Update, context: ContextTypes.DEFAULT_T
     if not user:
         text = "❌ تعذر تحميل الحساب. أرسل /start من جديد."
         if update.callback_query:
-            await update.callback_query.edit_message_text(text)
+            await safe_edit_callback_message(update, text, context=context)
         else:
             await update.message.reply_text(text)
         return
 
-    welcome_message = Config.MESSAGES["welcome"].format(
-        bot_name=Config.BOT_DISPLAY_NAME,
-        balance=format_currency(user.balance or 0),
-        user_id=user.telegram_id,
-    )
-    # قائمة مبسطة — «المزيد من الخدمات» تفتح القائمة الكبيرة
-    if update.callback_query:
-        await safe_edit_callback_message(
-            update,
-            welcome_message,
-            reply_markup=Keyboards.start_menu(),
-            context=context,
-        )
-    else:
-        await update.message.reply_text(
-            welcome_message,
-            reply_markup=Keyboards.start_menu(),
-        )
+    await show_user_home(update, context, user)
 
 
 async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -303,7 +446,15 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user:
         await start_handler(update, context)
         return
-    
+
+    if update.effective_user.id not in Config.ADMIN_IDS:
+        if not user_is_funded(user):
+            await send_deposit_required(update, context)
+            return
+        if not user_has_ichancy(user):
+            await send_ichancy_required(update, context)
+            return
+
     message = Config.MESSAGES["main_menu"].format(
         balance=format_currency(user.balance),
         user_id=user.telegram_id,
@@ -326,6 +477,14 @@ async def full_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user:
         await start_handler(update, context)
         return
+
+    if update.effective_user.id not in Config.ADMIN_IDS:
+        if not user_is_funded(user):
+            await send_deposit_required(update, context)
+            return
+        if not user_has_ichancy(user):
+            await send_ichancy_required(update, context)
+            return
 
     message = f"""❞ 🔷 القائمة الرئيسية: ❝
 
@@ -439,10 +598,14 @@ async def withdraw_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = db.get_user(update.effective_user.id)
     
     if user.balance < Config.MIN_WITHDRAWAL:
-        message = f"❌ الحد الأدنى للسحب هو {format_currency(Config.MIN_WITHDRAWAL)}\n💵 رصيدك الحالي: {format_currency(user.balance)}"
-        
+        message = (
+            f"❌ الحد الأدنى للسحب هو {format_currency(Config.MIN_WITHDRAWAL)}\n"
+            f"💵 رصيدك الحالي: {format_currency(user.balance)}"
+        )
         if update.callback_query:
-            await update.callback_query.answer(message, show_alert=True)
+            await safe_edit_callback_message(
+                update, message, reply_markup=Keyboards.main_menu(), context=context
+            )
         else:
             await update.message.reply_text(message, reply_markup=Keyboards.main_menu())
         return
@@ -475,6 +638,14 @@ async def withdraw_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def referral_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالج نظام الإحالات"""
+    user = db.get_user(update.effective_user.id)
+    if update.effective_user.id not in Config.ADMIN_IDS:
+        if not user or not user_is_funded(user):
+            await send_deposit_required(update, context)
+            return
+        if not user_has_ichancy(user):
+            await send_ichancy_required(update, context)
+            return
     await ReferralHandler.show_referral_menu(update, context)
 
 async def gift_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -482,10 +653,14 @@ async def gift_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = db.get_user(update.effective_user.id)
     
     if user.balance < Config.MIN_GIFT:
-        message = f"❌ الحد الأدنى للإهداء هو {format_currency(Config.MIN_GIFT)}\n💵 رصيدك الحالي: {format_currency(user.balance)}"
-        
+        message = (
+            f"❌ الحد الأدنى للإهداء هو {format_currency(Config.MIN_GIFT)}\n"
+            f"💵 رصيدك الحالي: {format_currency(user.balance)}"
+        )
         if update.callback_query:
-            await update.callback_query.answer(message, show_alert=True)
+            await safe_edit_callback_message(
+                update, message, reply_markup=Keyboards.main_menu(), context=context
+            )
         else:
             await update.message.reply_text(message, reply_markup=Keyboards.main_menu())
         return
@@ -504,9 +679,8 @@ async def gift_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['operation'] = 'gift'
     
     if update.callback_query:
-        await update.callback_query.edit_message_text(
-            message,
-            reply_markup=Keyboards.cancel_operation()
+        await safe_edit_callback_message(
+            update, message, reply_markup=Keyboards.cancel_operation(), context=context
         )
     else:
         await update.message.reply_text(
@@ -589,7 +763,30 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             update, reason, getattr(context.bot, "username", None)
         )
         return
-    
+
+    # بوابة الشحن: قبل أول إيداع ناجح لا يُسمح إلا بخيارات الشحن
+    user = db.get_user(update.effective_user.id)
+    is_admin = update.effective_user.id in Config.ADMIN_IDS
+    if (
+        user
+        and not is_admin
+        and not user_is_funded(user)
+        and not is_pre_funding_callback(data)
+    ):
+        await send_deposit_required(update, context)
+        return
+
+    # بوابة Ichancy: بعد الشحن وقبل إنشاء الحساب
+    if (
+        user
+        and not is_admin
+        and user_is_funded(user)
+        and not user_has_ichancy(user)
+        and not is_pre_ichancy_callback(data)
+    ):
+        await send_ichancy_required(update, context)
+        return
+
     # القائمة الرئيسية
     if data == "main_menu":
         await main_menu_handler(update, context)
@@ -739,10 +936,8 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         await PaymentHandler.confirm_shamcash_deposit(update, context)
     elif data == "shamcash_confirm_cancel":
         context.user_data.clear()
-        await query.edit_message_text(
-            "❌ تم إلغاء طلب الشحن.",
-            reply_markup=Keyboards.start_menu(),
-        )
+        user = db.get_user(update.effective_user.id)
+        await show_user_home(update, context, user)
 
     # سيريتل كاش — تحويل يدوي (AUTO)
     elif data == "syriatel_manual_auto":
@@ -763,7 +958,8 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     elif data == "cancel_operation":
         await cancel_pending_payment(context)
         context.user_data.clear()
-        await main_menu_handler(update, context)
+        user = db.get_user(update.effective_user.id)
+        await show_user_home(update, context, user)
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالج الرسائل النصية"""
@@ -781,9 +977,42 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await AdminHandler.handle_admin_input(update, context)
         return
 
+    user = db.get_user(update.effective_user.id)
     user_state = context.user_data.get('state')
-    
+    is_admin = update.effective_user.id in Config.ADMIN_IDS
+
+    # قبل أول شحن: اسمح فقط بحالات الشحن/كود الهدية
+    if (
+        user
+        and not is_admin
+        and not user_is_funded(user)
+        and user_state not in PRE_FUNDING_STATES
+    ):
+        await send_deposit_required(update, context)
+        return
+
+    # بعد الشحن وقبل Ichancy: اسمح فقط بإنشاء/ربط الحساب أو متابعة شحن
+    if (
+        user
+        and not is_admin
+        and user_is_funded(user)
+        and not user_has_ichancy(user)
+        and user_state not in PRE_ICHANCY_STATES
+    ):
+        await send_ichancy_required(update, context)
+        return
+
     if user_state == WAITING_FOR_AMOUNT:
+        # قبل التمويل نسمح فقط بعمليات الإيداع
+        if (
+            not is_admin
+            and user
+            and not user_is_funded(user)
+            and context.user_data.get("operation") != "deposit"
+        ):
+            context.user_data.clear()
+            await send_deposit_required(update, context)
+            return
         await handle_amount_input(update, context)
     elif user_state == WAITING_FOR_RECIPIENT:
         await handle_recipient_input(update, context)
@@ -826,11 +1055,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             update, context, update.message.text.strip()
         )
     else:
-        # رسالة افتراضية
-        await update.message.reply_text(
-            "استخدم الأزرار أدناه للتنقل في البوت:",
-            reply_markup=Keyboards.main_menu()
-        )
+        if user:
+            await show_user_home(update, context, user)
+        else:
+            await send_deposit_required(update, context)
 
 # دوال مساعدة
 
@@ -1119,8 +1347,9 @@ async def handle_gift_code_input(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(
             f"✅ تم قبول الكود!\n"
             f"🏆 الجائزة: {format_currency(gift_code.amount)}\n"
-            f"💰 رصيدك الآن: {format_currency(db_user.balance)}",
-            reply_markup=Keyboards.start_menu(),
+            f"💰 رصيدك الآن: {format_currency(db_user.balance)}\n\n"
+            "الآن أكمل الخطوة التالية: إنشاء حساب Ichancy.",
+            reply_markup=Keyboards.ichancy_required_menu(),
         )
 
     finally:

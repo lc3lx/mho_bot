@@ -9,7 +9,7 @@ from telegram.ext import ContextTypes
 from database import DatabaseManager, User
 from config import Config
 from keyboards import Keyboards
-from utils import format_currency
+from utils import format_currency, safe_edit_callback_message
 
 logger = logging.getLogger(__name__)
 db = DatabaseManager()
@@ -28,9 +28,16 @@ class ReferralHandler:
     async def show_referral_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """شاشة أنظمة الإحالات مثل الصورة"""
         user = db.get_user(update.effective_user.id)
+        if not user:
+            user = db.create_user(
+                telegram_id=update.effective_user.id,
+                username=update.effective_user.username,
+                first_name=update.effective_user.first_name,
+                last_name=update.effective_user.last_name,
+            )
         bot_name = Config.BOT_DISPLAY_NAME
 
-        if user.referral_count and user.referral_count > 0:
+        if user and user.referral_count and user.referral_count > 0:
             status = (
                 f"✅ لديك {user.referral_count} إحالة\n"
                 f"💰 أرباحك: {format_currency(user.referral_earnings)}"
@@ -53,9 +60,11 @@ class ReferralHandler:
 """
 
         if update.callback_query:
-            await update.callback_query.edit_message_text(
+            await safe_edit_callback_message(
+                update,
                 message,
                 reply_markup=Keyboards.referral_menu(),
+                context=context,
             )
         else:
             await update.message.reply_text(
@@ -67,20 +76,33 @@ class ReferralHandler:
     async def share_referral_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """إرسال رابط الإحالة — مثل الصورة"""
         user = db.get_user(update.effective_user.id)
-        bot_username = context.bot.username or Config.BOT_USERNAME
+        if not user:
+            user = db.create_user(
+                telegram_id=update.effective_user.id,
+                username=update.effective_user.username,
+                first_name=update.effective_user.first_name,
+                last_name=update.effective_user.last_name,
+            )
+
+        if not user:
+            text = "❌ تعذر تحميل حسابك. أرسل /start ثم حاول مجدداً."
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id, text=text
+            )
+            return
+
+        bot_username = getattr(context.bot, "username", None) or Config.BOT_USERNAME
         referral_link = ReferralHandler.build_referral_link(bot_username, user)
 
         share_message = (
-            f"رابط الإحالة الخاص بك هو: 🔗\n"
-            f"{referral_link}"
+            "رابط الإحالة الخاص بك هو: 🔗\n"
+            f"{referral_link}\n\n"
+            "شاركه مع أصدقائك — عند تسجيلهم عبره تُحتسب لك الإحالة."
         )
 
         # رسالة جديدة (مثل الصورة) وليس تعديل الرسالة السابقة
-        if update.callback_query:
-            await update.callback_query.answer()
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text=share_message,
-            )
-        else:
-            await update.message.reply_text(share_message)
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=share_message,
+            disable_web_page_preview=True,
+        )

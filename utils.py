@@ -121,6 +121,47 @@ def is_benign_telegram_error(error) -> bool:
         )
     )
 
+
+def user_facing_error_message(error) -> str:
+    """رسالة خطأ واضحة للمستخدم بدون تفاصيل تقنية حسّاسة."""
+    raw = getattr(error, "message", None) or str(error or "")
+    text = raw.lower()
+
+    if "member list is inaccessible" in text or "bot is not a member" in text:
+        return (
+            "⚠️ تعذر التحقق من الاشتراك بالقناة حالياً.\n"
+            "تأكد أن البوت مشرف في القناة ثم أعد المحاولة."
+        )
+    if "timed out" in text or "timeout" in text:
+        return "⏱ انتهت مهلة الاتصال. حاول مرة أخرى خلال لحظات."
+    if "connection" in text or "network" in text or "temporary failure" in text:
+        return "🌐 مشكلة مؤقتة في الاتصال. حاول مجدداً."
+    if "flood" in text or "too many requests" in text or "retry after" in text:
+        return "⏳ الطلبات كثيرة الآن. انتظر قليلاً ثم أعد المحاولة."
+    if "unauthorized" in text or "forbidden" in text:
+        return "❌ لا يمكن إكمال العملية الآن. تواصل مع الدعم."
+    if ".env" in text or "traceback" in text or "sqlalchemy" in text:
+        return (
+            "❌ الخدمة غير جاهزة حالياً.\n"
+            "تواصل مع الإدارة."
+        )
+    if "api syria" in text or "apisyria" in text:
+        return (
+            "❌ تعذر التحقق عبر خدمة الدفع حالياً.\n"
+            "تحقق من رقم العملية أو حاول لاحقاً."
+        )
+    if "ichancy" in text and "فشل" not in raw:
+        return "❌ تعذر إكمال عملية Ichancy حالياً. حاول لاحقاً أو تواصل مع الدعم."
+
+    # رسائل عربية قصيرة وآمنة من طبقة التحقق (مبلغ/عملية/مهلة)
+    if raw and len(raw) <= 220 and any("\u0600" <= c <= "\u06FF" for c in raw):
+        return raw if raw.startswith(("❌", "⚠️", "⏱")) else f"❌ {raw}"
+
+    return (
+        "❌ حدث خطأ أثناء تنفيذ العملية.\n"
+        "أعد المحاولة، وإذا تكرر الخطأ تواصل مع الدعم."
+    )
+
 def validate_amount(amount_str: str, min_amount: float = 0, max_amount: float = float('inf')) -> tuple[bool, float, str]:
     """التحقق من صحة المبلغ"""
     try:

@@ -15,7 +15,7 @@ from telegram.error import TelegramError
 from database import DatabaseManager, User, Transaction
 from config import Config
 from keyboards import Keyboards
-from utils import format_currency, validate_amount, get_user_display_name, generate_transaction_reference, calculate_withdrawal_fee, safe_edit_callback_message
+from utils import format_currency, validate_amount, get_user_display_name, generate_transaction_reference, calculate_withdrawal_fee, safe_edit_callback_message, user_facing_error_message
 from apisyria_client import ApiSyriaClient, ApiSyriaError
 from tron_usdt_client import TronUsdtClient, TronUsdtError
 
@@ -423,7 +423,7 @@ class PaymentHandler:
             PaymentHandler._fail_pending_deposit(transaction_id, exc.message)
             context.user_data.clear()
             await query.edit_message_text(
-                f"❌ تم رفض طلب الشحن. السبب: {exc.message}",
+                f"❌ تم رفض طلب الشحن.\n{user_facing_error_message(exc)}",
                 reply_markup=Keyboards.start_menu(),
             )
         except Exception as exc:
@@ -431,7 +431,7 @@ class PaymentHandler:
             PaymentHandler._fail_pending_deposit(transaction_id, str(exc))
             context.user_data.clear()
             await query.edit_message_text(
-                f"❌ حدث خطأ أثناء التحقق.\n{exc}",
+                f"❌ حدث خطأ أثناء التحقق.\n{user_facing_error_message(exc)}",
                 reply_markup=Keyboards.start_menu(),
             )
 
@@ -845,7 +845,7 @@ class PaymentHandler:
             PaymentHandler._fail_pending_deposit(transaction_id, exc.message)
             context.user_data.clear()
             await update.message.reply_text(
-                f"❌ تم رفض طلب الشحن. السبب: {exc.message}",
+                f"❌ تم رفض طلب الشحن.\n{user_facing_error_message(exc)}",
                 reply_markup=Keyboards.start_menu(),
             )
         except Exception as exc:
@@ -853,7 +853,7 @@ class PaymentHandler:
             PaymentHandler._fail_pending_deposit(transaction_id, str(exc))
             context.user_data.clear()
             await update.message.reply_text(
-                f"❌ حدث خطأ أثناء التحقق.\n{exc}",
+                f"❌ حدث خطأ أثناء التحقق.\n{user_facing_error_message(exc)}",
                 reply_markup=Keyboards.start_menu(),
             )
 
@@ -1035,7 +1035,7 @@ class PaymentHandler:
                     session.close()
 
                 used_hashes.add(tx_hash)
-                await PaymentHandler.complete_deposit(transaction.id, context)
+                await PaymentHandler.complete_deposit(transaction.id, None, context)
 
             except Exception as exc:
                 logger.exception(
@@ -1287,13 +1287,13 @@ class PaymentHandler:
         except ApiSyriaError as exc:
             logger.error("ApiSyria deposit verification failed: %s", exc.message)
             await update.message.reply_text(
-                f"❌ فشل التحقق: {exc.message}",
+                f"❌ فشل التحقق.\n{user_facing_error_message(exc)}",
                 reply_markup=Keyboards.cancel_operation()
             )
         except Exception as exc:
             logger.exception("Unexpected deposit verification error")
             await update.message.reply_text(
-                f"❌ حدث خطأ أثناء التحقق. حاول لاحقاً.\n{exc}",
+                f"❌ حدث خطأ أثناء التحقق. حاول لاحقاً.\n{user_facing_error_message(exc)}",
                 reply_markup=Keyboards.cancel_operation()
             )
 
@@ -1710,6 +1710,10 @@ class PaymentHandler:
             if not user:
                 return
 
+            # منع إضافة الرصيد مرتين لنفس العملية
+            if transaction.status != "pending":
+                return
+
             user.balance += transaction.amount
             transaction.status = "completed"
             transaction.processed_at = datetime.utcnow()
@@ -1729,20 +1733,26 @@ class PaymentHandler:
                     chat_id=telegram_id,
                     text=(
                         f"✅ تم التأكد من العملية\n"
-                        f"تم قبول طلب الشحن آلياً.\n"
+                        f"تم قبول طلب الشحن بنجاح.\n"
                         f"تم إضافة {format_currency(credited)} إلى رصيدك في البوت.\n"
                         f"💵 رصيدك الآن: {format_currency(new_balance)}"
                     ),
-                    reply_markup=Keyboards.main_menu() if has_ichancy else Keyboards.ichancy_create_prompt(),
                 )
                 if not has_ichancy:
                     await context.bot.send_message(
                         chat_id=telegram_id,
                         text=(
-                            "2️⃣ الخطوة الثانية\n"
-                            "بعد إتمام الشحن، يجب عليك إنشاء حساب."
+                            "2️⃣ الخطوة الثانية — حساب Ichancy\n\n"
+                            "الآن أنشئ حساب Ichancy (أو اربط حساباً موجوداً) "
+                            "لإكمال التسجيل وفتح باقي الخدمات."
                         ),
-                        reply_markup=Keyboards.ichancy_create_prompt(),
+                        reply_markup=Keyboards.ichancy_required_menu(),
+                    )
+                else:
+                    await context.bot.send_message(
+                        chat_id=telegram_id,
+                        text="تم فتح خدمات البوت لك.",
+                        reply_markup=Keyboards.start_menu(),
                     )
             except TelegramError:
                 logger.warning(f"لا يمكن إرسال إشعار للمستخدم {telegram_id}")

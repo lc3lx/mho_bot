@@ -107,6 +107,8 @@ class TelegramBot:
         
     async def balance_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """أمر عرض الرصيد"""
+        from handlers import user_is_funded, user_has_ichancy, send_deposit_required, send_ichancy_required
+
         user = self.db.get_user(update.effective_user.id)
         if not user:
             user = self.db.create_user(
@@ -115,6 +117,14 @@ class TelegramBot:
                 first_name=update.effective_user.first_name,
                 last_name=update.effective_user.last_name
             )
+
+        if update.effective_user.id not in Config.ADMIN_IDS:
+            if not user or not user_is_funded(user):
+                await send_deposit_required(update, context)
+                return
+            if not user_has_ichancy(user):
+                await send_ichancy_required(update, context)
+                return
         
         message = f"""
 💰 معلومات الرصيد
@@ -133,6 +143,17 @@ class TelegramBot:
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """أمر المساعدة"""
+        from handlers import user_is_funded, user_has_ichancy, send_deposit_required, send_ichancy_required
+
+        user = self.db.get_user(update.effective_user.id)
+        if update.effective_user.id not in Config.ADMIN_IDS:
+            if not user or not user_is_funded(user):
+                await send_deposit_required(update, context)
+                return
+            if not user_has_ichancy(user):
+                await send_ichancy_required(update, context)
+                return
+
         help_text = """
 🤖 مرحباً بك في بوت الدفع الإلكتروني
 
@@ -161,22 +182,34 @@ class TelegramBot:
     
     async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """معالج الأخطاء"""
-        from utils import is_benign_telegram_error
+        from utils import is_benign_telegram_error, user_facing_error_message
+        from handlers import user_is_funded
 
         if is_benign_telegram_error(context.error):
             logger.warning("خطأ تيليجرام متوقع (تم تجاهله): %s", context.error)
             return
 
-        logger.error(f"حدث خطأ: {context.error}")
-        
-        if update and update.effective_message:
-            try:
-                await update.effective_message.reply_text(
-                    "❌ حدث خطأ غير متوقع. يرجى المحاولة مرة أخرى أو التواصل مع الإدارة.",
-                    reply_markup=Keyboards.main_menu()
-                )
-            except Exception as e:
-                logger.error(f"خطأ في إرسال رسالة الخطأ: {e}")
+        logger.error("حدث خطأ: %s", context.error, exc_info=context.error)
+
+        if not update or not update.effective_chat:
+            return
+
+        try:
+            user = None
+            if update.effective_user:
+                user = self.db.get_user(update.effective_user.id)
+            markup = (
+                Keyboards.start_menu()
+                if user and user_is_funded(user)
+                else Keyboards.deposit_required_menu()
+            )
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=user_facing_error_message(context.error),
+                reply_markup=markup,
+            )
+        except Exception as e:
+            logger.error("خطأ في إرسال رسالة الخطأ: %s", e)
     
     def run(self):
         """تشغيل البوت — polling أو webhook على VPS"""
