@@ -536,6 +536,29 @@ async def referral_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await ReferralHandler.show_referral_menu(update, context)
 
+async def wallet_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """شاشة محفظة البوت — إهداء بالـ ID فقط"""
+    user = db.get_user(update.effective_user.id)
+    if not user:
+        await start_handler(update, context)
+        return
+
+    message = f"""
+💼 محفظة البوت
+
+💵 رصيدك: {format_currency(user.balance)}
+🆔 الآيدي تبعك: {user.telegram_id}
+
+🎁 تقدر تهدي رصيد لشخص تاني على البوت عن طريق الآيدي تبعه.
+    """
+    if update.callback_query:
+        await safe_edit_callback_message(
+            update, message, reply_markup=Keyboards.wallet_menu(), context=context
+        )
+    else:
+        await update.message.reply_text(message, reply_markup=Keyboards.wallet_menu())
+
+
 async def gift_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالج إهداء الرصيد"""
     user = db.get_user(update.effective_user.id)
@@ -547,10 +570,10 @@ async def gift_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         if update.callback_query:
             await safe_edit_callback_message(
-                update, message, reply_markup=Keyboards.main_menu(), context=context
+                update, message, reply_markup=Keyboards.wallet_menu(), context=context
             )
         else:
-            await update.message.reply_text(message, reply_markup=Keyboards.main_menu())
+            await update.message.reply_text(message, reply_markup=Keyboards.wallet_menu())
         return
     
     message = f"""
@@ -559,7 +582,8 @@ async def gift_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 💵 رصيدك الحالي: {format_currency(user.balance)}
 💰 الحد الأدنى للإهداء: {format_currency(Config.MIN_GIFT)}
 
-📝 لإهداء رصيد لصديق، أرسل المبلغ الذي تريد إهداءه:
+📝 أرسل المبلغ اللي بدك تهديه:
+(بعدها رح نطلب منك آيدي الشخص المستلم)
     """
     
     # حفظ حالة المحادثة
@@ -660,7 +684,8 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         "ichancy_topup_start": "📊 شحن Ichancy…",
         "ichancy_withdraw_start": "📉 سحب Ichancy…",
         "gift_code": "🏆 أكواد الجوائز…",
-        "gift_balance": "💼 إهداء رصيد…",
+        "gift_balance": "💼 محفظة البوت…",
+        "gift_send": "🎁 بدء الإهداء…",
         "contact": "✉️ الدعم…",
         "referrals": "👥 الإحالات…",
         "profile": "📌 الملف الشخصي…",
@@ -775,8 +800,10 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     elif data == "share_referral":
         await ReferralHandler.share_referral_link(update, context)
     
-    # إهداء الرصيد
+    # محفظة البوت / إهداء الرصيد
     elif data == "gift_balance":
+        await wallet_handler(update, context)
+    elif data == "gift_send":
         await gift_handler(update, context)
     
     # كود الهدية
@@ -1097,7 +1124,9 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             context.user_data['state'] = WAITING_FOR_RECIPIENT
             
             await update.message.reply_text(
-                f"💰 المبلغ: {format_currency(amount)}\n\n👤 الآن أرسل معرف المستخدم أو اسم المستخدم للشخص الذي تريد إهداءه:",
+                f"💰 المبلغ: {format_currency(amount)}\n\n"
+                f"👤 الآن أرسل آيدي التليجرام للشخص اللي بدك تهديه "
+                f"(الرقم اللي بيظهر عنده بالقائمة الرئيسية):",
                 reply_markup=Keyboards.cancel_operation()
             )
         
@@ -1147,7 +1176,8 @@ async def handle_recipient_input(update: Update, context: ContextTypes.DEFAULT_T
         
         if not recipient:
             await update.message.reply_text(
-                "❌ المستخدم غير موجود. تأكد من صحة المعرف أو اسم المستخدم",
+                "❌ المستخدم غير موجود على البوت.\n"
+                "تأكد إنو الآيدي صحيح وإنو الشخص عمل /start قبل.",
                 reply_markup=Keyboards.cancel_operation()
             )
             return

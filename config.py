@@ -70,7 +70,7 @@ class Config:
     DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///data/telegram_bot.db")
     
     # إعدادات الإحالات
-    REFERRAL_PERCENTAGE = float(os.getenv("REFERRAL_PERCENTAGE", "10"))  # نسبة الربح من الإحالات
+    REFERRAL_PERCENTAGE = float(os.getenv("REFERRAL_PERCENTAGE", "15"))  # نسبة الربح من الإحالات
 
     # رسوم السحب لصاحب البوت (% من قيمة السحب)
     WITHDRAWAL_FEE_PERCENTAGE = float(os.getenv("WITHDRAWAL_FEE_PERCENTAGE", "10"))
@@ -240,8 +240,7 @@ class Config:
             {"text": "📊 شحن حساب ichancy", "callback": "ichancy_topup_start"},
             {"text": "📉 سحب من ichancy", "callback": "ichancy_withdraw_start"},
         ],
-        [{"text": "💼 محفظة البوت (حجز - اهداء)", "callback": "gift_balance"}],
-        [{"text": "📌 معلومات الملف الشخصي", "callback": "profile"}],
+        [{"text": "💼 محفظة البوت", "callback": "gift_balance"}],
         [
             {"text": "✉️ تواصل مع الدعم", "callback": "contact"},
             {"text": "🧾 استرداد حوالة", "callback": "refund_request"},
@@ -254,8 +253,6 @@ class Config:
             {"text": "🏆 أكواد الجوائز", "callback": "gift_code"},
             {"text": "💠 برنامج الإحالات", "callback": "referrals"},
         ],
-        [{"text": "📜 عرض السجل المالي", "callback": "transactions"}],
-        [{"text": "💵 الانتقال لقسم الدولار ↗️", "callback": "deposit_usdt"}],
         [{"text": "📋 المزيد من الخدمات", "callback": "full_menu"}],
     ]
 

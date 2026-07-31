@@ -131,6 +131,17 @@ class Keyboards:
         return InlineKeyboardMarkup(keyboard)
 
     @staticmethod
+    def wallet_menu():
+        """محفظة البوت — إهداء فقط (بدون حجز)"""
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                "🎁 إهداء لشخص بالبوت (بالـ ID)",
+                callback_data="gift_send",
+            )],
+            [InlineKeyboardButton("🏠 القائمة الرئيسية", callback_data="main_menu")],
+        ])
+
+    @staticmethod
     def cancel_operation(back_callback: str = "cancel_operation"):
         """إلغاء والعودة للمرحلة الصحيحة"""
         keyboard = [
@@ -229,7 +240,7 @@ class Keyboards:
         """قائمة الإحالات مثل الصورة"""
         keyboard = [
             [InlineKeyboardButton("🔗 شارك رابط الإحالة الخاص بك", callback_data="share_referral")],
-            [InlineKeyboardButton("🔄 العودة إلى القائمة", callback_data="main_menu")],
+            [InlineKeyboardButton("↩️ العودة إلى القائمة", callback_data="main_menu")],
         ]
         return InlineKeyboardMarkup(keyboard)
     
