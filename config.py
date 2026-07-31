@@ -12,6 +12,8 @@ class Config:
     BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
     BOT_USERNAME = os.getenv("BOT_USERNAME", "Napoleonrobert_bot")
     BOT_DISPLAY_NAME = os.getenv("BOT_DISPLAY_NAME", "Napoleon_bot")
+    # تأثيرات حركية عند فتح القائمة — أطفئها إذا صار البوت بطيء
+    UI_ANIMATIONS = os.getenv("UI_ANIMATIONS", "true").strip().lower() in ("1", "true", "yes")
     ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
 
     # تشغيل على VPS: webhook (موصى به للأداء) أو polling
@@ -203,7 +205,13 @@ class Config:
 
 اضغط «إنشاء حساب Ichancy الآن».
 """,
-        "first_start_consent": "🚀 دخّلني",
+        "first_start_consent": (
+            "<b>🚀 دخّلني</b>\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "<blockquote>على وشك تدخل عالم فيه أرباح، حظ، وشوية أدرينالين.\n"
+            "الدخول بيتطلب موافقتك على الآثار الجانبية 😈</blockquote>\n"
+            "<i>اضغط الزر تحت لتبدأ 👇</i>"
+        ),
         "welcome": """{ad_warning}
 
 🔷 القائمة الرئيسية:

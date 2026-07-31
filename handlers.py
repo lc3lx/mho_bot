@@ -8,10 +8,17 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from telegram.error import TelegramError
 
+import ui
 from database import DatabaseManager, User, Transaction
 from config import Config
 from keyboards import Keyboards
-from utils import format_currency, validate_amount, get_user_display_name, safe_edit_callback_message
+from utils import (
+    format_currency,
+    validate_amount,
+    get_user_display_name,
+    safe_edit_callback_message,
+    tg_code,
+)
 from payment_handler import PaymentHandler
 from referral_handler import ReferralHandler
 from admin_handler import AdminHandler
@@ -76,13 +83,19 @@ async def send_consent_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.callback_query:
             await safe_edit_callback_message(
-                update, text, reply_markup=markup, context=context
+                update, text, reply_markup=markup, parse_mode="HTML", context=context
             )
         elif update.effective_message:
-            await update.effective_message.reply_text(text, reply_markup=markup)
+            await ui.typing(context, update.effective_message.chat_id)
+            await update.effective_message.reply_text(
+                text, reply_markup=markup, parse_mode="HTML"
+            )
         elif update.effective_user:
             await context.bot.send_message(
-                chat_id=update.effective_user.id, text=text, reply_markup=markup
+                chat_id=update.effective_user.id,
+                text=text,
+                reply_markup=markup,
+                parse_mode="HTML",
             )
     except TelegramError:
         logger.exception("فشل إرسال بوابة الموافقة")
@@ -232,32 +245,49 @@ async def interactive_answer(query, text: str, alert: bool = False):
         pass
 
 
-async def show_funded_home(update: Update, context: ContextTypes.DEFAULT_TYPE, user):
-    """القائمة بعد اكتمال الشحن + حساب Ichancy."""
-    welcome_message = Config.MESSAGES["welcome"].format(
-        ad_warning=Config.MESSAGES["ad_warning"],
-        bot_name=Config.BOT_DISPLAY_NAME,
-        balance=format_currency(user.balance or 0),
-        user_id=user.telegram_id,
+def build_home_card(user) -> str:
+    """بطاقة القائمة الرئيسية بتنسيق HTML"""
+    return (
+        ui.quote(Config.MESSAGES["ad_warning"])
+        + "\n"
+        + ui.card(
+            f"⚡️ {Config.BOT_DISPLAY_NAME} — القائمة الرئيسية",
+            [
+                ("💎 رصيدك:", f"<b>{format_currency(user.balance or 0)}</b>"),
+                ("🆔 آيديك:", tg_code(user.telegram_id)),
+            ],
+            footer="اختر الخدمة من الأزرار 👇",
+        )
     )
+
+
+async def show_funded_home(update: Update, context: ContextTypes.DEFAULT_TYPE, user):
+    """القائمة الرئيسية."""
+    welcome_message = build_home_card(user)
     if update.callback_query:
-        await interactive_answer(update.callback_query, "🔓 تم فتح القائمة الرئيسية")
+        await interactive_answer(update.callback_query, "🔓 جاري فتح القائمة…")
+        if Config.UI_ANIMATIONS:
+            await ui.animate(update.callback_query, reply_markup=Keyboards.start_menu())
         await safe_edit_callback_message(
             update,
             welcome_message,
             reply_markup=Keyboards.start_menu(),
+            parse_mode="HTML",
             context=context,
         )
     elif update.effective_message:
+        await ui.typing(context, update.effective_message.chat_id)
         await update.effective_message.reply_text(
             welcome_message,
             reply_markup=Keyboards.start_menu(),
+            parse_mode="HTML",
         )
     else:
         await context.bot.send_message(
             chat_id=user.telegram_id,
             text=welcome_message,
             reply_markup=Keyboards.start_menu(),
+            parse_mode="HTML",
         )
 
 
@@ -348,19 +378,18 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await start_handler(update, context)
         return
 
-    message = Config.MESSAGES["main_menu"].format(
-        ad_warning=Config.MESSAGES["ad_warning"],
-        balance=format_currency(user.balance),
-        user_id=user.telegram_id,
-    )
-    
+    message = build_home_card(user)
+
     if update.message:
-        await update.message.reply_text(message, reply_markup=Keyboards.main_menu())
+        await update.message.reply_text(
+            message, reply_markup=Keyboards.main_menu(), parse_mode="HTML"
+        )
     else:
         await safe_edit_callback_message(
             update,
             message,
             reply_markup=Keyboards.main_menu(),
+            parse_mode="HTML",
             context=context,
         )
 
@@ -372,17 +401,19 @@ async def full_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await start_handler(update, context)
         return
 
-    message = Config.MESSAGES["main_menu"].format(
-        ad_warning=Config.MESSAGES["ad_warning"],
-        balance=format_currency(user.balance),
-        user_id=user.telegram_id,
-    )
+    message = build_home_card(user)
     if update.callback_query:
         await safe_edit_callback_message(
-            update, message, reply_markup=Keyboards.main_menu(), context=context
+            update,
+            message,
+            reply_markup=Keyboards.main_menu(),
+            parse_mode="HTML",
+            context=context,
         )
     else:
-        await update.message.reply_text(message, reply_markup=Keyboards.main_menu())
+        await update.message.reply_text(
+            message, reply_markup=Keyboards.main_menu(), parse_mode="HTML"
+        )
 
 
 async def profile_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -543,20 +574,26 @@ async def wallet_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await start_handler(update, context)
         return
 
-    message = f"""
-💼 محفظة البوت
-
-💵 رصيدك: {format_currency(user.balance)}
-🆔 الآيدي تبعك: {user.telegram_id}
-
-🎁 تقدر تهدي رصيد لشخص تاني على البوت عن طريق الآيدي تبعه.
-    """
+    message = ui.card(
+        "💼 محفظة البوت",
+        [
+            ("💵 رصيدك:", f"<b>{format_currency(user.balance)}</b>"),
+            ("🆔 آيديك:", tg_code(user.telegram_id)),
+        ],
+        footer="تقدر تهدي رصيد لأي شخص على البوت عن طريق الآيدي تبعه 🎁",
+    )
     if update.callback_query:
         await safe_edit_callback_message(
-            update, message, reply_markup=Keyboards.wallet_menu(), context=context
+            update,
+            message,
+            reply_markup=Keyboards.wallet_menu(),
+            parse_mode="HTML",
+            context=context,
         )
     else:
-        await update.message.reply_text(message, reply_markup=Keyboards.wallet_menu())
+        await update.message.reply_text(
+            message, reply_markup=Keyboards.wallet_menu(), parse_mode="HTML"
+        )
 
 
 async def gift_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -576,15 +613,14 @@ async def gift_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(message, reply_markup=Keyboards.wallet_menu())
         return
     
-    message = f"""
-🎁 إهداء رصيد
-
-💵 رصيدك الحالي: {format_currency(user.balance)}
-💰 الحد الأدنى للإهداء: {format_currency(Config.MIN_GIFT)}
-
-📝 أرسل المبلغ اللي بدك تهديه:
-(بعدها رح نطلب منك آيدي الشخص المستلم)
-    """
+    message = ui.card(
+        "🎁 إهداء رصيد",
+        [
+            ("💵 رصيدك:", f"<b>{format_currency(user.balance)}</b>"),
+            ("💰 الحد الأدنى:", f"<b>{format_currency(Config.MIN_GIFT)}</b>"),
+        ],
+        footer="أرسل المبلغ اللي بدك تهديه — بعدها منطلب آيدي المستلم ✍️",
+    )
     
     # حفظ حالة المحادثة
     context.user_data['state'] = WAITING_FOR_AMOUNT
@@ -592,12 +628,17 @@ async def gift_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if update.callback_query:
         await safe_edit_callback_message(
-            update, message, reply_markup=Keyboards.cancel_operation(), context=context
+            update,
+            message,
+            reply_markup=Keyboards.cancel_operation(),
+            parse_mode="HTML",
+            context=context,
         )
     else:
         await update.message.reply_text(
             message,
-            reply_markup=Keyboards.cancel_operation()
+            reply_markup=Keyboards.cancel_operation(),
+            parse_mode="HTML",
         )
 
 async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -677,24 +718,24 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     # ردود تفاعلية قصيرة حسب الزر
     toast = {
-        "deposit": "📥 فتح شحن المحفظة…",
-        "withdraw": "📤 فتح السحب…",
-        "ichancy_hub": "⚡️ حساب Ichancy…",
-        "ichancy_create_start": "⚔️ إنشاء حساب…",
-        "ichancy_topup_start": "📊 شحن Ichancy…",
-        "ichancy_withdraw_start": "📉 سحب Ichancy…",
-        "gift_code": "🏆 أكواد الجوائز…",
-        "gift_balance": "💼 محفظة البوت…",
-        "gift_send": "🎁 بدء الإهداء…",
-        "contact": "✉️ الدعم…",
-        "referrals": "👥 الإحالات…",
-        "profile": "📌 الملف الشخصي…",
-        "transactions": "📜 السجل المالي…",
-        "main_menu": "🏠 القائمة…",
-        "full_menu": "📋 القائمة الكاملة…",
-        "refund_request": "🗑 استرداد حوالة…",
-        "terms": "📖 الشروط…",
-        "deposit_usdt": "🟢 شحن USDT…",
+        "deposit": "📥 نفتحلك بوابة الشحن…",
+        "withdraw": "📤 نجهّزلك السحب…",
+        "ichancy_hub": "⚡️ نجيب بيانات حسابك…",
+        "ichancy_create_start": "⚔️ يلا نعملك حساب…",
+        "ichancy_topup_start": "📊 شحن Ichancy جاهز…",
+        "ichancy_withdraw_start": "📉 سحب من Ichancy…",
+        "gift_code": "🏆 جرّب حظك بالكود…",
+        "gift_balance": "💼 محفظتك عم تفتح…",
+        "gift_send": "🎁 خلينا نهدي حدا…",
+        "contact": "✉️ الدعم معك خلال ثواني…",
+        "referrals": "💠 أرباح الإحالات…",
+        "profile": "📌 ملفك الشخصي…",
+        "transactions": "📜 نفتح السجل…",
+        "main_menu": "🏠 رجوع للقائمة…",
+        "full_menu": "📋 كل الخدمات…",
+        "refund_request": "🧾 طلب استرداد…",
+        "terms": "🗺 الدليل الشامل…",
+        "deposit_usdt": "🟢 قسم الدولار…",
         "cancel_operation": "❌ تم الإلغاء",
     }.get(data)
     if toast:
@@ -1204,16 +1245,31 @@ async def handle_recipient_input(update: Update, context: ContextTypes.DEFAULT_T
             
             # رسالة تأكيد للمرسل
             await update.message.reply_text(
-                f"✅ تم إهداء {format_currency(amount)} بنجاح!\n👤 إلى: {get_user_display_name(recipient)}",
-                reply_markup=Keyboards.main_menu()
+                ui.card(
+                    "✅ تم الإهداء بنجاح",
+                    [
+                        ("🎁 المبلغ:", f"<b>{format_currency(amount)}</b>"),
+                        ("👤 إلى:", ui.esc(get_user_display_name(recipient))),
+                        ("💵 رصيدك الآن:", f"<b>{format_currency(sender.balance)}</b>"),
+                    ],
+                ),
+                reply_markup=Keyboards.main_menu(),
+                parse_mode="HTML",
             )
             
             # إشعار للمستلم
             try:
                 await context.bot.send_message(
                     chat_id=recipient.telegram_id,
-                    text=f"🎁 تهانينا! لقد تلقيت هدية بقيمة {format_currency(amount)}\n👤 من: {get_user_display_name(sender)}",
-                    reply_markup=Keyboards.main_menu()
+                    text=ui.card(
+                        "🎉 وصلتك هدية!",
+                        [
+                            ("🎁 المبلغ:", f"<b>{format_currency(amount)}</b>"),
+                            ("👤 من:", ui.esc(get_user_display_name(sender))),
+                        ],
+                    ),
+                    reply_markup=Keyboards.main_menu(),
+                    parse_mode="HTML",
                 )
             except TelegramError:
                 logger.warning(f"لا يمكن إرسال إشعار للمستخدم {recipient.telegram_id}")
