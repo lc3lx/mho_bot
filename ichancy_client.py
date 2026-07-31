@@ -14,7 +14,15 @@ import requests
 
 from config import Config
 
+try:
+    from curl_cffi import requests as curl_requests
+except ImportError:
+    curl_requests = None
+
 logger = logging.getLogger(__name__)
+
+# بصمة متصفح حقيقية تساعد على تجاوز فحص Cloudflare
+BROWSER_IMPERSONATE = "chrome124"
 
 
 class IchancyError(Exception):
@@ -42,7 +50,16 @@ class IchancyClient:
         self._access_token: Optional[str] = None
         self._refresh_token: Optional[str] = None
         self._lock = threading.Lock()
-        self._session = requests.Session()
+        self._warmed_up = False
+
+        if curl_requests is not None:
+            self._session = curl_requests.Session(impersonate=BROWSER_IMPERSONATE)
+        else:
+            self._session = requests.Session()
+            logger.warning(
+                "curl_cffi غير مثبت — احتمال حجب Cloudflare أعلى. ثبّت curl_cffi."
+            )
+
         if self._proxies:
             self._session.proxies.update(self._proxies)
             logger.info(
@@ -102,6 +119,23 @@ class IchancyClient:
                 return str(first["content"])
         return "فشل الطلب على ichancy"
 
+    def _warm_up(self, timeout: int) -> None:
+        """زيارة الصفحة الرئيسية مرة واحدة لالتقاط كوكيز Cloudflare."""
+        if self._warmed_up:
+            return
+        self._warmed_up = True
+        try:
+            self._session.get(
+                f"{self.base_url}/",
+                headers={
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.9",
+                },
+                timeout=timeout,
+            )
+        except Exception as exc:
+            logger.debug("Ichancy warm-up failed: %s", exc)
+
     def _raw_post(
         self,
         endpoint: str,
@@ -111,19 +145,24 @@ class IchancyClient:
     ) -> Dict[str, Any]:
         headers = {
             "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": (
+            "Accept": "application/json, text/plain, */*",
+            "Origin": self.base_url,
+            "Referer": f"{self.base_url}/",
+        }
+        # مع curl_cffi يأتي User-Agent من بصمة المتصفح المُقلَّدة
+        if curl_requests is None:
+            headers["User-Agent"] = (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/122.0.0.0 Safari/537.36"
-            ),
-        }
+            )
         if use_auth:
             if not self._access_token:
                 self.sign_in()
             headers["Authorization"] = f"Bearer {self._access_token}"
 
         req_timeout = timeout if timeout is not None else self.default_timeout
+        self._warm_up(req_timeout)
         try:
             response = self._session.post(
                 self._url(endpoint),
@@ -131,7 +170,7 @@ class IchancyClient:
                 headers=headers,
                 timeout=req_timeout,
             )
-        except requests.RequestException as exc:
+        except Exception as exc:
             logger.error("Ichancy connection error (proxy=%s): %s", bool(self._proxies), exc)
             raise IchancyError(f"تعذر الاتصال بـ ichancy: {exc}") from exc
 
