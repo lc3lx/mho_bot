@@ -351,7 +351,7 @@ class Config:
     # إعدادات ichancy.com — Agent API (signIn / withdrawFromPlayer)
     ICHANCY_CONFIG = {
         "website_url": "https://www.ichancy.com/",
-        "api_base_url": os.getenv("ICHANCY_API_URL", "https://www.ichancy.com"),
+        "api_base_url": os.getenv("ICHANCY_API_URL", "https://agents.ichancy.com"),
         "username": os.getenv("ICHANCY_USERNAME", ""),
         "password": os.getenv("ICHANCY_PASSWORD", ""),
         "parent_id": os.getenv("ICHANCY_PARENT_ID", ""),
