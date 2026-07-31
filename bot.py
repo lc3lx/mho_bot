@@ -183,7 +183,7 @@ class TelegramBot:
     async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """معالج الأخطاء"""
         from utils import is_benign_telegram_error, user_facing_error_message
-        from handlers import user_is_funded
+        from handlers import stage_markup_for_user
 
         if is_benign_telegram_error(context.error):
             logger.warning("خطأ تيليجرام متوقع (تم تجاهله): %s", context.error)
@@ -196,13 +196,10 @@ class TelegramBot:
 
         try:
             user = None
-            if update.effective_user:
-                user = self.db.get_user(update.effective_user.id)
-            markup = (
-                Keyboards.start_menu()
-                if user and user_is_funded(user)
-                else Keyboards.deposit_required_menu()
-            )
+            tid = update.effective_user.id if update.effective_user else None
+            if tid:
+                user = self.db.get_user(tid)
+            markup = stage_markup_for_user(user, tid)
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
                 text=user_facing_error_message(context.error),

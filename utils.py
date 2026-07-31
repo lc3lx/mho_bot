@@ -116,8 +116,11 @@ def is_benign_telegram_error(error) -> bool:
             "message is not modified",
             "message to delete not found",
             "message to edit not found",
+            "message can't be edited",
+            "message_id_invalid",
             "query is too old",
             "query id is invalid",
+            "button_data_invalid",
         )
     )
 
@@ -140,6 +143,8 @@ def user_facing_error_message(error) -> str:
         return "⏳ الطلبات كثيرة الآن. انتظر قليلاً ثم أعد المحاولة."
     if "unauthorized" in text or "forbidden" in text:
         return "❌ لا يمكن إكمال العملية الآن. تواصل مع الدعم."
+    if "can't parse entities" in text or "parse entities" in text:
+        return "❌ تعذر عرض الرسالة بسبب تنسيق غير صالح. أعد المحاولة."
     if ".env" in text or "traceback" in text or "sqlalchemy" in text:
         return (
             "❌ الخدمة غير جاهزة حالياً.\n"
@@ -159,7 +164,7 @@ def user_facing_error_message(error) -> str:
 
     return (
         "❌ حدث خطأ أثناء تنفيذ العملية.\n"
-        "أعد المحاولة، وإذا تكرر الخطأ تواصل مع الدعم."
+        "أعد المحاولة من الأزرار أدناه، وإذا تكرر الخطأ تواصل مع الدعم."
     )
 
 def validate_amount(amount_str: str, min_amount: float = 0, max_amount: float = float('inf')) -> tuple[bool, float, str]:

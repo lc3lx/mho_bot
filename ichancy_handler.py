@@ -14,7 +14,7 @@ from telegram.ext import ContextTypes
 from database import DatabaseManager, User, Transaction
 from config import Config
 from keyboards import Keyboards
-from utils import format_currency, validate_amount, generate_transaction_reference
+from utils import format_currency, validate_amount, generate_transaction_reference, safe_edit_callback_message, user_facing_error_message
 from ichancy_client import IchancyClient, IchancyError
 
 logger = logging.getLogger(__name__)
@@ -130,18 +130,21 @@ class IchancyHandler:
 
     @staticmethod
     async def show_create_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """الخطوة الثانية: إنشاء حساب"""
-        text = (
-            "2️⃣ الخطوة الثانية\n"
-            "بعد إتمام الشحن، يجب عليك إنشاء حساب.\n\n"
-            "⚠️ كل مستخدم يحق له حساب Ichancy واحد فقط، ويُربط بحسابك في التليجرام.\n\n"
-            "اضغط الزر لإنشاء حساب Ichancy."
-        )
-        markup = Keyboards.ichancy_create_prompt()
+        """نفس شاشة خطوة Ichancy الموحدة"""
+        text = Config.MESSAGES["ichancy_required"]
+        markup = Keyboards.ichancy_required_menu()
         if update.callback_query:
-            await update.callback_query.edit_message_text(text, reply_markup=markup)
+            await safe_edit_callback_message(
+                update, text, reply_markup=markup, context=context
+            )
+        elif update.effective_message:
+            await update.effective_message.reply_text(text, reply_markup=markup)
         else:
-            await update.message.reply_text(text, reply_markup=markup)
+            await context.bot.send_message(
+                chat_id=update.effective_user.id,
+                text=text,
+                reply_markup=markup,
+            )
 
     @staticmethod
     async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -171,9 +174,11 @@ class IchancyHandler:
         )
 
         if update.callback_query:
-            await update.callback_query.edit_message_text(
+            await safe_edit_callback_message(
+                update,
                 text,
                 reply_markup=Keyboards.ichancy_account_menu(),
+                context=context,
                 parse_mode="Markdown",
             )
         else:
@@ -190,42 +195,63 @@ class IchancyHandler:
     async def start_create_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """بدء إنشاء حساب — طلب اسم المستخدم"""
         user = db.get_user(update.effective_user.id)
-        if not db.user_has_funded(user.id) and update.effective_user.id not in Config.ADMIN_IDS:
-            await update.callback_query.edit_message_text(
-                "🔒 يجب شحن البوت أولاً قبل إنشاء حساب Ichancy.",
+        if not user:
+            await safe_edit_callback_message(
+                update,
+                Config.MESSAGES["user_not_found"],
+                reply_markup=Keyboards.start_step1(),
+                context=context,
+            )
+            return
+
+        if (
+            not db.user_has_funded(user.id)
+            and update.effective_user.id not in Config.ADMIN_IDS
+        ):
+            await safe_edit_callback_message(
+                update,
+                Config.MESSAGES["need_deposit_before_ichancy"],
                 reply_markup=Keyboards.deposit_required_menu(),
+                context=context,
             )
             return
 
         if user.ichancy_player_id:
-            await update.callback_query.edit_message_text(
+            await safe_edit_callback_message(
+                update,
                 IchancyHandler._already_linked_message(user),
                 reply_markup=Keyboards.ichancy_account_menu(),
+                context=context,
                 parse_mode="Markdown",
             )
             return
 
         if not ichancy_client.is_configured:
-            await update.callback_query.edit_message_text(
-                "❌ خدمة ichancy غير مُعدّة. تواصل مع الإدارة.",
-                reply_markup=Keyboards.main_menu(),
+            await safe_edit_callback_message(
+                update,
+                Config.MESSAGES["ichancy_not_configured"],
+                reply_markup=Keyboards.ichancy_required_menu(),
+                context=context,
             )
             return
 
         text = (
-            "🔷 إنشاء حساب iChancy - اسم المستخدم\n\n"
+            "🔷 إنشاء حساب Ichancy — اسم المستخدم\n\n"
             "⚠️ مسموح بحساب واحد فقط لكل مستخدم.\n\n"
-            "يرجى اختيار اسم مستخدم يحقق الشروط التالية:\n"
-            "1. أن يحتوي على أحرف إنجليزية فقط.\n"
-            "2. أن يحتوي على أرقام لتجنب التشابه.\n"
-            "3. ألا يحتوي على رموز خاصة مثل .?!- +_()*&^%$#@\n\n"
-            "مثال على اسم المستخدم: `Walter12`"
+            "الشروط:\n"
+            "1) أحرف إنجليزية فقط\n"
+            "2) يفضّل إضافة أرقام\n"
+            "3) بدون رموز خاصة مثل .?!-+_()*^%$#@\n\n"
+            "مثال: `Walter12`\n\n"
+            "أرسل اسم المستخدم الآن، أو اضغط إلغاء للرجوع."
         )
         context.user_data["state"] = "waiting_for_ichancy_username"
         context.user_data["operation"] = "create_ichancy"
-        await update.callback_query.edit_message_text(
+        await safe_edit_callback_message(
+            update,
             text,
             reply_markup=Keyboards.cancel_operation(),
+            context=context,
             parse_mode="Markdown",
         )
 
@@ -284,8 +310,8 @@ class IchancyHandler:
         if not username:
             context.user_data.clear()
             await update.message.reply_text(
-                "❌ انتهت الجلسة. ابدأ من جديد.",
-                reply_markup=Keyboards.main_menu(),
+                Config.MESSAGES["session_expired"],
+                reply_markup=Keyboards.ichancy_required_menu(),
             )
             return
 
@@ -330,7 +356,7 @@ class IchancyHandler:
                 await update.message.reply_text(
                     "❌ هذا الحساب مرتبط بمستخدم تليجرام آخر.\n"
                     "كل مستخدم يحق له حساب واحد فقط.",
-                    reply_markup=Keyboards.main_menu(),
+                    reply_markup=Keyboards.ichancy_required_menu(),
                 )
                 return
 
@@ -380,7 +406,15 @@ class IchancyHandler:
         except IchancyError as exc:
             context.user_data.clear()
             await update.message.reply_text(
-                f"❌ فشل إنشاء الحساب:\n{exc.message}",
+                f"❌ فشل إنشاء الحساب:\n{exc.message}\n\n"
+                "صحّح البيانات أو جرّب اسماً آخر، أو تواصل مع الدعم.",
+                reply_markup=Keyboards.ichancy_required_menu(),
+            )
+        except Exception as exc:
+            logger.exception("خطأ غير متوقع أثناء إنشاء حساب Ichancy")
+            context.user_data.clear()
+            await update.message.reply_text(
+                f"❌ تعذر إنشاء الحساب الآن.\n{user_facing_error_message(exc)}",
                 reply_markup=Keyboards.ichancy_required_menu(),
             )
 
@@ -391,24 +425,28 @@ class IchancyHandler:
         min_topup = Config.ICHANCY_CONFIG.get("min_topup", 20000)
 
         if not user.ichancy_player_id:
-            await update.callback_query.edit_message_text(
-                "❌ أنشئ حساب Ichancy أولاً.",
-                reply_markup=Keyboards.ichancy_create_prompt(),
+            await safe_edit_callback_message(
+                update,
+                "❌ أنشئ حساب Ichancy أولاً من الزر أدناه.",
+                reply_markup=Keyboards.ichancy_required_menu(),
+                context=context,
             )
             return
 
         text = (
-            "🔄 شحن رصيد 🔄\n\n"
-            "ادخل المبلغ الذي تريد إضافته الى حسابك في ايشانسي\n\n"
-            f"ملاحظة: اقل مبلغ لشحن الحساب هو {format_currency(min_topup)}\n\n"
+            "🔄 شحن رصيد Ichancy\n\n"
+            "أرسل المبلغ الذي تريد إضافته إلى حسابك في ايشانسي.\n\n"
+            f"ملاحظة: أقل مبلغ للشحن هو {format_currency(min_topup)}\n\n"
             f"💵 رصيد البوت المتاح: {format_currency(user.balance)}"
         )
         context.user_data["state"] = "waiting_for_amount"
         context.user_data["operation"] = "ichancy_topup"
         context.user_data["method"] = "ichancy"
-        await update.callback_query.edit_message_text(
+        await safe_edit_callback_message(
+            update,
             text,
             reply_markup=Keyboards.cancel_operation(),
+            context=context,
         )
 
     @staticmethod
@@ -521,9 +559,11 @@ class IchancyHandler:
     async def start_link_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """رفض ربط الحسابات الموجودة عند استدعاء callback قديم."""
         context.user_data.clear()
-        await update.callback_query.edit_message_text(
-            "ربط حساب موجود غير مسموح؛ أنشئ حسابك من داخل البوت",
-            reply_markup=Keyboards.ichancy_create_prompt(),
+        await safe_edit_callback_message(
+            update,
+            "❌ ربط حساب خارجي غير مسموح.\nأنشئ حسابك من داخل البوت فقط.",
+            reply_markup=Keyboards.ichancy_required_menu(),
+            context=context,
         )
 
     @staticmethod
@@ -533,8 +573,8 @@ class IchancyHandler:
         """رفض مسار ربط الحسابات القديمة دون أي كتابة في قاعدة البيانات."""
         context.user_data.clear()
         await update.message.reply_text(
-            "ربط حساب موجود غير مسموح؛ أنشئ حسابك من داخل البوت",
-            reply_markup=Keyboards.ichancy_create_prompt(),
+            "❌ ربط حساب خارجي غير مسموح.\nأنشئ حسابك من داخل البوت فقط.",
+            reply_markup=Keyboards.ichancy_required_menu(),
         )
 
     @staticmethod
@@ -545,26 +585,32 @@ class IchancyHandler:
         user = db.get_user(update.effective_user.id)
 
         if not user.ichancy_player_id:
-            await update.callback_query.edit_message_text(
-                "❌ أنشئ حساب Ichancy أولاً.",
-                reply_markup=Keyboards.ichancy_create_prompt(),
+            await safe_edit_callback_message(
+                update,
+                "❌ أنشئ حساب Ichancy أولاً من الزر أدناه.",
+                reply_markup=Keyboards.ichancy_required_menu(),
+                context=context,
             )
             return
 
         if not ichancy_client.is_configured:
-            await update.callback_query.edit_message_text(
-                "❌ خدمة ichancy غير مُعدّة.",
-                reply_markup=Keyboards.main_menu(),
+            await safe_edit_callback_message(
+                update,
+                Config.MESSAGES["ichancy_not_configured"],
+                reply_markup=Keyboards.ichancy_account_menu(),
+                context=context,
             )
             return
 
         allowed, remaining = IchancyHandler.get_withdraw_cooldown(user.id)
         cooldown_minutes = Config.ICHANCY_CONFIG.get("withdraw_cooldown_minutes", 30)
         if not allowed:
-            await update.callback_query.edit_message_text(
+            await safe_edit_callback_message(
+                update,
                 f"⏱ مسموح سحب واحد كل {cooldown_minutes} دقيقة.\n"
                 f"المتبقي: {IchancyHandler._format_remaining(remaining)}",
                 reply_markup=Keyboards.ichancy_account_menu(),
+                context=context,
             )
             return
 
@@ -579,9 +625,11 @@ class IchancyHandler:
         """
         context.user_data["state"] = "waiting_for_amount"
         context.user_data["operation"] = "ichancy_withdraw"
-        await update.callback_query.edit_message_text(
+        await safe_edit_callback_message(
+            update,
             message,
             reply_markup=Keyboards.cancel_operation(),
+            context=context,
             parse_mode="Markdown",
         )
 
@@ -707,10 +755,12 @@ class IchancyHandler:
     async def change_password_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """لا يوجد endpoint لتغيير كلمة المرور في وثيقة Agent API"""
         site = Config.ICHANCY_CONFIG.get("website_url", "https://www.ichancy.com/")
-        await update.callback_query.edit_message_text(
+        await safe_edit_callback_message(
+            update,
             "🖊️ تغيير كلمة مرور الحساب\n\n"
-            "حسب وثيقة Agent API لا يتوفر Endpoint لتغيير كلمة المرور من البوت.\n"
+            "لا يمكن تغيير كلمة المرور من البوت حالياً.\n"
             f"غيّرها من الموقع: {site}\n\n"
             "بعد التغيير يمكنك تحديثها المحفوظة هنا عبر الدعم.",
             reply_markup=Keyboards.ichancy_account_menu(),
+            context=context,
         )

@@ -1741,11 +1741,7 @@ class PaymentHandler:
                 if not has_ichancy:
                     await context.bot.send_message(
                         chat_id=telegram_id,
-                        text=(
-                            "2️⃣ الخطوة الثانية — حساب Ichancy\n\n"
-                            "الآن أنشئ حساب Ichancy من داخل البوت "
-                            "لإكمال التسجيل وفتح باقي الخدمات."
-                        ),
+                        text=Config.MESSAGES["ichancy_required"],
                         reply_markup=Keyboards.ichancy_required_menu(),
                     )
                 else:

@@ -74,6 +74,10 @@ PRE_ICHANCY_CALLBACKS = PRE_FUNDING_CALLBACKS | {
     "ichancy_hub",
     "ichancy_to_bot",
     "ichancy_create_start",
+    "contact",
+    "message_admin",
+    "main_menu",
+    "start_continue",
 }
 PRE_ICHANCY_STATES = PRE_FUNDING_STATES | {
     WAITING_FOR_ICHANCY_USERNAME,
@@ -105,10 +109,28 @@ def is_pre_ichancy_callback(data: str) -> bool:
     return is_pre_funding_callback(data)
 
 
+def get_user_stage(user, telegram_id: int | None = None) -> str:
+    """
+    مرحلة المستخدم بعد الاشتراك:
+    deposit | ichancy | ready
+    """
+    if telegram_id is not None and telegram_id in Config.ADMIN_IDS:
+        return "ready"
+    if not user or not user_is_funded(user):
+        return "deposit"
+    if not user_has_ichancy(user):
+        return "ichancy"
+    return "ready"
+
+
+def stage_markup_for_user(user, telegram_id: int | None = None):
+    return Keyboards.stage_markup(get_user_stage(user, telegram_id))
+
+
 async def send_deposit_required(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """إجبار المستخدم على الشحن قبل باقي الخدمات."""
     text = Config.MESSAGES["deposit_required"]
-    markup = Keyboards.deposit_required_menu()
+    markup = Keyboards.start_step1()
     try:
         if update.callback_query:
             await safe_edit_callback_message(
@@ -122,11 +144,7 @@ async def send_deposit_required(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def send_ichancy_required(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """إجبار إنشاء حساب Ichancy بعد الشحن."""
-    text = Config.MESSAGES.get(
-        "ichancy_required",
-        "2️⃣ الخطوة الثانية\n"
-        "تم الشحن بنجاح. أنشئ حساب Ichancy الآن لإكمال التسجيل.",
-    )
+    text = Config.MESSAGES["ichancy_required"]
     markup = Keyboards.ichancy_required_menu()
     try:
         if update.callback_query:
@@ -135,7 +153,7 @@ async def send_ichancy_required(update: Update, context: ContextTypes.DEFAULT_TY
             )
         elif update.effective_message:
             await update.effective_message.reply_text(text, reply_markup=markup)
-        else:
+        elif update.effective_user:
             await context.bot.send_message(
                 chat_id=update.effective_user.id,
                 text=text,
@@ -146,20 +164,38 @@ async def send_ichancy_required(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def show_user_home(update: Update, context: ContextTypes.DEFAULT_TYPE, user):
-    """
-    توجيه المستخدم حسب مرحلته:
-    1) غير مشحون → شحن
-    2) مشحون بلا Ichancy → إنشاء حساب
-    3) مكتمل → القائمة
-    """
-    is_admin = update.effective_user and update.effective_user.id in Config.ADMIN_IDS
-    if is_admin or (user_is_funded(user) and user_has_ichancy(user)):
+    """توجيه المستخدم لشاشة مرحلته الحالية فقط (رسالة واحدة واضحة)."""
+    tid = update.effective_user.id if update.effective_user else None
+    stage = get_user_stage(user, tid)
+    if stage == "ready":
         await show_funded_home(update, context, user)
         return
-    if user_is_funded(user) and not user_has_ichancy(user):
+    if stage == "ichancy":
         await send_ichancy_required(update, context)
         return
-    await send_deposit_required(update, context)
+
+    text = Config.MESSAGES["start_step1"].format(
+        facebook_url=Config.FACEBOOK_URL,
+        telegram_channel_url=Config.TELEGRAM_CHANNEL_URL,
+    )
+    markup = Keyboards.start_step1()
+    try:
+        if update.callback_query:
+            await safe_edit_callback_message(
+                update, text, reply_markup=markup, context=context,
+                disable_web_page_preview=True,
+            )
+        elif update.effective_message:
+            await update.effective_message.reply_text(
+                text, reply_markup=markup, disable_web_page_preview=True,
+            )
+        elif tid:
+            await context.bot.send_message(
+                chat_id=tid, text=text, reply_markup=markup,
+                disable_web_page_preview=True,
+            )
+    except TelegramError:
+        logger.exception("فشل إرسال شاشة الشحن")
 
 
 async def show_funded_home(update: Update, context: ContextTypes.DEFAULT_TYPE, user):
@@ -718,9 +754,8 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     
     if update.callback_query:
-        await update.callback_query.edit_message_text(
-            message,
-            reply_markup=Keyboards.contact_menu()
+        await safe_edit_callback_message(
+            update, message, reply_markup=Keyboards.contact_menu(), context=context
         )
     else:
         await update.message.reply_text(
@@ -821,9 +856,11 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     elif data == "ichancy_change_password":
         await IchancyHandler.change_password_info(update, context)
     elif data == "open_facebook":
-        await query.edit_message_text(
+        await safe_edit_callback_message(
+            update,
             f"📱 صفحتنا على الفيسبوك:\n{Config.FACEBOOK_URL}",
-            reply_markup=Keyboards.main_menu(),
+            reply_markup=stage_markup_for_user(user, update.effective_user.id),
+            context=context,
         )
 
     # لوحة الإدمن
@@ -1346,13 +1383,22 @@ async def handle_gift_code_input(update: Update, context: ContextTypes.DEFAULT_T
         session.commit()
 
         context.user_data.clear()
-        await update.message.reply_text(
-            f"✅ تم قبول الكود!\n"
-            f"🏆 الجائزة: {format_currency(gift_code.amount)}\n"
-            f"💰 رصيدك الآن: {format_currency(db_user.balance)}\n\n"
-            "الآن أكمل الخطوة التالية: إنشاء حساب Ichancy.",
-            reply_markup=Keyboards.ichancy_required_menu(),
-        )
+        has_ichancy = bool(db_user.ichancy_player_id)
+        if has_ichancy:
+            await update.message.reply_text(
+                f"✅ تم قبول الكود!\n"
+                f"🏆 الجائزة: {format_currency(gift_code.amount)}\n"
+                f"💰 رصيدك الآن: {format_currency(db_user.balance)}",
+                reply_markup=Keyboards.start_menu(),
+            )
+        else:
+            await update.message.reply_text(
+                f"✅ تم قبول الكود!\n"
+                f"🏆 الجائزة: {format_currency(gift_code.amount)}\n"
+                f"💰 رصيدك الآن: {format_currency(db_user.balance)}\n\n"
+                f"{Config.MESSAGES['ichancy_required']}",
+                reply_markup=Keyboards.ichancy_required_menu(),
+            )
 
     finally:
         session.close()
