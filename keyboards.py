@@ -61,36 +61,37 @@ class Keyboards:
 
     @staticmethod
     def required_subscription():
-        """بوابة الاشتراك الإلزامي قبل استخدام البوت"""
+        """بوابة الشروط + اشتراك بقناة واحدة فقط"""
         keyboard = [
-            [InlineKeyboardButton("📢 الاشتراك في القناة", url=Config.TELEGRAM_CHANNEL_URL)],
-            [InlineKeyboardButton("✅ تحققت من الاشتراك — متابعة", callback_data="check_subscription")],
+            [InlineKeyboardButton(
+                "📢 انضم للقناة الرسمية",
+                url=Config.TELEGRAM_CHANNEL_URL,
+            )],
+            [InlineKeyboardButton(
+                "✅ اشتركت — افتح البوابة",
+                callback_data="check_subscription",
+            )],
         ]
         return InlineKeyboardMarkup(keyboard)
 
     @staticmethod
     def start_step1():
-        """خطوة الشحن — أزرار مرتبة عمودياً"""
-        keyboard = [
-            [InlineKeyboardButton("📩 شحن البوت الآن", callback_data="deposit")],
-            [InlineKeyboardButton("🏆 استخدام كود هدية", callback_data="gift_code")],
-            [InlineKeyboardButton("📢 قناتنا على التلغرام", url=Config.TELEGRAM_CHANNEL_URL)],
-            [InlineKeyboardButton("📱 صفحتنا على الفيسبوك", url=Config.FACEBOOK_URL)],
-        ]
-        return InlineKeyboardMarkup(keyboard)
+        """توافق خلفي — توجيه لشاشة إنشاء Ichancy"""
+        return Keyboards.ichancy_required_menu()
 
     @staticmethod
     def deposit_required_menu():
-        """إجبار الشحن"""
-        return Keyboards.start_step1()
+        """توافق خلفي — الشحن لم يعد إجبارياً"""
+        return Keyboards.ichancy_required_menu()
 
     @staticmethod
     def ichancy_required_menu():
-        """إجبار إنشاء حساب Ichancy بعد الشحن"""
+        """إجبار إنشاء حساب Ichancy (الشحن اختياري)"""
         keyboard = [
-            [InlineKeyboardButton("⚡️ إنشاء حساب Ichancy الآن", callback_data="ichancy_create_start")],
-            [InlineKeyboardButton("📩 شحن رصيد إضافي", callback_data="deposit")],
-            [InlineKeyboardButton("📩 تواصل مع الدعم", callback_data="contact")],
+            [InlineKeyboardButton("⚔️ إنشاء حساب Ichancy الآن", callback_data="ichancy_create_start")],
+            [InlineKeyboardButton("📥 شحن محفظة البوت (اختياري)", callback_data="deposit")],
+            [InlineKeyboardButton("🏆 استخدام كود هدية", callback_data="gift_code")],
+            [InlineKeyboardButton("✉️ تواصل مع الدعم", callback_data="contact")],
         ]
         return InlineKeyboardMarkup(keyboard)
     
@@ -130,9 +131,7 @@ class Keyboards:
     @staticmethod
     def stage_markup(stage: str):
         """لوحة حسب مرحلة المستخدم"""
-        if stage == "deposit":
-            return Keyboards.start_step1()
-        if stage == "ichancy":
+        if stage == "ichancy" or stage == "deposit":
             return Keyboards.ichancy_required_menu()
         return Keyboards.start_menu()
 

@@ -378,7 +378,7 @@ class PaymentHandler:
             await safe_edit_callback_message(
                 update,
                 "❌ انتهت الجلسة. ابدأ طلب شحن شام كاش من جديد.",
-                reply_markup=Keyboards.deposit_required_menu(),
+                reply_markup=Keyboards.payment_methods("deposit"),
                 context=context,
             )
             return

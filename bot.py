@@ -107,7 +107,7 @@ class TelegramBot:
         
     async def balance_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """أمر عرض الرصيد"""
-        from handlers import user_is_funded, user_has_ichancy, send_deposit_required, send_ichancy_required
+        from handlers import user_has_ichancy, send_ichancy_required
 
         user = self.db.get_user(update.effective_user.id)
         if not user:
@@ -118,13 +118,9 @@ class TelegramBot:
                 last_name=update.effective_user.last_name
             )
 
-        if update.effective_user.id not in Config.ADMIN_IDS:
-            if not user or not user_is_funded(user):
-                await send_deposit_required(update, context)
-                return
-            if not user_has_ichancy(user):
-                await send_ichancy_required(update, context)
-                return
+        if not user or not user_has_ichancy(user):
+            await send_ichancy_required(update, context)
+            return
         
         message = f"""
 💰 معلومات الرصيد
@@ -143,16 +139,12 @@ class TelegramBot:
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """أمر المساعدة"""
-        from handlers import user_is_funded, user_has_ichancy, send_deposit_required, send_ichancy_required
+        from handlers import user_has_ichancy, send_ichancy_required
 
         user = self.db.get_user(update.effective_user.id)
-        if update.effective_user.id not in Config.ADMIN_IDS:
-            if not user or not user_is_funded(user):
-                await send_deposit_required(update, context)
-                return
-            if not user_has_ichancy(user):
-                await send_ichancy_required(update, context)
-                return
+        if not user or not user_has_ichancy(user):
+            await send_ichancy_required(update, context)
+            return
 
         help_text = """
 🤖 مرحباً بك في بوت الدفع الإلكتروني

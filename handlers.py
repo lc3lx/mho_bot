@@ -39,8 +39,8 @@ WAITING_FOR_SHAMCASH_CONFIRM = "waiting_for_shamcash_confirm"
 WAITING_FOR_SYRIATEL_AMOUNT = "waiting_for_syriatel_amount"
 WAITING_FOR_SYRIATEL_TX = "waiting_for_syriatel_tx"
 
-# أزرار/حالات مسموحة قبل أول شحن ناجح
-PRE_FUNDING_CALLBACKS = {
+# أزرار/حالات مسموحة قبل إنشاء حساب Ichancy (الشحن اختياري)
+PRE_ICHANCY_CALLBACKS = {
     "check_subscription",
     "deposit",
     "gift_code",
@@ -53,24 +53,6 @@ PRE_FUNDING_CALLBACKS = {
     "syriatel_continue",
     "syriatel_prev_code",
     "open_facebook",
-}
-PRE_FUNDING_CALLBACK_PREFIXES = (
-    "deposit_",
-    "syriatel_pick_",
-)
-PRE_FUNDING_STATES = {
-    WAITING_FOR_AMOUNT,
-    WAITING_FOR_TX_NUMBER,
-    WAITING_FOR_GIFT_CODE,
-    WAITING_FOR_SHAMCASH_TX,
-    WAITING_FOR_SHAMCASH_AMOUNT,
-    WAITING_FOR_SHAMCASH_CONFIRM,
-    WAITING_FOR_SYRIATEL_AMOUNT,
-    WAITING_FOR_SYRIATEL_TX,
-}
-
-# بعد الشحن وقبل إنشاء حساب Ichancy
-PRE_ICHANCY_CALLBACKS = PRE_FUNDING_CALLBACKS | {
     "ichancy_hub",
     "ichancy_to_bot",
     "ichancy_create_start",
@@ -79,14 +61,26 @@ PRE_ICHANCY_CALLBACKS = PRE_FUNDING_CALLBACKS | {
     "main_menu",
     "start_continue",
 }
-PRE_ICHANCY_STATES = PRE_FUNDING_STATES | {
+PRE_ICHANCY_CALLBACK_PREFIXES = (
+    "deposit_",
+    "syriatel_pick_",
+)
+PRE_ICHANCY_STATES = {
+    WAITING_FOR_AMOUNT,
+    WAITING_FOR_TX_NUMBER,
+    WAITING_FOR_GIFT_CODE,
+    WAITING_FOR_SHAMCASH_TX,
+    WAITING_FOR_SHAMCASH_AMOUNT,
+    WAITING_FOR_SHAMCASH_CONFIRM,
+    WAITING_FOR_SYRIATEL_AMOUNT,
+    WAITING_FOR_SYRIATEL_TX,
     WAITING_FOR_ICHANCY_USERNAME,
     WAITING_FOR_ICHANCY_PASSWORD,
 }
 
 
 def user_is_funded(user) -> bool:
-    """هل أكمل المستخدم شحناً ناجحاً مرة واحدة؟"""
+    """هل أكمل المستخدم شحناً ناجحاً مرة واحدة؟ (اختياري — لم يعد قيداً)"""
     if not user:
         return False
     return db.user_has_funded(user.id)
@@ -97,28 +91,19 @@ def user_has_ichancy(user) -> bool:
     return bool(user and user.ichancy_player_id)
 
 
-def is_pre_funding_callback(data: str) -> bool:
-    if data in PRE_FUNDING_CALLBACKS:
-        return True
-    return any(data.startswith(prefix) for prefix in PRE_FUNDING_CALLBACK_PREFIXES)
-
-
 def is_pre_ichancy_callback(data: str) -> bool:
     if data in PRE_ICHANCY_CALLBACKS:
         return True
-    return is_pre_funding_callback(data)
+    return any(data.startswith(prefix) for prefix in PRE_ICHANCY_CALLBACK_PREFIXES)
 
 
 def get_user_stage(user, telegram_id: int | None = None) -> str:
     """
     مرحلة المستخدم بعد الاشتراك:
-    deposit | ichancy | ready
+    ichancy | ready
+    الشحن لم يعد خطوة إجبارية.
     """
-    if telegram_id is not None and telegram_id in Config.ADMIN_IDS:
-        return "ready"
-    if not user or not user_is_funded(user):
-        return "deposit"
-    if not user_has_ichancy(user):
+    if not user or not user_has_ichancy(user):
         return "ichancy"
     return "ready"
 
@@ -127,23 +112,8 @@ def stage_markup_for_user(user, telegram_id: int | None = None):
     return Keyboards.stage_markup(get_user_stage(user, telegram_id))
 
 
-async def send_deposit_required(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """إجبار المستخدم على الشحن قبل باقي الخدمات."""
-    text = Config.MESSAGES["deposit_required"]
-    markup = Keyboards.start_step1()
-    try:
-        if update.callback_query:
-            await safe_edit_callback_message(
-                update, text, reply_markup=markup, context=context
-            )
-        elif update.effective_message:
-            await update.effective_message.reply_text(text, reply_markup=markup)
-    except TelegramError:
-        logger.exception("فشل إرسال رسالة إجبار الشحن")
-
-
 async def send_ichancy_required(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """إجبار إنشاء حساب Ichancy بعد الشحن."""
+    """إجبار إنشاء حساب Ichancy قبل باقي الخدمات."""
     text = Config.MESSAGES["ichancy_required"]
     markup = Keyboards.ichancy_required_menu()
     try:
@@ -170,59 +140,7 @@ async def show_user_home(update: Update, context: ContextTypes.DEFAULT_TYPE, use
     if stage == "ready":
         await show_funded_home(update, context, user)
         return
-    if stage == "ichancy":
-        await send_ichancy_required(update, context)
-        return
-
-    text = Config.MESSAGES["start_step1"].format(
-        facebook_url=Config.FACEBOOK_URL,
-        telegram_channel_url=Config.TELEGRAM_CHANNEL_URL,
-    )
-    markup = Keyboards.start_step1()
-    try:
-        if update.callback_query:
-            await safe_edit_callback_message(
-                update, text, reply_markup=markup, context=context,
-                disable_web_page_preview=True,
-            )
-        elif update.effective_message:
-            await update.effective_message.reply_text(
-                text, reply_markup=markup, disable_web_page_preview=True,
-            )
-        elif tid:
-            await context.bot.send_message(
-                chat_id=tid, text=text, reply_markup=markup,
-                disable_web_page_preview=True,
-            )
-    except TelegramError:
-        logger.exception("فشل إرسال شاشة الشحن")
-
-
-async def show_funded_home(update: Update, context: ContextTypes.DEFAULT_TYPE, user):
-    """القائمة بعد اكتمال الشحن + حساب Ichancy."""
-    welcome_message = Config.MESSAGES["welcome"].format(
-        bot_name=Config.BOT_DISPLAY_NAME,
-        balance=format_currency(user.balance or 0),
-        user_id=user.telegram_id,
-    )
-    if update.callback_query:
-        await safe_edit_callback_message(
-            update,
-            welcome_message,
-            reply_markup=Keyboards.start_menu(),
-            context=context,
-        )
-    elif update.effective_message:
-        await update.effective_message.reply_text(
-            welcome_message,
-            reply_markup=Keyboards.start_menu(),
-        )
-    else:
-        await context.bot.send_message(
-            chat_id=user.telegram_id,
-            text=welcome_message,
-            reply_markup=Keyboards.start_menu(),
-        )
+    await send_ichancy_required(update, context)
 
 
 async def check_channel_subscription(
@@ -234,9 +152,6 @@ async def check_channel_subscription(
     أسباب شائعة: not_subscribed | bot_not_admin | channel_error
     """
     if not Config.REQUIRE_CHANNEL_SUBSCRIPTION:
-        return True, None
-
-    if user_id in Config.ADMIN_IDS:
         return True, None
 
     channel_ids = Config.get_required_channel_ids()
@@ -305,8 +220,8 @@ def subscription_failure_message(reason: str | None) -> str:
     if reason == "channel_error":
         return "⚠️ إعدادات القناة غير مكتملة. تواصل مع الإدارة."
     return (
-        "❌ لم يتم العثور على اشتراكك.\n"
-        "اشترك في القناة ثم اضغط «تحقق من الاشتراك» مجدداً."
+        "❌ الاشتراك غير موجود.\n"
+        "ادخل القناة واشترك، ثم اضغط «اشتركت — افتح البوابة»."
     )
 
 
@@ -314,8 +229,9 @@ async def send_subscription_required(
     update: Update,
     reason: str | None = None,
     bot_username: str | None = None,
+    context: ContextTypes.DEFAULT_TYPE | None = None,
 ):
-    """إظهار بوابة الاشتراك الإلزامي."""
+    """بوابة الشروط + اشتراك بقناة واحدة."""
     bot_username = (bot_username or Config.BOT_USERNAME or "Napoleonrobert_bot").lstrip("@")
     if reason == "bot_not_admin":
         text = (
@@ -325,50 +241,82 @@ async def send_subscription_required(
             "2) Administrators → Add Admin\n"
             f"3) ابحث عن: @{bot_username}\n"
             "4) ضيفو مشرف (أي صلاحية بسيطة تكفي)\n"
-            "5) ارجع واضغط تحقق من الاشتراك\n\n"
+            "5) ارجع واضغط «اشتركت — افتح البوابة»\n\n"
             "مهم: ضيف البوت مو حساب شخصي."
         )
     else:
         text = (
-            "🔒 يجب الاشتراك في قناتنا أولاً لاستخدام البوت.\n\n"
-            "1️⃣ اضغط «الاشتراك في القناة»\n"
-            "2️⃣ اشترك في القناة\n"
-            "3️⃣ ارجع واضغط «تحقق من الاشتراك»"
+            f"{Config.MESSAGES['ad_warning']}\n\n"
+            + Config.MESSAGES["terms_gate"].format(bot_name=Config.BOT_DISPLAY_NAME)
+            + "\n\n"
+            + Config.MESSAGES["subscription_verify_hint"]
         )
+    markup = Keyboards.required_subscription()
     try:
         if update.callback_query:
-            await update.callback_query.edit_message_text(
-                text,
-                reply_markup=Keyboards.required_subscription(),
+            await safe_edit_callback_message(
+                update, text, reply_markup=markup, context=context
             )
-        else:
-            await update.message.reply_text(
-                text,
-                reply_markup=Keyboards.required_subscription(),
-            )
+        elif update.message:
+            await update.message.reply_text(text, reply_markup=markup)
+        elif update.effective_chat:
+            await update.effective_chat.send_message(text, reply_markup=markup)
     except TelegramError as exc:
-        # تجاهل تكرار نفس الرسالة
         if "message is not modified" in str(exc).lower():
             return
-        # إذا فشل التعديل، أرسل رسالة جديدة
         try:
             chat = update.effective_chat
             if chat:
-                await chat.send_message(
-                    text,
-                    reply_markup=Keyboards.required_subscription(),
-                )
+                await chat.send_message(text, reply_markup=markup)
         except TelegramError:
             logger.exception("فشل إرسال رسالة الاشتراك")
 
 
+async def interactive_answer(query, text: str, alert: bool = False):
+    """رد تفاعلي سريع على ضغط الزر."""
+    if not query:
+        return
+    try:
+        await query.answer(text[:200], show_alert=alert)
+    except TelegramError:
+        pass
+
+
+async def show_funded_home(update: Update, context: ContextTypes.DEFAULT_TYPE, user):
+    """القائمة بعد اكتمال الشحن + حساب Ichancy."""
+    welcome_message = Config.MESSAGES["welcome"].format(
+        ad_warning=Config.MESSAGES["ad_warning"],
+        bot_name=Config.BOT_DISPLAY_NAME,
+        balance=format_currency(user.balance or 0),
+        user_id=user.telegram_id,
+    )
+    if update.callback_query:
+        await interactive_answer(update.callback_query, "🔓 تم فتح القائمة الرئيسية")
+        await safe_edit_callback_message(
+            update,
+            welcome_message,
+            reply_markup=Keyboards.start_menu(),
+            context=context,
+        )
+    elif update.effective_message:
+        await update.effective_message.reply_text(
+            welcome_message,
+            reply_markup=Keyboards.start_menu(),
+        )
+    else:
+        await context.bot.send_message(
+            chat_id=user.telegram_id,
+            text=welcome_message,
+            reply_markup=Keyboards.start_menu(),
+        )
+
+
+
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالج أمر البدء — الخطوة 1 شحن أولاً، ثم القائمة بعد المتابعة"""
+    """بوابة الشروط → اشتراك → Ichancy → القائمة (الشحن اختياري)."""
     user_id = update.effective_user.id
-    logger = logging.getLogger(__name__)
     logger.info("استلام /start من user_id=%s", user_id)
-    
-    # التحقق من وجود كود إحالة
+
     referral_code = None
     if context.args and len(context.args) > 0:
         referral_code = context.args[0]
@@ -379,69 +327,40 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     subscribed, reason = await check_channel_subscription(context, user_id)
     if not subscribed:
         await send_subscription_required(
-            update, reason, getattr(context.bot, "username", None)
+            update, reason, getattr(context.bot, "username", None), context=context
         )
         return
-    
-    # إنشاء أو الحصول على المستخدم
+
     user = db.get_user(user_id)
     if not user:
         user = db.create_user(
             telegram_id=user_id,
             username=update.effective_user.username,
             first_name=update.effective_user.first_name,
-            last_name=update.effective_user.last_name
+            last_name=update.effective_user.last_name,
         )
-        
-        # معالجة الإحالة
         if user and referral_code and referral_code != user.referral_code:
             await handle_referral(user, referral_code)
 
     if not user:
+        msg = "❌ تعذر إنشاء الحساب. أرسل /start وحاول مرة أخرى."
         if update.callback_query:
-            await update.callback_query.edit_message_text(
-                "❌ تعذر إنشاء الحساب. أرسل /start وحاول مرة أخرى."
-            )
+            await safe_edit_callback_message(update, msg, context=context)
         else:
-            await update.message.reply_text("❌ تعذر إنشاء الحساب. حاول مرة أخرى.")
+            await update.message.reply_text(msg)
         return
 
-    # حفظ بيانات العرض في context لتفادي مشاكل الجلسة
     context.user_data["balance"] = user.balance or 0
     context.user_data["telegram_id"] = user.telegram_id
 
-    is_admin = update.effective_user.id in Config.ADMIN_IDS
-
-    # فلو محكوم: شحن → Ichancy → قائمة
-    if is_admin or (user_is_funded(user) and user_has_ichancy(user)):
-        await show_funded_home(update, context, user)
-        logger.info("تم إرسال القائمة للمستخدم المكتمل user_id=%s", user_id)
-        return
-
-    if user_is_funded(user) and not user_has_ichancy(user):
-        await send_ichancy_required(update, context)
-        logger.info("تم إرسال خطوة Ichancy لـ user_id=%s", user_id)
-        return
-
-    step1_message = Config.MESSAGES["start_step1"].format(
-        facebook_url=Config.FACEBOOK_URL,
-        telegram_channel_url=Config.TELEGRAM_CHANNEL_URL,
-    )
     if update.callback_query:
-        await safe_edit_callback_message(
-            update,
-            step1_message,
-            reply_markup=Keyboards.start_step1(),
-            context=context,
-            disable_web_page_preview=False,
-        )
-    else:
-        await update.message.reply_text(
-            step1_message,
-            reply_markup=Keyboards.start_step1(),
-            disable_web_page_preview=False,
-        )
-    logger.info("تم إرسال الخطوة 1 (شحن) لـ user_id=%s", user_id)
+        await interactive_answer(update.callback_query, "✅ تم فك القفل — أهلاً فيك")
+
+    if user_has_ichancy(user):
+        await show_funded_home(update, context, user)
+        return
+
+    await send_ichancy_required(update, context)
 
 
 async def start_continue_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -472,7 +391,7 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     if not subscribed:
         await send_subscription_required(
-            update, reason, getattr(context.bot, "username", None)
+            update, reason, getattr(context.bot, "username", None), context=context
         )
         return
 
@@ -481,15 +400,12 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await start_handler(update, context)
         return
 
-    if update.effective_user.id not in Config.ADMIN_IDS:
-        if not user_is_funded(user):
-            await send_deposit_required(update, context)
-            return
-        if not user_has_ichancy(user):
-            await send_ichancy_required(update, context)
-            return
+    if not user_has_ichancy(user):
+        await send_ichancy_required(update, context)
+        return
 
     message = Config.MESSAGES["main_menu"].format(
+        ad_warning=Config.MESSAGES["ad_warning"],
         balance=format_currency(user.balance),
         user_id=user.telegram_id,
     )
@@ -512,19 +428,15 @@ async def full_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await start_handler(update, context)
         return
 
-    if update.effective_user.id not in Config.ADMIN_IDS:
-        if not user_is_funded(user):
-            await send_deposit_required(update, context)
-            return
-        if not user_has_ichancy(user):
-            await send_ichancy_required(update, context)
-            return
+    if not user_has_ichancy(user):
+        await send_ichancy_required(update, context)
+        return
 
-    message = f"""❞ 🔷 القائمة الرئيسية: ❝
-
-رصيدك في البوت: {format_currency(user.balance)}
-رقم الايدي الخاص بك: {user.telegram_id}
-"""
+    message = Config.MESSAGES["main_menu"].format(
+        ad_warning=Config.MESSAGES["ad_warning"],
+        balance=format_currency(user.balance),
+        user_id=user.telegram_id,
+    )
     if update.callback_query:
         await safe_edit_callback_message(
             update, message, reply_markup=Keyboards.main_menu(), context=context
@@ -679,13 +591,9 @@ async def withdraw_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def referral_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالج نظام الإحالات"""
     user = db.get_user(update.effective_user.id)
-    if update.effective_user.id not in Config.ADMIN_IDS:
-        if not user or not user_is_funded(user):
-            await send_deposit_required(update, context)
-            return
-        if not user_has_ichancy(user):
-            await send_ichancy_required(update, context)
-            return
+    if not user or not user_has_ichancy(user):
+        await send_ichancy_required(update, context)
+        return
     await ReferralHandler.show_referral_menu(update, context)
 
 async def gift_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -780,20 +688,42 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             context, update.effective_user.id
         )
         if subscribed:
-            await query.answer("✅ تم التحقق من الاشتراك", show_alert=False)
+            await interactive_answer(query, "✅ تم فك القفل — أهلاً فيك", alert=False)
             await start_handler(update, context)
         else:
-            await query.answer(
-                subscription_failure_message(reason)[:200],
-                show_alert=True,
+            await interactive_answer(
+                query, subscription_failure_message(reason), alert=True
             )
-            if reason == "bot_not_admin":
-                await send_subscription_required(
-                    update, reason, getattr(context.bot, "username", None)
-                )
+            await send_subscription_required(
+                update, reason, getattr(context.bot, "username", None), context=context
+            )
         return
 
-    await query.answer()
+    # ردود تفاعلية قصيرة حسب الزر
+    toast = {
+        "deposit": "📥 فتح شحن المحفظة…",
+        "withdraw": "📤 فتح السحب…",
+        "ichancy_hub": "⚡️ حساب Ichancy…",
+        "ichancy_create_start": "⚔️ إنشاء حساب…",
+        "ichancy_topup_start": "📊 شحن Ichancy…",
+        "ichancy_withdraw_start": "📉 سحب Ichancy…",
+        "gift_code": "🏆 أكواد الجوائز…",
+        "gift_balance": "💼 إهداء رصيد…",
+        "contact": "✉️ الدعم…",
+        "referrals": "👥 الإحالات…",
+        "profile": "📌 الملف الشخصي…",
+        "transactions": "📜 السجل المالي…",
+        "main_menu": "🏠 القائمة…",
+        "full_menu": "📋 القائمة الكاملة…",
+        "refund_request": "🗑 استرداد حوالة…",
+        "terms": "📖 الشروط…",
+        "deposit_usdt": "🟢 شحن USDT…",
+        "cancel_operation": "❌ تم الإلغاء",
+    }.get(data)
+    if toast:
+        await interactive_answer(query, toast)
+    else:
+        await query.answer()
 
     # اعتراض دفاعي للأزرار القديمة قبل جميع بوابات التسجيل.
     if data == "ichancy_link_account":
@@ -805,29 +735,18 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     )
     if not subscribed:
         await send_subscription_required(
-            update, reason, getattr(context.bot, "username", None)
+            update, reason, getattr(context.bot, "username", None), context=context
         )
         return
 
-    # بوابة الشحن: قبل أول إيداع ناجح لا يُسمح إلا بخيارات الشحن
+    # بوابة Ichancy: قبل إنشاء الحساب لا يُسمح إلا بإنشاء الحساب / شحن اختياري / دعم
     user = db.get_user(update.effective_user.id)
     is_admin = update.effective_user.id in Config.ADMIN_IDS
     if (
         user
-        and not is_admin
-        and not user_is_funded(user)
-        and not is_pre_funding_callback(data)
-    ):
-        await send_deposit_required(update, context)
-        return
-
-    # بوابة Ichancy: بعد الشحن وقبل إنشاء الحساب
-    if (
-        user
-        and not is_admin
-        and user_is_funded(user)
         and not user_has_ichancy(user)
         and not is_pre_ichancy_callback(data)
+        and not (is_admin and (data.startswith("admin_") or data == "cancel_admin_operation"))
     ):
         await send_ichancy_required(update, context)
         return
@@ -1023,7 +942,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not subscribed:
         context.user_data.pop("state", None)
         await send_subscription_required(
-            update, reason, getattr(context.bot, "username", None)
+            update, reason, getattr(context.bot, "username", None), context=context
         )
         return
 
@@ -1033,40 +952,21 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = db.get_user(update.effective_user.id)
     user_state = context.user_data.get('state')
-    is_admin = update.effective_user.id in Config.ADMIN_IDS
 
-    # قبل أول شحن: اسمح فقط بحالات الشحن/كود الهدية
+    # قبل إنشاء Ichancy: اسمح فقط بإنشاء الحساب أو شحن اختياري / هدية
     if (
         user
-        and not is_admin
-        and not user_is_funded(user)
-        and user_state not in PRE_FUNDING_STATES
-    ):
-        await send_deposit_required(update, context)
-        return
-
-    # بعد الشحن وقبل Ichancy: اسمح فقط بإنشاء الحساب أو متابعة الشحن
-    if (
-        user
-        and not is_admin
-        and user_is_funded(user)
         and not user_has_ichancy(user)
         and user_state not in PRE_ICHANCY_STATES
+        and not (
+            update.effective_user.id in Config.ADMIN_IDS
+            and context.user_data.get("admin_operation")
+        )
     ):
         await send_ichancy_required(update, context)
         return
 
     if user_state == WAITING_FOR_AMOUNT:
-        # قبل التمويل نسمح فقط بعمليات الإيداع
-        if (
-            not is_admin
-            and user
-            and not user_is_funded(user)
-            and context.user_data.get("operation") != "deposit"
-        ):
-            context.user_data.clear()
-            await send_deposit_required(update, context)
-            return
         await handle_amount_input(update, context)
     elif user_state == WAITING_FOR_RECIPIENT:
         await handle_recipient_input(update, context)
@@ -1140,7 +1040,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user:
             await show_user_home(update, context, user)
         else:
-            await send_deposit_required(update, context)
+            await send_ichancy_required(update, context)
 
 # دوال مساعدة
 
@@ -1512,37 +1412,23 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def handle_terms(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالجة الشروط والأحكام"""
-    terms_text = """
-📌 الشروط والأحكام
+    terms_text = (
+        Config.MESSAGES["terms_gate"].format(bot_name=Config.BOT_DISPLAY_NAME)
+        + f"""
 
-🔸 شروط الاستخدام:
-• يجب أن تكون فوق 18 سنة لاستخدام الخدمة
-• ممنوع استخدام البوت لأغراض غير قانونية
-• الحد الأدنى للإيداع: {min_deposit} ل.س
-• الحد الأدنى للسحب: {min_withdrawal} ل.س
+🩸 حدود التشغيل:
+• الحد الأدنى للإيداع: {format_currency(Config.MIN_DEPOSIT)}
+• الحد الأدنى للسحب: {format_currency(Config.MIN_WITHDRAWAL)}
+• نسبة الإحالات: {Config.REFERRAL_PERCENTAGE:g}%
 
-🔸 سياسة الإحالات:
-• تحصل على {referral_percentage}% من كل إيداع يقوم به المُحال
-• أرباح الإحالات قابلة للسحب في أي وقت
-
-🔸 سياسة الخصوصية:
-• نحن نحترم خصوصيتك ولا نشارك بياناتك مع أطراف ثالثة
-• يتم تشفير جميع المعاملات المالية
-
-🔸 المسؤولية:
-• الإدارة غير مسؤولة عن أي خسائر ناتجة عن سوء الاستخدام
-• يحق للإدارة تعليق أو إغلاق أي حساب يخالف الشروط
-
-📞 للاستفسارات: استخدم زر "تواصل معنا"
-    """.format(
-        min_deposit=format_currency(Config.MIN_DEPOSIT),
-        min_withdrawal=format_currency(Config.MIN_WITHDRAWAL),
-        referral_percentage=Config.REFERRAL_PERCENTAGE
+أي مخالفة = إغلاق الحساب بدون نقاش.
+"""
     )
-    
-    await update.callback_query.edit_message_text(
+    await safe_edit_callback_message(
+        update,
         terms_text,
-        reply_markup=Keyboards.back_to_main()
+        reply_markup=Keyboards.back_to_main(),
+        context=context,
     )
 
 async def handle_payment_method(update: Update, context: ContextTypes.DEFAULT_TYPE):

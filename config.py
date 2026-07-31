@@ -139,103 +139,147 @@ class Config:
     MAX_WITHDRAWAL = float(os.getenv("MAX_WITHDRAWAL", "5000"))
     MIN_GIFT = float(os.getenv("MIN_GIFT", "5"))
     
-    # رسائل البوت
+    # رسائل البوت — طابع داكن/تحذيري
     MESSAGES = {
-        "start_step1": """1️⃣ شحن رصيد البوت
+        "ad_warning": (
+            "⚠️ تنبيه أمني\n"
+            "أي إعلان يظهر داخل البوت ويدّعي إن الخدمة ستتوقف أو يوجّهك لجهة ثانية = احتيال.\n"
+            "لا تصدّق إلا الدعم الرسمي من داخل البوت."
+        ),
+        "terms_gate": """☠️ بوابة الدخول — {bot_name}
 
-✅ تم التحقق من الاشتراك
-⏳ الآن: اشحن رصيدك في البوت
+قبل ما تفتح البوت، لازم تعرف القواعد:
 
-الترتيب:
-1️⃣ شحن الرصيد ← أنت هنا
-2️⃣ إنشاء حساب Ichancy
-3️⃣ استخدام باقي الخدمات
+١) التخصيص
+البوت مخصّص لخدمات Ichancy والمحفظة فقط.
 
-اختر من الأزرار:
-• «شحن البوت» عبر سيريتل / شام كاش / USDT
-• أو «كود هدية» إن كان لديك كود
+٢) الاستقلالية
+حسابك هنا مستقل، وما بينربط بأي حساب خارجي جاهز.
 
-📱 فيسبوك: {facebook_url}
+٣) القيود
+ممنوع استخدام البوت للصرافة أو الالتفاف على الأنظمة.
+
+٤) النزاهة
+حساب واحد لكل شخص — التعدد = حظر.
+
+٥) السن
+يجب أن يكون عمرك 18+ للمتابعة.
+
+🔻 للمتابعة: اشترك بقناتنا الرسمية.
+باشتراكك أنت توافق على الشروط والأحكام.""",
+        "subscription_verify_hint": (
+            "بعد الاشتراك اضغط الزر بالأسفل للتحقق.\n"
+            "بدون اشتراك حقيقي… البوابة تبقى مقفلة 🔒"
+        ),
+        "start_step1": """⚔️ إنشاء حساب Ichancy
+
+✅ تم فك قفل الاشتراك
+⏳ الآن: أنشئ حسابك من داخل البوت
+
+المسار:
+1️⃣ إنشاء حساب Ichancy ← أنت هنا
+2️⃣ فتح باقي الخدمات
+
+الشحن اختياري — تقدر تشحن لاحقاً من القائمة.
+
 📢 القناة: {telegram_channel_url}
+📱 فيسبوك: {facebook_url}
 """,
-        "deposit_required": """🔒 لازم تشحن أولاً
+        "deposit_required": """⚔️ لازم تنشئ حساب Ichancy أولاً
 
-ما تقدر تكمل قبل شحن رصيد البوت.
+الشحن صار اختياري — مو مطلوب للدخول.
 
-الترتيب الإلزامي:
-1️⃣ شحن رصيد البوت ← مطلوب الآن
-2️⃣ إنشاء حساب Ichancy
-3️⃣ استخدام الخدمات
-
-اضغط «شحن البوت» أو «كود هدية».
+اضغط «إنشاء حساب Ichancy الآن».
 """,
-        "ichancy_required": """2️⃣ إنشاء حساب Ichancy
+        "ichancy_required": """⚔️ إنشاء حساب Ichancy
 
-✅ تم شحن الرصيد بنجاح
-⏳ الآن: أنشئ حساب Ichancy من داخل البوت فقط
+✅ تم فك قفل الاشتراك
+⏳ الآن: أنشئ حسابك من داخل البوت فقط
 
-⚠️ حساب واحد فقط لكل مستخدم تليجرام.
-❌ ما في ربط حساب خارجي — الإنشاء من البوت فقط.
+⚠️ حساب واحد مرتبط بتليجرامك.
+❌ ربط حساب خارجي ممنوع.
 
-اضغط «إنشاء حساب Ichancy الآن» للمتابعة.
+الشحن اختياري — مو مطلوب الآن.
+
+اضغط «إنشاء حساب Ichancy الآن».
 """,
-        "welcome": """👋 أهلاً بك في {bot_name}
+        "welcome": """{ad_warning}
 
-✅ الاشتراك
-✅ الشحن
-✅ حساب Ichancy
+☠️ {bot_name} — القائمة الرئيسية
 
-رصيدك: {balance}
-آيديك: {user_id}
+رصيدك في البوت: {balance}
+رقم الآيدي: {user_id}
 
-اختر الخدمة من القائمة:
+اختر من الأزرار… ولا تضغط عشوائي.
 """,
-        "main_menu": """🏠 القائمة الرئيسية
+        "main_menu": """{ad_warning}
 
-رصيدك: {balance}
-آيديك: {user_id}
+🔷 القائمة الرئيسية:
+
+رصيدك في البوت: {balance}
+رقم الآيدي الخاص بك: {user_id}
 """,
-        "operation_cancelled": "❌ تم إلغاء العملية.\nاختر الخطوة التالية من الأزرار أدناه.",
-        "balance_updated": "✅ تم تحديث رصيدك بنجاح!\n💵 الرصيد الجديد: {balance}",
-        "insufficient_balance": "❌ رصيدك غير كافٍ لإتمام هذه العملية",
+        "operation_cancelled": "❌ تم إلغاء العملية.\nارجع للقائمة من الأزرار.",
+        "balance_updated": "✅ تم تحديث رصيدك.\n💵 الرصيد الجديد: {balance}",
+        "insufficient_balance": "❌ رصيدك غير كافٍ لإتمام العملية",
         "invalid_amount": "❌ المبلغ المدخل غير صحيح",
         "user_not_found": "❌ الحساب غير موجود. أرسل /start من جديد.",
         "operation_completed": "✅ تم إتمام العملية بنجاح",
-        "service_unavailable": "⚠️ هذه الخدمة غير جاهزة حالياً.\nتواصل مع الدعم من زر «تواصل مع الدعم».",
-        "ichancy_not_configured": "⚠️ خدمة إنشاء حساب Ichancy غير مفعّلة حالياً.\nتواصل مع الدعم.",
-        "need_deposit_before_ichancy": "🔒 لازم تشحن رصيد البوت أولاً قبل إنشاء حساب Ichancy.",
-        "session_expired": "⏱ انتهت الجلسة.\nارجع وابدأ من جديد من الأزرار أدناه.",
+        "service_unavailable": "⚠️ الخدمة غير جاهزة حالياً.\nتواصل مع الدعم.",
+        "ichancy_not_configured": "⚠️ إنشاء حساب Ichancy غير مفعّل حالياً.\nتواصل مع الدعم.",
+        "session_expired": "⏱ انتهت الجلسة.\nابدأ من جديد من الأزرار.",
     }
     
-    # أزرار الواجهة الكاملة — مطابقة للصورة
+    # أزرار الواجهة الكاملة — ترتيب قريب من شاشة المرجع
     MAIN_BUTTONS = [
-        [{"text": "⚡️ شحن وسحب حساب Ichancy", "callback": "ichancy_hub"}],
+        [{"text": "⚡️ معلومات حساب Ichancy", "callback": "ichancy_hub"}],
         [
-            {"text": "📩 شحن البوت", "callback": "deposit"},
-            {"text": "📩 سحب حوالة", "callback": "withdraw"},
+            {"text": "📥 شحن محفظة البوت", "callback": "deposit"},
+            {"text": "📤 سحب حوالة", "callback": "withdraw"},
         ],
-        [{"text": "👤 معلومات الملف الشخصي", "callback": "profile"}],
         [
-            {"text": "🎁 إهداء الرصيد", "callback": "gift_balance"},
+            {"text": "📊 شحن حساب Ichancy", "callback": "ichancy_topup_start"},
+            {"text": "📉 سحب من Ichancy", "callback": "ichancy_withdraw_start"},
+        ],
+        [{"text": "💼 محفظة البوت — إهداء رصيد", "callback": "gift_balance"}],
+        [{"text": "📌 معلومات الملف الشخصي", "callback": "profile"}],
+        [
+            {"text": "✉️ تواصل مع الدعم", "callback": "contact"},
+            {"text": "🗑 استرداد حوالة", "callback": "refund_request"},
+        ],
+        [
+            {"text": "📖 الشروط والأحكام", "callback": "terms"},
+            {"text": "📱 فيسبوك", "url": "FACEBOOK_URL"},
+        ],
+        [
+            {"text": "🏆 أكواد الجوائز", "callback": "gift_code"},
+            {"text": "👥 برنامج الإحالات", "callback": "referrals"},
+        ],
+        [{"text": "📜 عرض السجل المالي", "callback": "transactions"}],
+        [{"text": "🟢 شحن USDT", "callback": "deposit_usdt"}],
+    ]
+
+    # قائمة بعد اكتمال التسجيل
+    START_MENU_BUTTONS = [
+        [{"text": "⚡️ معلومات حساب Ichancy", "callback": "ichancy_hub"}],
+        [
+            {"text": "📥 شحن محفظة البوت", "callback": "deposit"},
+            {"text": "📤 سحب حوالة", "callback": "withdraw"},
+        ],
+        [
+            {"text": "📊 شحن حساب Ichancy", "callback": "ichancy_topup_start"},
+            {"text": "📉 سحب من Ichancy", "callback": "ichancy_withdraw_start"},
+        ],
+        [{"text": "💼 إهداء رصيد", "callback": "gift_balance"}],
+        [{"text": "📌 معلومات الملف الشخصي", "callback": "profile"}],
+        [
+            {"text": "✉️ تواصل مع الدعم", "callback": "contact"},
             {"text": "🏆 أكواد الجوائز", "callback": "gift_code"},
         ],
         [
-            {"text": "📩 تواصل مع الدعم", "callback": "contact"},
-            {"text": "🔄 طلب استرداد حوالة", "callback": "refund_request"},
+            {"text": "👥 الإحالات", "callback": "referrals"},
+            {"text": "📜 السجل المالي", "callback": "transactions"},
         ],
-        [
-            {"text": "↗️ صفحة الفيسبوك", "url": "FACEBOOK_URL"},
-            {"text": "👥 برنامج الإحالات", "callback": "referrals"},
-        ],
-        [{"text": "🗄️ عرض السجل المالي", "callback": "transactions"}],
-    ]
-
-    # قائمة /start المبسطة ثم «المزيد» تفتح MAIN_BUTTONS
-    START_MENU_BUTTONS = [
-        [{"text": "⚡️ شحن وسحب حساب Ichancy", "callback": "ichancy_hub"}],
-        [{"text": "📩 شحن البوت", "callback": "deposit"}],
-        [{"text": "🏆 استخدام أكواد الجوائز", "callback": "gift_code"}],
-        [{"text": "👥 برنامج الإحالات", "callback": "referrals"}],
         [{"text": "📋 المزيد من الخدمات", "callback": "full_menu"}],
     ]
 
@@ -318,6 +362,11 @@ class Config:
         "withdraw_cooldown_minutes": int(os.getenv("ICHANCY_WITHDRAW_COOLDOWN", "30")),
         # الحد الأدنى لشحن حساب ichancy من رصيد البوت
         "min_topup": float(os.getenv("ICHANCY_MIN_TOPUP", "20000")),
+        # بروكسي لطلبات Ichancy فقط (لتجاوز Cloudflare على IP السيرفر)
+        "proxy_url": os.getenv("ICHANCY_PROXY", "").strip(),
+        "proxy_user": os.getenv("ICHANCY_PROXY_USER", "").strip(),
+        "proxy_pass": os.getenv("ICHANCY_PROXY_PASS", "").strip(),
+        "request_timeout": int(os.getenv("ICHANCY_TIMEOUT", "60")),
     }
     
     # معلومات الدعم الفني

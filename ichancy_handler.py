@@ -199,19 +199,7 @@ class IchancyHandler:
             await safe_edit_callback_message(
                 update,
                 Config.MESSAGES["user_not_found"],
-                reply_markup=Keyboards.start_step1(),
-                context=context,
-            )
-            return
-
-        if (
-            not db.user_has_funded(user.id)
-            and update.effective_user.id not in Config.ADMIN_IDS
-        ):
-            await safe_edit_callback_message(
-                update,
-                Config.MESSAGES["need_deposit_before_ichancy"],
-                reply_markup=Keyboards.deposit_required_menu(),
+                reply_markup=Keyboards.ichancy_required_menu(),
                 context=context,
             )
             return
@@ -317,7 +305,15 @@ class IchancyHandler:
 
         # منع إنشاء حساب ثانٍ حتى لو تجاوز زر البداية
         existing = db.get_user(update.effective_user.id)
-        if existing and existing.ichancy_player_id:
+        if not existing:
+            context.user_data.clear()
+            await update.message.reply_text(
+                Config.MESSAGES["user_not_found"],
+                reply_markup=Keyboards.ichancy_required_menu(),
+            )
+            return
+
+        if existing.ichancy_player_id:
             context.user_data.clear()
             await update.message.reply_text(
                 IchancyHandler._already_linked_message(existing),
