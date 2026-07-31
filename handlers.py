@@ -602,16 +602,22 @@ async def refund_request_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 async def deposit_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالج الإيداع — شاشة شحن مثل الصورة"""
+    from payment_handler import reset_payment_session
+
     user = db.get_user(update.effective_user.id)
     if not user:
         await start_handler(update, context)
         return
+
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    await reset_payment_session(context, bot=context.bot, chat_id=chat_id)
 
     message = f"""❞ شحن رصيد البوت ❝
 
 💰 الرصيد الخاص بك: {format_currency(user.balance)}
 
 اشحن رصيد في البوت عن طريق احدى وسائل الدفع
+اختر طريقة واحدة فقط (سيريتل أو شام كاش أو USDT):
 """
 
     if update.callback_query:
@@ -974,7 +980,9 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     elif data == "shamcash_confirm_send":
         await PaymentHandler.confirm_shamcash_deposit(update, context)
     elif data == "shamcash_confirm_cancel":
-        context.user_data.clear()
+        from payment_handler import reset_payment_session
+        chat_id = update.effective_chat.id if update.effective_chat else None
+        await reset_payment_session(context, bot=context.bot, chat_id=chat_id)
         user = db.get_user(update.effective_user.id)
         await show_user_home(update, context, user)
 
@@ -995,8 +1003,9 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     
     # إلغاء العملية
     elif data == "cancel_operation":
-        await cancel_pending_payment(context)
-        context.user_data.clear()
+        from payment_handler import reset_payment_session
+        chat_id = update.effective_chat.id if update.effective_chat else None
+        await reset_payment_session(context, bot=context.bot, chat_id=chat_id)
         user = db.get_user(update.effective_user.id)
         await show_user_home(update, context, user)
 
@@ -1078,18 +1087,46 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             update, context, update.message.text.strip()
         )
     elif user_state == WAITING_FOR_SHAMCASH_TX:
+        if context.user_data.get("method") != "shamcash":
+            context.user_data.clear()
+            await update.message.reply_text(
+                "⚠️ جلسة شام كاش غير صالحة. اختر طريقة الشحن من جديد.",
+                reply_markup=Keyboards.payment_methods("deposit"),
+            )
+            return
         await PaymentHandler.handle_shamcash_tx_input(
             update, context, update.message.text.strip()
         )
     elif user_state == WAITING_FOR_SHAMCASH_AMOUNT:
+        if context.user_data.get("method") != "shamcash":
+            context.user_data.clear()
+            await update.message.reply_text(
+                "⚠️ جلسة شام كاش غير صالحة. اختر طريقة الشحن من جديد.",
+                reply_markup=Keyboards.payment_methods("deposit"),
+            )
+            return
         await PaymentHandler.handle_shamcash_amount_input(
             update, context, update.message.text.strip()
         )
     elif user_state == WAITING_FOR_SYRIATEL_AMOUNT:
+        if context.user_data.get("method") != "syriatel_cash":
+            context.user_data.clear()
+            await update.message.reply_text(
+                "⚠️ جلسة سيريتل غير صالحة. اختر طريقة الشحن من جديد.",
+                reply_markup=Keyboards.payment_methods("deposit"),
+            )
+            return
         await PaymentHandler.handle_syriatel_amount(
             update, context, update.message.text.strip()
         )
     elif user_state == WAITING_FOR_SYRIATEL_TX:
+        if context.user_data.get("method") != "syriatel_cash":
+            context.user_data.clear()
+            await update.message.reply_text(
+                "⚠️ جلسة سيريتل غير صالحة. اختر طريقة الشحن من جديد.",
+                reply_markup=Keyboards.payment_methods("deposit"),
+            )
+            return
         await PaymentHandler.handle_syriatel_tx(
             update, context, update.message.text.strip()
         )
@@ -1145,6 +1182,7 @@ async def cancel_pending_payment(context: ContextTypes.DEFAULT_TYPE):
         logger.info("Cancelled pending transaction %s (%s)", transaction_id, operation)
     finally:
         session.close()
+
 
 
 async def handle_referral(user, referral_ref):
@@ -1503,6 +1541,8 @@ async def handle_terms(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_payment_method(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالجة اختيار طريقة الدفع"""
+    from payment_handler import reset_payment_session
+
     data = update.callback_query.data
     operation, method = data.split('_', 1)
     
@@ -1520,6 +1560,9 @@ async def handle_payment_method(update: Update, context: ContextTypes.DEFAULT_TY
     if operation == "deposit" and method == "syriatel_cash":
         await PaymentHandler.start_syriatel_menu(update, context)
         return
+
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    await reset_payment_session(context, bot=context.bot, chat_id=chat_id)
     
     if operation == "deposit":
         auto_note = ""

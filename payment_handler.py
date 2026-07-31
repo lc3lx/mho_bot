@@ -25,6 +25,56 @@ api_client = ApiSyriaClient()
 tron_client = TronUsdtClient()
 
 
+async def _cancel_pending_tx(context: ContextTypes.DEFAULT_TYPE):
+    """إلغاء معاملة معلّقة مرتبطة بالجلسة الحالية."""
+    transaction_id = context.user_data.get("transaction_id")
+    if not transaction_id:
+        return
+    session = db.get_session()
+    try:
+        transaction = session.query(Transaction).filter(
+            Transaction.id == transaction_id
+        ).first()
+        if not transaction or transaction.status != "pending":
+            return
+        if transaction.transaction_type == "withdraw":
+            user = session.query(User).filter(User.id == transaction.user_id).first()
+            if user:
+                user.balance += transaction.amount
+        transaction.status = "cancelled"
+        transaction.admin_notes = "أُلغي عند بدء عملية دفع جديدة"
+        transaction.processed_at = datetime.utcnow()
+        session.commit()
+    finally:
+        session.close()
+
+
+async def reset_payment_session(
+    context: ContextTypes.DEFAULT_TYPE,
+    bot=None,
+    chat_id: int | None = None,
+):
+    """تصفير جلسة الدفع وحذف رسائل إرشاد شام كاش/سيريتل القديمة."""
+    await _cancel_pending_tx(context)
+    guide_ids = list(context.user_data.get("payment_guide_message_ids") or [])
+    if bot and chat_id and guide_ids:
+        for mid in guide_ids:
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=mid)
+            except TelegramError:
+                pass
+    context.user_data.clear()
+
+
+def track_payment_guide_message(context: ContextTypes.DEFAULT_TYPE, message):
+    if not message:
+        return
+    ids = context.user_data.setdefault("payment_guide_message_ids", [])
+    mid = getattr(message, "message_id", None)
+    if mid and mid not in ids:
+        ids.append(mid)
+
+
 class PaymentHandler:
     """معالج المدفوعات"""
 
@@ -63,13 +113,15 @@ class PaymentHandler:
         from pathlib import Path
         from telegram import InputFile
 
+        chat_id = update.effective_chat.id
+        await reset_payment_session(context, bot=context.bot, chat_id=chat_id)
+
         assets = Path(__file__).resolve().parent / "assets"
         caption = (
             "❝ شحن SHAM CASH\n\n"
             "يرجى اختيار العملة التي تريد شحن محفظة البوت بها"
         )
         logo = assets / "shamcash_logo.png"
-        chat_id = update.effective_chat.id
 
         if logo.exists():
             try:
@@ -78,22 +130,28 @@ class PaymentHandler:
             except TelegramError:
                 pass
             with open(logo, "rb") as photo:
-                await context.bot.send_photo(
+                msg = await context.bot.send_photo(
                     chat_id=chat_id,
                     photo=InputFile(photo, filename="shamcash_logo.png"),
                     caption=caption,
                     reply_markup=Keyboards.shamcash_currency_menu(),
                 )
+            track_payment_guide_message(context, msg)
         elif update.callback_query:
-            await update.callback_query.edit_message_text(
+            await safe_edit_callback_message(
+                update,
                 caption,
                 reply_markup=Keyboards.shamcash_currency_menu(),
+                context=context,
             )
+            if update.callback_query.message:
+                track_payment_guide_message(context, update.callback_query.message)
         else:
-            await update.message.reply_text(
+            msg = await update.message.reply_text(
                 caption,
                 reply_markup=Keyboards.shamcash_currency_menu(),
             )
+            track_payment_guide_message(context, msg)
 
     @staticmethod
     async def start_shamcash_currency(
@@ -147,6 +205,8 @@ class PaymentHandler:
         context.user_data["method"] = "shamcash"
         context.user_data["shamcash_currency"] = currency
         context.user_data["deposit_started_at"] = datetime.utcnow().isoformat()
+        # لا تخلط مع رسائل قديمة من طريقة دفع أخرى
+        context.user_data["payment_guide_message_ids"] = []
 
         chat_id = update.effective_chat.id
         guide = assets / "shamcash_tx_guide.png"
@@ -159,7 +219,7 @@ class PaymentHandler:
 
         if guide.exists():
             with open(guide, "rb") as photo:
-                await context.bot.send_photo(
+                msg = await context.bot.send_photo(
                     chat_id=chat_id,
                     photo=InputFile(photo, filename="shamcash_tx_guide.png"),
                     caption=text,
@@ -167,12 +227,13 @@ class PaymentHandler:
                     reply_markup=Keyboards.cancel_operation(),
                 )
         else:
-            await context.bot.send_message(
+            msg = await context.bot.send_message(
                 chat_id=chat_id,
                 text=text,
                 parse_mode="Markdown",
                 reply_markup=Keyboards.cancel_operation(),
             )
+        track_payment_guide_message(context, msg)
 
     @staticmethod
     async def handle_shamcash_tx_input(
@@ -287,21 +348,44 @@ class PaymentHandler:
         from datetime import timedelta
 
         query = update.callback_query
+        if context.user_data.get("shamcash_confirm_lock"):
+            try:
+                await query.answer("جاري معالجة الطلب...", show_alert=False)
+            except TelegramError:
+                pass
+            return
+        context.user_data["shamcash_confirm_lock"] = True
+
         tx_number = context.user_data.get("shamcash_tx")
         amount = context.user_data.get("amount")
         credit_syp = context.user_data.get("credit_amount_syp")
         currency = context.user_data.get("shamcash_currency", "syp")
         timeout = Config.APISYRIA_CONFIG.get("deposit_timeout_minutes", 15)
 
+        # احذف رسالة حساب شام كاش حتى لا تبقى «معها» بعد إرسال الطلب
+        guide_ids = list(context.user_data.get("payment_guide_message_ids") or [])
+        for mid in guide_ids:
+            try:
+                await context.bot.delete_message(
+                    chat_id=update.effective_chat.id, message_id=mid
+                )
+            except TelegramError:
+                pass
+        context.user_data["payment_guide_message_ids"] = []
+
         if not tx_number or not amount or not credit_syp:
             context.user_data.clear()
-            await query.edit_message_text(
-                "❌ انتهت الجلسة. ابدأ من جديد.",
-                reply_markup=Keyboards.main_menu(),
+            await safe_edit_callback_message(
+                update,
+                "❌ انتهت الجلسة. ابدأ طلب شحن شام كاش من جديد.",
+                reply_markup=Keyboards.deposit_required_menu(),
+                context=context,
             )
             return
 
-        await query.edit_message_text("⏳ لحظات من فضلك...")
+        await safe_edit_callback_message(
+            update, "⏳ لحظات من فضلك... جاري التحقق من شام كاش", context=context
+        )
 
         user = db.get_user(update.effective_user.id)
         started = context.user_data.get("deposit_started_at")
@@ -310,9 +394,11 @@ class PaymentHandler:
                 started_dt = datetime.fromisoformat(started)
                 if datetime.utcnow() - started_dt > timedelta(minutes=timeout):
                     context.user_data.clear()
-                    await query.edit_message_text(
-                        f"⏰ انتهى الوقت! كان لديك {timeout} دقيقة.\nأنشئ طلباً جديداً.",
-                        reply_markup=Keyboards.start_menu(),
+                    await safe_edit_callback_message(
+                        update,
+                        f"⏰ انتهى الوقت! كان لديك {timeout} دقيقة.\nأنشئ طلباً جديداً من شام كاش فقط.",
+                        reply_markup=Keyboards.payment_methods("deposit"),
+                        context=context,
                     )
                     return
             except ValueError:
@@ -320,9 +406,11 @@ class PaymentHandler:
 
         if db.is_external_transaction_used(tx_number, "shamcash"):
             context.user_data.clear()
-            await query.edit_message_text(
+            await safe_edit_callback_message(
+                update,
                 "❌ رقم العملية مستخدم مسبقاً.",
-                reply_markup=Keyboards.main_menu(),
+                reply_markup=Keyboards.payment_methods("deposit"),
+                context=context,
             )
             return
 
@@ -358,9 +446,11 @@ class PaymentHandler:
                     transaction_id, "رقم عملية غير موجود"
                 )
                 context.user_data.clear()
-                await query.edit_message_text(
-                    "❌ تم رفض طلب الشحن. السبب: رقم عملية غير موجود",
-                    reply_markup=Keyboards.start_menu(),
+                await safe_edit_callback_message(
+                    update,
+                    "❌ تم رفض طلب شحن شام كاش.\nالسبب: رقم عملية غير موجود.",
+                    reply_markup=Keyboards.payment_methods("deposit"),
+                    context=context,
                 )
                 return
 
@@ -375,9 +465,11 @@ class PaymentHandler:
                     transaction_id, f"خارج مهلة {timeout} دقيقة"
                 )
                 context.user_data.clear()
-                await query.edit_message_text(
-                    f"⏰ العملية خارج المهلة المسموحة ({timeout} دقيقة).",
-                    reply_markup=Keyboards.start_menu(),
+                await safe_edit_callback_message(
+                    update,
+                    f"⏰ عملية شام كاش خارج المهلة المسموحة ({timeout} دقيقة).",
+                    reply_markup=Keyboards.payment_methods("deposit"),
+                    context=context,
                 )
                 return
 
@@ -387,20 +479,24 @@ class PaymentHandler:
                     f"مبلغ غير مطابق: مطلوب {amount} / فعلي {actual_amount}",
                 )
                 context.user_data.clear()
-                await query.edit_message_text(
-                    f"❌ تم رفض طلب الشحن. السبب: المبلغ غير مطابق.\n"
+                await safe_edit_callback_message(
+                    update,
+                    f"❌ تم رفض طلب شحن شام كاش.\nالسبب: المبلغ غير مطابق.\n"
                     f"المدخل: {amount}\n"
                     f"في العملية: {actual_amount}",
-                    reply_markup=Keyboards.start_menu(),
+                    reply_markup=Keyboards.payment_methods("deposit"),
+                    context=context,
                 )
                 return
 
             if db.is_external_transaction_used(external_id, "shamcash"):
                 PaymentHandler._fail_pending_deposit(transaction_id, "عملية مكررة")
                 context.user_data.clear()
-                await query.edit_message_text(
+                await safe_edit_callback_message(
+                    update,
                     "❌ هذه العملية مُسجّلة مسبقاً.",
-                    reply_markup=Keyboards.main_menu(),
+                    reply_markup=Keyboards.payment_methods("deposit"),
+                    context=context,
                 )
                 return
 
@@ -417,22 +513,31 @@ class PaymentHandler:
                 session.close()
 
             context.user_data.clear()
+            await safe_edit_callback_message(
+                update,
+                "✅ تم التحقق من تحويل شام كاش. جاري إضافة الرصيد...",
+                context=context,
+            )
             await PaymentHandler.complete_deposit(transaction_id, update, context)
 
         except ApiSyriaError as exc:
             PaymentHandler._fail_pending_deposit(transaction_id, exc.message)
             context.user_data.clear()
-            await query.edit_message_text(
-                f"❌ تم رفض طلب الشحن.\n{user_facing_error_message(exc)}",
-                reply_markup=Keyboards.start_menu(),
+            await safe_edit_callback_message(
+                update,
+                f"❌ تم رفض طلب شحن شام كاش.\n{user_facing_error_message(exc)}",
+                reply_markup=Keyboards.payment_methods("deposit"),
+                context=context,
             )
         except Exception as exc:
             logger.exception("ShamCash confirm failed")
             PaymentHandler._fail_pending_deposit(transaction_id, str(exc))
             context.user_data.clear()
-            await query.edit_message_text(
-                f"❌ حدث خطأ أثناء التحقق.\n{user_facing_error_message(exc)}",
-                reply_markup=Keyboards.start_menu(),
+            await safe_edit_callback_message(
+                update,
+                f"❌ حدث خطأ أثناء التحقق من شام كاش.\n{user_facing_error_message(exc)}",
+                reply_markup=Keyboards.payment_methods("deposit"),
+                context=context,
             )
 
     @staticmethod
@@ -458,12 +563,15 @@ class PaymentHandler:
         from pathlib import Path
         from telegram import InputFile
 
+        chat_id = update.effective_chat.id
+        # مهم: امسح أي جلسة شام كاش معلّقة حتى لا يُفسَّر إدخال المستخدم كشام كاش
+        await reset_payment_session(context, bot=context.bot, chat_id=chat_id)
+
         user = db.get_user(update.effective_user.id)
         has_prev = bool(getattr(user, "last_syriatel_code", None))
         caption = "شحن البوت - سيرياتيل كاش"
         assets = Path(__file__).resolve().parent / "assets"
         logo = assets / "syriatel_logo.png"
-        chat_id = update.effective_chat.id
 
         if logo.exists():
             try:
@@ -472,22 +580,26 @@ class PaymentHandler:
             except TelegramError:
                 pass
             with open(logo, "rb") as photo:
-                await context.bot.send_photo(
+                msg = await context.bot.send_photo(
                     chat_id=chat_id,
                     photo=InputFile(photo, filename="syriatel_logo.png"),
                     caption=caption,
                     reply_markup=Keyboards.syriatel_deposit_menu(has_prev),
                 )
+            track_payment_guide_message(context, msg)
         elif update.callback_query:
-            await update.callback_query.edit_message_text(
+            await safe_edit_callback_message(
+                update,
                 caption,
                 reply_markup=Keyboards.syriatel_deposit_menu(has_prev),
+                context=context,
             )
         else:
-            await update.message.reply_text(
+            msg = await update.message.reply_text(
                 caption,
                 reply_markup=Keyboards.syriatel_deposit_menu(has_prev),
             )
+            track_payment_guide_message(context, msg)
 
     @staticmethod
     async def start_syriatel_manual_intro(
