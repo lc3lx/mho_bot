@@ -438,8 +438,29 @@ class IchancyHandler:
                 user.ichancy_username = username
                 user.ichancy_password = password
                 session.commit()
+                invitee_id = user.id
             finally:
                 session.close()
+
+            # جيش نابليون: بعد توثيق iChancy → قيد التحقق
+            try:
+                from referral_service import ReferralArmyService, STATUS_PENDING
+
+                refreshed = db.get_user(update.effective_user.id)
+                status = ReferralArmyService.evaluate_after_ichancy_link(refreshed)
+                if status == STATUS_PENDING and refreshed.referred_by:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=refreshed.referred_by,
+                            text=(
+                                "🟠 رفيقك ربط حساب iChancy.\n"
+                                "الإحالة قيد التحقق بانتظار النشاط المؤهل/مراجعة الإدارة."
+                            ),
+                        )
+                    except Exception:
+                        pass
+            except Exception:
+                logger.exception("فشل تقييم إحالة بعد إنشاء Ichancy")
 
             context.user_data.clear()
             try:

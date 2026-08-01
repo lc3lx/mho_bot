@@ -268,13 +268,43 @@ class Keyboards:
 
     @staticmethod
     def referral_menu():
-        """جيب رفيقك"""
+        """توافق — يوجّه لقائمة الجيش"""
+        return Keyboards.army_menu()
+
+    @staticmethod
+    def army_menu():
+        """👑 جيش نابليون"""
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("📤 ابعت الرابط لرفيقك", callback_data="share_referral")],
-            [InlineKeyboardButton("👥 مين جبت معي؟", callback_data="referral_recruits")],
-            [InlineKeyboardButton("🎁 وين مكافأتي؟", callback_data="referral_rewards")],
-            [InlineKeyboardButton("📜 الشروط بلا فلسفة", callback_data="referral_rules")],
+            [
+                InlineKeyboardButton("📤 جنّد رفيقًا", callback_data="share_referral"),
+                InlineKeyboardButton("👥 أفراد جيشي", callback_data="army_recruits"),
+            ],
+            [
+                InlineKeyboardButton("💰 عمولتي", callback_data="army_commission"),
+                InlineKeyboardButton("📊 كشف العمولات", callback_data="army_ledger"),
+            ],
+            [
+                InlineKeyboardButton("🎖️ رتبتي", callback_data="army_my_rank"),
+                InlineKeyboardButton("🏧 اسحب عمولتي", callback_data="army_withdraw"),
+            ],
+            [
+                InlineKeyboardButton("📜 الشروط بلا فلسفة", callback_data="army_rules"),
+                InlineKeyboardButton("🎖️ نظام الرتب", callback_data="army_ranks"),
+            ],
             [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def admin_army_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎖️ تعديل رتب/نسب", callback_data="admin_army_ranks")],
+            [InlineKeyboardButton("⏱ مدة المراجعة (أيام)", callback_data="admin_army_hold")],
+            [InlineKeyboardButton("💵 حد أدنى سحب عمولة", callback_data="admin_army_min_withdraw")],
+            [InlineKeyboardButton("📈 حد نشاط مؤهل ($)", callback_data="admin_army_min_activity")],
+            [InlineKeyboardButton("✅ اعتماد إحالة نشطة", callback_data="admin_army_activate")],
+            [InlineKeyboardButton("➕ تسجيل عمولة يدوية", callback_data="admin_army_accrue")],
+            [InlineKeyboardButton("👤 رتبة يدوية لمستخدم", callback_data="admin_army_rank_override")],
+            [InlineKeyboardButton("🔙 لوحة الإدمن", callback_data="admin_panel")],
         ])
 
     @staticmethod
@@ -383,6 +413,7 @@ class Keyboards:
                 InlineKeyboardButton("💱 أسعار الصرف", callback_data="admin_settings"),
             ],
             [InlineKeyboardButton("🌐 بروكسي Ichancy", callback_data="admin_proxy")],
+            [InlineKeyboardButton("👑 جيش نابليون", callback_data="admin_army")],
             [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu")],
         ]
         return InlineKeyboardMarkup(keyboard)

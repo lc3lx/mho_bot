@@ -1,5 +1,5 @@
 """
-معالج الإحالات — جيب رفيقك
+واجهة جيش نابليون (نظام الإحالات الجديد)
 """
 
 import logging
@@ -7,19 +7,25 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 import ui
-from database import DatabaseManager, User, Transaction
+from database import DatabaseManager, User
 from config import Config
 from keyboards import Keyboards
 from utils import format_currency, safe_edit_callback_message
 import napoleon_ui
+from referral_service import (
+    ReferralArmyService,
+    STATUS_LABELS,
+    get_min_activity_usd,
+    get_hold_days,
+    get_min_commission_withdraw,
+    get_rank_defs,
+)
 
 logger = logging.getLogger(__name__)
 db = DatabaseManager()
 
 
 class ReferralHandler:
-    """معالج الإحالات"""
-
     @staticmethod
     def build_referral_link(bot_username: str, user: User) -> str:
         username = bot_username or Config.BOT_USERNAME or "Napoleonrobert_bot"
@@ -29,155 +35,195 @@ class ReferralHandler:
     async def show_referral_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = db.get_user(update.effective_user.id)
         if not user:
-            user = db.create_user(
-                telegram_id=update.effective_user.id,
-                username=update.effective_user.username,
-                first_name=update.effective_user.first_name,
-                last_name=update.effective_user.last_name,
-            )
+            return
         bot_username = getattr(context.bot, "username", None) or Config.BOT_USERNAME
         link = ReferralHandler.build_referral_link(bot_username, user)
+        dash = ReferralArmyService.dashboard(user)
+        rank = dash["rank"]
+        c = dash["counts"]
 
-        message = (
-            "👥 برنامج «جيب رفيقك»\n\n"
-            "شارك رابطك الخاص مع رفيقك.\n\n"
-            "لما يسجّل من رابطك ويكمل أول عملية ناجحة\n"
-            "تنضاف مكافأتك تلقائيًا بعد المراجعة 🎁\n\n"
-            f"🔗 رابطك:\n<code>{ui.esc(link)}</code>\n\n"
-            "المهم يجي من الرابط...\n"
-            "مو يقول «بعرف نابليون شخصيًا» 😂"
+        text = (
+            "👑 <b>جيش نابليون</b>\n\n"
+            "شارك رابطك الخاص وكل مستخدم جديد يدخل من خلاله "
+            "ويستوفي شروط النشاط ينضم إلى جيشك ويزيد دخلك\n\n"
+            f"🎖️ رتبتك: <b>{ui.esc(rank['title'])}</b>\n"
+            f"💸 نسبتك الحالية: <b>{rank['rate']:g}%</b>\n"
+            f"👥 إجمالي المدعوين: <b>{c['total']}</b>\n"
+            f"✅ الإحالات النشطة: <b>{c['active']}</b>\n"
+            f"⏳ قيد التحقق: <b>{c['pending']}</b>\n"
+            f"💰 العمولة المتاحة: <b>{format_currency(dash['available'])}</b>\n"
+            f"🔒 قيد المراجعة: <b>{format_currency(dash['pending'])}</b>\n\n"
+            f"🔗 رابطك الخاص:\n<code>{ui.esc(link)}</code>\n\n"
+            "كل ما كبر الجيش...\n"
+            "المحاسب صار يناديك «حضرتك» 😂"
         )
-
-        if update.callback_query:
-            await safe_edit_callback_message(
-                update,
-                message,
-                reply_markup=Keyboards.referral_menu(),
-                parse_mode="HTML",
-                context=context,
-            )
-        else:
-            await update.message.reply_text(
-                message,
-                reply_markup=Keyboards.referral_menu(),
-                parse_mode="HTML",
-            )
+        await _edit(update, context, text, Keyboards.army_menu())
 
     @staticmethod
-    def _recruit_stats(referrer: User):
-        session = db.get_session()
-        try:
-            invited = (
-                session.query(User)
-                .filter(User.referred_by == str(referrer.telegram_id))
-                .all()
+    async def show_ranks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        lines = ["🎖️ <b>نظام الرتب والعمولات</b>\n"]
+        for r in get_rank_defs():
+            lines.append(
+                f"{ui.esc(r['title'])}:\n"
+                f"{r['min_active']} إحالات نشطة = {r['rate']:g}%\n"
             )
-            total = len(invited)
-            completed = 0
-            pending = 0
-            for u in invited:
-                has_deposit = (
-                    session.query(Transaction.id)
-                    .filter(
-                        Transaction.user_id == u.id,
-                        Transaction.transaction_type == "deposit",
-                        Transaction.status == "completed",
-                    )
-                    .first()
-                )
-                if has_deposit:
-                    completed += 1
-                else:
-                    pending += 1
-            return total, completed, pending, float(referrer.referral_earnings or 0)
-        finally:
-            session.close()
+        lines.append(
+            "\nالنسب والحدود قابلة للتعديل من لوحة الإدارة."
+        )
+        await _edit(update, context, "\n".join(lines), Keyboards.army_menu())
 
     @staticmethod
     async def show_recruits(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = db.get_user(update.effective_user.id)
-        total, completed, pending, rewards = ReferralHandler._recruit_stats(user)
+        c = ReferralArmyService.counts_for(user.id)
         text = (
-            "👥 سجلّ التجنيد الرسمي\n\n"
-            f"إجمالي المدعوين: <b>{total}</b>\n"
-            f"✅ مكتملون: <b>{completed}</b>\n"
-            f"⏳ قيد الانتظار: <b>{pending}</b>\n"
-            f"🎁 مكافآتك: <b>{format_currency(rewards)}</b>\n\n"
-            "باقي تجيب مدير المحاسبة نفسه...\n"
-            "بس غالبًا ما رح يرد 😂"
+            "👥 <b>سجل جيش نابليون</b>\n\n"
+            f"إجمالي المسجلين: <b>{c['total']}</b>\n"
+            f"✅ نشطون: <b>{c['active']}</b>\n"
+            f"⏳ قيد التحقق: <b>{c['pending']}</b>\n"
+            f"❌ غير مؤهلين: <b>{c['rejected']}</b>\n\n"
+            "المحاسب عدّهم مرتين...\n"
+            "لأنه ما وثق بالآلة الحاسبة 😂"
         )
-        await safe_edit_callback_message(
-            update,
-            text,
-            reply_markup=Keyboards.referral_menu(),
-            parse_mode="HTML",
-            context=context,
-        )
+        await _edit(update, context, text, Keyboards.army_menu())
 
     @staticmethod
     async def show_rewards(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """عمولتي"""
         user = db.get_user(update.effective_user.id)
+        dash = ReferralArmyService.dashboard(user)
+        monthly = ReferralArmyService.monthly_commission(user.id)
+        rank = dash["rank"]
         text = (
-            "🎁 وين مكافأتي؟\n\n"
-            f"نسبة المكافأة: <b>{Config.REFERRAL_PERCENTAGE:g}%</b> "
-            "من أول تعبئة ناجحة لرفيقك بعد المراجعة.\n\n"
-            f"أرباحك الحالية: <b>{format_currency(user.referral_earnings or 0)}</b>\n\n"
-            "المكافأة مش مربوطة بحجم رهان أو خسارة —\n"
-            "بخدمة تعبئة مكتملة وواضحة فقط."
+            "💰 <b>خزنة العمولات</b>\n\n"
+            f"🎖️ الرتبة: <b>{ui.esc(rank['title'])}</b>\n"
+            f"💸 النسبة: <b>{rank['rate']:g}%</b>\n"
+            f"✅ متاح للسحب: <b>{format_currency(dash['available'])}</b>\n"
+            f"⏳ قيد المراجعة: <b>{format_currency(dash['pending'])}</b>\n"
+            f"📆 عمولة الشهر: <b>{format_currency(monthly)}</b>\n"
+            f"🏦 إجمالي المسحوب: <b>{format_currency(dash['withdrawn'])}</b>\n\n"
+            "الخزنة بخير...\n"
+            "بس كترة السؤال عنها عم تعمللها توتر 😂"
         )
-        await safe_edit_callback_message(
-            update,
-            text,
-            reply_markup=Keyboards.referral_menu(),
-            parse_mode="HTML",
-            context=context,
+        await _edit(update, context, text, Keyboards.army_menu())
+
+    @staticmethod
+    async def show_ledger(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = db.get_user(update.effective_user.id)
+        summary = ReferralArmyService.commission_summary_for_referrer(user.id)
+        text = (
+            "📊 <b>كشف العمولات</b>\n\n"
+            f"صافي النشاط المؤهل (مجموع): <b>{format_currency(summary['net_activity_syp'])}</b>\n"
+            f"إجمالي العمولات المسجّلة: <b>{format_currency(summary['commission_total'])}</b>\n\n"
+            "لا نعرض خسائر كل فرد باسمه — المجموع والعمولة فقط.\n\n"
+            "إذا ما توفّرت بيانات رسمية من iChancy، "
+            "العمولة تبقى للمراجعة اليدوية من الإدارة."
         )
+        await _edit(update, context, text, Keyboards.army_menu())
+
+    @staticmethod
+    async def show_my_rank(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = db.get_user(update.effective_user.id)
+        dash = ReferralArmyService.dashboard(user)
+        rank = dash["rank"]
+        nxt = dash["next_rank"]
+        remaining = dash["remaining"]
+        if nxt:
+            need = f"{remaining} إحالات نشطة إضافية للوصول إلى {nxt['title']}."
+        else:
+            need = "وصلت أعلى رتبة. الإمبراطور ما بيحتاج شرح 👑"
+        text = (
+            f"🎖️ رتبتك الحالية: <b>{ui.esc(rank['title'])}</b>\n\n"
+            f"👥 إحالاتك النشطة: <b>{dash['counts']['active']}</b>\n"
+            f"📈 نسبتك الحالية: <b>{rank['rate']:g}%</b>\n\n"
+            f"للرتبة التالية تحتاج:\n{ui.esc(need)}\n\n"
+            "كمّل تجنيد...\n"
+            "المحاسب بلش يحكي معك بصيغة الجمع 😂"
+        )
+        await _edit(update, context, text, Keyboards.army_menu())
 
     @staticmethod
     async def show_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        min_usd = get_min_activity_usd()
+        hold = get_hold_days()
+        min_w = get_min_commission_withdraw()
         text = (
-            "📜 الشروط بلا فلسفة\n\n"
-            "1) رابط إحالة فريد لكل مستخدم\n"
-            "2) تسجيل صاحب الدعوة عند أول دخول فقط\n"
-            "3) ممنوع تحيل حالك\n"
-            "4) الحسابات القديمة ما بتنحسب\n"
-            "5) المكافأة بعد أول تعبئة ناجحة + مراجعة\n"
-            "6) ما في تكرار مكافأة لنفس الشخص\n"
-            "7) الحالات: جديد / قيد التحقق / مكتمل / مرفوض\n"
-            "8) استخدم الخدمة بمسؤولية 🔞"
+            "📜 <b>الشروط بلا فلسفة</b>\n\n"
+            "الإحالة النشطة تتطلب:\n"
+            "1) مستخدم جديد (مو مسجّل سابقًا)\n"
+            "2) دخول أول مرة من رابطك\n"
+            "3) ربط حساب iChancy موثق\n"
+            "4) اجتياز فحص التكرار/الوهمي\n"
+            f"5) نشاط مؤهل ≥ {min_usd:g}$ صافي معتمد\n"
+            "6) ممنوع تحيل حالك\n\n"
+            "العمولة = صافي النشاط المؤهل × نسبة رتبتك\n"
+            "(من حرق/خسارة اللعب المعتمدة — مو من مبلغ التعبئة)\n\n"
+            f"مدة المراجعة قبل التوفر: {hold} يوم\n"
+            f"حد أدنى لسحب العمولة: {format_currency(min_w)}\n\n"
+            "حالات الإحالة:\n"
+            "🟡 مسجل جديد — دخل وما كمّل الشروط\n"
+            "🟠 قيد التحقق — مراجعة بيانات\n"
+            "🟢 نشط — يُحتسب ضمن العمولة\n"
+            "🔴 غير مؤهل — قديم/مكرر/ذاتي/ناقص شروط\n\n"
+            "🔞 للبالغين فقط — استخدم الخدمة بمسؤولية."
         )
-        await safe_edit_callback_message(
-            update,
-            text,
-            reply_markup=Keyboards.referral_menu(),
-            context=context,
-        )
+        await _edit(update, context, text, Keyboards.army_menu())
 
     @staticmethod
     async def share_referral_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = db.get_user(update.effective_user.id)
         if not user:
-            user = db.create_user(
-                telegram_id=update.effective_user.id,
-                username=update.effective_user.username,
-                first_name=update.effective_user.first_name,
-                last_name=update.effective_user.last_name,
-            )
-        if not user:
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text="❌ تعذر تحميل حسابك. أرسل /start ثم حاول مجدداً.",
-            )
             return
-
         bot_username = getattr(context.bot, "username", None) or Config.BOT_USERNAME
-        referral_link = ReferralHandler.build_referral_link(bot_username, user)
-        share_message = napoleon_ui.share_referral_text(referral_link)
-
-        await ui.typing(context, update.effective_chat.id)
+        link = ReferralHandler.build_referral_link(bot_username, user)
+        share = (
+            "لقيت بوت مرتب لتعبئة وسحب iChancy،\n"
+            "وفوقها نظام جيش نابليون للإحالات 😂\n\n"
+            f"ادخل من رابطي:\n{link}\n\n"
+            "🔞 للبالغين فقط، واستخدم الخدمة بمسؤولية."
+        )
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=share_message,
+            text=share,
             disable_web_page_preview=True,
             reply_markup=Keyboards.back_to_main(),
+        )
+
+    @staticmethod
+    async def start_withdraw_commission(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = db.get_user(update.effective_user.id)
+        dash = ReferralArmyService.dashboard(user)
+        min_w = get_min_commission_withdraw()
+        avail = dash["available"]
+        if avail < min_w:
+            text = (
+                "🏧 سحب العمولة\n\n"
+                f"المتاح: {format_currency(avail)}\n"
+                f"الحد الأدنى: {format_currency(min_w)}\n\n"
+                "لسا الخزنة ما وصلت حد السحب.\n"
+                "كمّل تجنيد وخلّي المحاسب يفتح الدرج 😂"
+            )
+            await _edit(update, context, text, Keyboards.army_menu())
+            return
+        ok, msg = ReferralArmyService.request_withdraw(user, avail)
+        user = db.get_user(update.effective_user.id)
+        text = (
+            f"{'✅' if ok else '❌'} {msg}\n\n"
+            f"المتاح الآن: {format_currency(user.commission_available or 0)}\n"
+            f"رصيد المحفظة: {format_currency(user.balance or 0)}"
+        )
+        await _edit(update, context, text, Keyboards.army_menu())
+
+    # توافق أسماء قديمة
+    show_referral_rewards = show_rewards
+
+
+async def _edit(update, context, text, markup):
+    if update.callback_query:
+        await safe_edit_callback_message(
+            update, text, reply_markup=markup, parse_mode="HTML", context=context
+        )
+    elif update.effective_message:
+        await update.effective_message.reply_text(
+            text, reply_markup=markup, parse_mode="HTML"
         )

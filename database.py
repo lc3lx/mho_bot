@@ -65,6 +65,11 @@ class User(Base):
     referred_by = Column(String(20))
     referral_count = Column(Integer, default=0)
     referral_earnings = Column(Float, default=0.0)
+    # جيش نابليون — أرصدة عمولة منفصلة عن رصيد المحفظة
+    commission_available = Column(Float, default=0.0)
+    commission_pending = Column(Float, default=0.0)
+    commission_withdrawn = Column(Float, default=0.0)
+    referral_rank_override = Column(String(40))  # رتبة يدوية من الأدمن
     total_bets = Column(Float, default=0.0)
     total_wins = Column(Float, default=0.0)
     vip_level = Column(String(20), default='beginner')
@@ -294,6 +299,46 @@ class BotSetting(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class ReferralInvite(Base):
+    """سجل إحالة ضمن جيش نابليون"""
+    __tablename__ = "referral_invites"
+
+    id = Column(Integer, primary_key=True)
+    referrer_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    invitee_id = Column(Integer, ForeignKey("users.id"), nullable=False, unique=True, index=True)
+    # registered | pending_verify | active | rejected
+    status = Column(String(30), default="registered", index=True)
+    reject_reason = Column(String(255))
+    # صافي النشاط المؤهل بالليرة (من مراجعة يدوية / API لاحقاً)
+    qualified_net_syp = Column(Float, default=0.0)
+    qualified_net_usd = Column(Float, default=0.0)
+    activity_source = Column(String(50), default="manual")  # manual | api | none
+    activated_at = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class CommissionEntry(Base):
+    """سجل عمولة / تسوية / سحب لجيش نابليون"""
+    __tablename__ = "commission_entries"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    # accrual | release | withdraw | adjustment
+    entry_type = Column(String(30), nullable=False)
+    # pending_review | available | withdrawn | cancelled
+    status = Column(String(30), default="pending_review", index=True)
+    amount = Column(Float, nullable=False, default=0.0)
+    rank_code = Column(String(40))
+    rate_percent = Column(Float, default=0.0)
+    net_activity_syp = Column(Float, default=0.0)
+    description = Column(Text)
+    admin_notes = Column(Text)
+    available_at = Column(DateTime)  # بعد انتهاء مدة المراجعة
+    created_at = Column(DateTime, default=datetime.utcnow)
+    processed_at = Column(DateTime)
+
+
 class SavedPaymentAccount(Base):
     """أرقام/حسابات محفوظة للزبون (سيريتل كاش / شام كاش)"""
     __tablename__ = 'saved_payment_accounts'
@@ -359,6 +404,14 @@ class DatabaseManager:
                     conn.execute(text("ALTER TABLE users ADD COLUMN last_syriatel_code VARCHAR(50)"))
                 if "terms_accepted_at" not in user_columns:
                     conn.execute(text("ALTER TABLE users ADD COLUMN terms_accepted_at TIMESTAMP"))
+                if "commission_available" not in user_columns:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN commission_available FLOAT DEFAULT 0"))
+                if "commission_pending" not in user_columns:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN commission_pending FLOAT DEFAULT 0"))
+                if "commission_withdrawn" not in user_columns:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN commission_withdrawn FLOAT DEFAULT 0"))
+                if "referral_rank_override" not in user_columns:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN referral_rank_override VARCHAR(40)"))
 
             # حساب Ichancy واحد فقط لكل مستخدم — فهرس فريد على player_id
             with self.engine.begin() as conn:

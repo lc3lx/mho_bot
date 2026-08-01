@@ -112,7 +112,22 @@ class TelegramBot:
             name="usdt_deposit_poll",
         )
         logger.info("USDT deposit polling every %s seconds", interval)
-        
+
+        async def army_daily_maintenance(context: ContextTypes.DEFAULT_TYPE):
+            from referral_service import ReferralArmyService
+
+            released = ReferralArmyService.release_matured_commissions()
+            if released:
+                logger.info("Army commissions released: %s", released)
+
+        # تحديث يومي: تحرير العمولات المنتهية مدة مراجعتها
+        self.application.job_queue.run_daily(
+            army_daily_maintenance,
+            time=__import__("datetime").time(hour=3, minute=15),
+            name="army_daily_maintenance",
+        )
+        logger.info("Army referral daily maintenance scheduled at 03:15 UTC")
+
     async def balance_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """أمر عرض الرصيد"""
         from handlers import user_accepted_terms, send_consent_gate

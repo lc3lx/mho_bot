@@ -598,7 +598,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         "gift_balance": "👛 جيبتي…",
         "gift_send": "🎁 هدية…",
         "contact": "🚑 الدعم…",
-        "referrals": "👥 جيب رفيقك…",
+        "referrals": "👥 جيش نابليون…",
         "profile": "🪪 بطاقتك…",
         "transactions": "🧾 دفتر الفضايح…",
         "main_menu": "🏠 رجوع للمقر…",
@@ -824,14 +824,26 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             context=context,
         )
         return
-    if data == "referral_recruits":
+    if data == "referral_recruits" or data == "army_recruits":
         await ReferralHandler.show_recruits(update, context)
         return
-    if data == "referral_rewards":
+    if data == "referral_rewards" or data == "army_commission":
         await ReferralHandler.show_rewards(update, context)
         return
-    if data == "referral_rules":
+    if data == "referral_rules" or data == "army_rules":
         await ReferralHandler.show_rules(update, context)
+        return
+    if data == "army_ranks":
+        await ReferralHandler.show_ranks(update, context)
+        return
+    if data == "army_ledger":
+        await ReferralHandler.show_ledger(update, context)
+        return
+    if data == "army_my_rank":
+        await ReferralHandler.show_my_rank(update, context)
+        return
+    if data == "army_withdraw":
+        await ReferralHandler.start_withdraw_commission(update, context)
         return
     if data == "withdraw_confirm_submit":
         await PaymentHandler.confirm_withdraw_review(update, context)
@@ -938,6 +950,22 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             await AdminHandler.start_set_rate(update, context, "shamcash")
         elif data == "admin_rate_usdt":
             await AdminHandler.start_set_rate(update, context, "usdt")
+        elif data == "admin_army":
+            await AdminHandler.army_menu(update, context)
+        elif data == "admin_army_ranks":
+            await AdminHandler.army_ranks_prompt(update, context)
+        elif data == "admin_army_hold":
+            await AdminHandler.army_set_number(update, context, "hold")
+        elif data == "admin_army_min_withdraw":
+            await AdminHandler.army_set_number(update, context, "min_withdraw")
+        elif data == "admin_army_min_activity":
+            await AdminHandler.army_set_number(update, context, "min_activity")
+        elif data == "admin_army_activate":
+            await AdminHandler.army_activate_prompt(update, context)
+        elif data == "admin_army_accrue":
+            await AdminHandler.army_accrue_prompt(update, context)
+        elif data == "admin_army_rank_override":
+            await AdminHandler.army_rank_override_prompt(update, context)
         elif data == "cancel_admin_operation":
             context.user_data.pop("admin_operation", None)
             await AdminHandler.admin_panel(update, context)
@@ -1217,13 +1245,14 @@ async def cancel_pending_payment(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_referral(user, referral_ref, context=None):
-    """معالجة الإحالة — يقبل آيدي تليجرام أو كود الإحالة"""
+    """تسجيل إحالة جديدة في جيش نابليون (مستخدم جديد فقط)."""
     if not referral_ref:
         return
 
+    from referral_service import ReferralArmyService
+
     session = db.get_session()
     try:
-        # لا يحيل نفسه
         if str(user.telegram_id) == str(referral_ref) or user.referral_code == referral_ref:
             return
 
@@ -1232,42 +1261,40 @@ async def handle_referral(user, referral_ref, context=None):
             referrer = session.query(User).filter(
                 User.telegram_id == str(referral_ref)
             ).first()
-
         if not referrer:
             referrer = session.query(User).filter(
                 User.referral_code == referral_ref
             ).first()
-
         if not referrer or referrer.id == user.id:
             return
 
         db_user = session.query(User).filter(User.id == user.id).first()
         if db_user.referred_by:
-            # مستخدم قديم / إحالة سابقة
             return
 
-        # إذا الحساب موجود من قبل وما كان جديد — ما ينحسب (create_user فقط يستدعي)
-        db_user.referred_by = str(referrer.telegram_id)
-        referrer.referral_count = (referrer.referral_count or 0) + 1
-        session.commit()
-        logger.info(
-            "تم تسجيل إحالة جديدة: %s -> %s",
-            user.telegram_id,
-            referrer.telegram_id,
-        )
-        if context:
-            try:
-                await context.bot.send_message(
-                    chat_id=referrer.telegram_id,
-                    text=(
-                        "🟡 رفيقك وصل للمقر،\n"
-                        "بس لسا عم يتفرّج عالأزرار."
-                    ),
-                )
-            except Exception:
-                pass
+        referrer_detached = db._detach(session, referrer)
+        invitee_detached = db._detach(session, db_user)
     finally:
         session.close()
+
+    ReferralArmyService.create_invite(referrer_detached, invitee_detached)
+    logger.info(
+        "جيش نابليون: إحالة %s -> %s",
+        user.telegram_id,
+        referrer_detached.telegram_id,
+    )
+    if context:
+        try:
+            await context.bot.send_message(
+                chat_id=referrer_detached.telegram_id,
+                text=(
+                    "🟡 رفيقك وصل للمقر،\n"
+                    "بس لسا عم يتفرّج عالأزرار.\n"
+                    "الإحالة تُحتسب نشطة بعد ربط iChancy والنشاط المؤهل."
+                ),
+            )
+        except Exception:
+            pass
 
 async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالجة إدخال المبلغ"""

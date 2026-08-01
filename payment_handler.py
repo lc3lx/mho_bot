@@ -2085,36 +2085,7 @@ class PaymentHandler:
             user.balance += transaction.amount
             transaction.status = "completed"
             transaction.processed_at = datetime.utcnow()
-
-            referrer_notify_id = None
-            if user.referred_by:
-                ref_user = session.query(User).filter(
-                    User.telegram_id == str(user.referred_by)
-                ).first()
-                before_ids = {
-                    r[0]
-                    for r in session.query(Transaction.id)
-                    .filter(
-                        Transaction.user_id == (ref_user.id if ref_user else -1),
-                        Transaction.transaction_type == "referral",
-                    )
-                    .all()
-                }
-                await PaymentHandler.process_referral_earnings(
-                    user, transaction.amount, session
-                )
-                if ref_user:
-                    after = (
-                        session.query(Transaction.id)
-                        .filter(
-                            Transaction.user_id == ref_user.id,
-                            Transaction.transaction_type == "referral",
-                        )
-                        .all()
-                    )
-                    if any(r[0] not in before_ids for r in after):
-                        referrer_notify_id = ref_user.telegram_id
-
+            # مكافأة الإحالة القديمة على التعبئة ملغاة — العمولة من جيش نابليون فقط
             session.commit()
 
             has_ichancy = bool(user.ichancy_player_id)
@@ -2132,18 +2103,6 @@ class PaymentHandler:
                         f"💵 رصيدك الآن: {format_currency(new_balance)}"
                     ),
                 )
-                if referrer_notify_id:
-                    try:
-                        await context.bot.send_message(
-                            chat_id=referrer_notify_id,
-                            text=(
-                                "🟢 تمت الإحالة بنجاح.\n\n"
-                                "رفيقك صار من أهل المقر،\n"
-                                "والمحاسب اضطر يفتح سجل المكافآت 😂"
-                            ),
-                        )
-                    except TelegramError:
-                        pass
                 if not has_ichancy:
                     await context.bot.send_message(
                         chat_id=telegram_id,
