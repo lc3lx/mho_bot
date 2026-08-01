@@ -338,7 +338,7 @@ class Config:
     # إعدادات ichancy.com — Agent API (signIn / withdrawFromPlayer)
     ICHANCY_CONFIG = {
         "website_url": "https://www.ichancy.com/",
-        "api_base_url": os.getenv("ICHANCY_API_URL", "https://agents.ichancy.com"),
+        "api_base_url": os.getenv("ICHANCY_API_URL", "https://agents.ichancy100.com"),
         "username": os.getenv("ICHANCY_USERNAME", ""),
         "password": os.getenv("ICHANCY_PASSWORD", ""),
         "parent_id": os.getenv("ICHANCY_PARENT_ID", ""),
@@ -494,10 +494,20 @@ class Config:
         إذا ضبط الأدمن override من اللوحة → يُستخدم DB (حتى لو فارغ = معطّل).
         وإلا → قيم .env الافتراضية.
         """
-        from database import DatabaseManager
+        env_cfg = {
+            "proxy_url": (cls.ICHANCY_CONFIG.get("proxy_url") or "").strip(),
+            "proxy_user": (cls.ICHANCY_CONFIG.get("proxy_user") or "").strip(),
+            "proxy_pass": (cls.ICHANCY_CONFIG.get("proxy_pass") or "").strip(),
+            "source": "env",
+        }
+        try:
+            from database import DatabaseManager
 
-        db = DatabaseManager()
-        override = db.get_setting("ichancy_proxy_override")
+            db = DatabaseManager()
+            override = db.get_setting("ichancy_proxy_override")
+        except Exception:
+            return env_cfg
+
         if override == "1":
             return {
                 "proxy_url": (db.get_setting("ichancy_proxy_url", "") or "").strip(),
@@ -505,12 +515,7 @@ class Config:
                 "proxy_pass": (db.get_setting("ichancy_proxy_pass", "") or "").strip(),
                 "source": "admin",
             }
-        return {
-            "proxy_url": (cls.ICHANCY_CONFIG.get("proxy_url") or "").strip(),
-            "proxy_user": (cls.ICHANCY_CONFIG.get("proxy_user") or "").strip(),
-            "proxy_pass": (cls.ICHANCY_CONFIG.get("proxy_pass") or "").strip(),
-            "source": "env",
-        }
+        return env_cfg
 
     @classmethod
     def save_ichancy_proxy_config(
