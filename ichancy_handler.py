@@ -44,45 +44,80 @@ class IchancyHandler:
         return f"{secs} ثانية"
 
     @staticmethod
+    def bot_username_prefix() -> str:
+        """بادئة اسم البوت لاسم مستخدم Ichancy (أحرف/أرقام فقط)."""
+        raw = (Config.BOT_DISPLAY_NAME or Config.BOT_USERNAME or "Napoleon").strip()
+        raw = re.sub(r"(?i)_?bot$", "", raw)
+        prefix = re.sub(r"[^A-Za-z0-9]", "", raw)
+        if not prefix:
+            prefix = "Napoleon"
+        # أول حرف كبير ليتوافق مع شرط بداية الاسم
+        return prefix[0].upper() + prefix[1:]
+
+    @staticmethod
+    def example_username() -> str:
+        return f"{IchancyHandler.bot_username_prefix()}Ali12"
+
+    @staticmethod
+    def build_full_username(user_part: str) -> str:
+        """يلصق اسم البوت تلقائياً قبل اليوزر اللي دخّله الزبون."""
+        user_part = user_part.strip()
+        prefix = IchancyHandler.bot_username_prefix()
+        # لو الزبون كتب البادئة بنفسه ما نكرّرها
+        if user_part.lower().startswith(prefix.lower()):
+            return user_part[0].upper() + user_part[1:] if user_part else user_part
+        return f"{prefix}{user_part}"
+
+    @staticmethod
     def validate_username(username: str):
-        username = username.strip()
-        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9]{2,29}", username):
+        """يتحقق من الجزء اللي يدخله الزبون ثم يبني الاسم الكامل مع بادئة البوت."""
+        username = username.strip().lstrip("@")
+        prefix = IchancyHandler.bot_username_prefix()
+        example = IchancyHandler.example_username()
+
+        # اقبل الجزء بدون البادئة
+        if username.lower().startswith(prefix.lower()):
+            user_part = username[len(prefix) :]
+        else:
+            user_part = username
+
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9]{1,23}", user_part):
             return None, (
                 "🔴 اسم المستخدم غير صالح.\n"
                 "• أحرف إنجليزية فقط\n"
-                "• يجب أن يحتوي أرقاماً لتجنب التشابه\n"
+                "• يفضّل إضافة أرقام\n"
                 "• بدون رموز خاصة\n"
-                "مثال: `Walter12`"
+                f"• بيصير تلقائي: {prefix} + اسمك\n"
+                f"مثال: أرسل {tg_code('Ali12')} → يصير {tg_code(example)}"
             )
-        if not re.search(r"\d", username):
+        if not re.search(r"\d", user_part):
             return None, (
-                "🔴 يجب أن يحتوي اسم المستخدم على أرقام.\n"
-                "مثال: `Walter12`"
+                "🔴 لازم الاسم يحتوي أرقام.\n"
+                f"مثال: أرسل {tg_code('Ali12')} → يصير {tg_code(example)}"
             )
-        return username, None
+
+        full = IchancyHandler.build_full_username(user_part)
+        if len(full) > 32:
+            return None, (
+                "🔴 الاسم النهائي طويل زيادة.\n"
+                f"اختصر الاسم (البادئة {prefix} بتنضاف تلقائي)."
+            )
+        return full, None
 
     @staticmethod
     def validate_password(password: str):
+        """Ichancy تقبل من 5 أحرف/أرقام — بدون تعقيد إضافي."""
         password = password.strip()
-        if len(password) < 8 or len(password) > 16:
+        if not re.fullmatch(r"[A-Za-z0-9]{5,32}", password):
             return None, (
-                "🔴 يجب أن تحتوي كلمة المرور على أرقام بالإضافة إلى أحرف كبيرة "
-                "وصغيرة، وأن تكون بطول 8 أحرف فما فوق، وألا تزيد عن 16 محرف."
-            )
-        if not re.search(r"[a-z]", password):
-            return None, (
-                "🔴 يجب أن تحتوي كلمة المرور على أحرف صغيرة وأرقام وأحرف كبيرة."
-            )
-        if not re.search(r"[A-Z]", password):
-            return None, (
-                "🔴 يجب أن تحتوي كلمة المرور على أحرف كبيرة بالإضافة إلى أرقام."
-            )
-        if not re.search(r"\d", password):
-            return None, (
-                "🔴 يجب أن تحتوي كلمة المرور على أرقام بالإضافة إلى أحرف كبيرة "
-                "وصغيرة، وأن تكون بطول 8 أحرف فما فوق، وألا تزيد عن 16 محرف."
+                "🔴 كلمة المرور غير صالحة.\n"
+                "• من 5 إلى 32\n"
+                "• أحرف إنجليزية و/أو أرقام فقط\n"
+                "• بدون رموز خاصة\n"
+                f"مثال: {tg_code('Abc12')}"
             )
         return password, None
+
 
     @staticmethod
     def get_withdraw_cooldown(user_id: int):
@@ -223,15 +258,18 @@ class IchancyHandler:
             )
             return
 
+        prefix = IchancyHandler.bot_username_prefix()
+        example = IchancyHandler.example_username()
         text = (
             "🔷 إنشاء حساب Ichancy — اسم المستخدم\n\n"
             "⚠️ مسموح بحساب واحد فقط لكل مستخدم.\n\n"
             "الشروط:\n"
             "1) أحرف إنجليزية فقط\n"
-            "2) يفضّل إضافة أرقام\n"
+            "2) لازم أرقام ضمن الاسم\n"
             "3) بدون رموز خاصة\n\n"
-            f"مثال: {tg_code('Walter12')}\n\n"
-            "أرسل اسم المستخدم الآن، أو اضغط إلغاء للرجوع."
+            f"📌 اسم البوت {tg_code(prefix)} بينضاف تلقائي قبل اسمك.\n"
+            f"مثال: أرسل {tg_code('Ali12')} → الحساب يصير {tg_code(example)}\n\n"
+            "أرسل اسمك الآن (بدون اسم البوت)، أو اضغط إلغاء للرجوع."
         )
         context.user_data["state"] = "waiting_for_ichancy_username"
         context.user_data["operation"] = "create_ichancy"
@@ -260,7 +298,9 @@ class IchancyHandler:
         username, err = IchancyHandler.validate_username(username)
         if err:
             await update.message.reply_text(
-                err, reply_markup=Keyboards.cancel_operation()
+                err,
+                reply_markup=Keyboards.cancel_operation(),
+                parse_mode="HTML",
             )
             return
 
@@ -276,10 +316,13 @@ class IchancyHandler:
         context.user_data["ichancy_new_username"] = username
         context.user_data["state"] = "waiting_for_ichancy_password"
         await update.message.reply_text(
-            "🔷 إنشاء حساب iChancy - كلمة المرور\n\n"
-            "ادخل كلمة المرور يجب أن يتراوح طولها بين 8-16 حرف، "
-            "وأن تحتوي على أحرف كبيرة وصغيرة، بالإضافة إلى أرقام.",
+            f"✅ اسم الحساب النهائي: {tg_code(username)}\n\n"
+            "🔷 كلمة المرور\n\n"
+            "من 5 أحرف أو أرقام على الأقل (إنجليزي/أرقام).\n"
+            "بدون رموز خاصة.\n"
+            f"مثال: {tg_code('Abc12')}",
             reply_markup=Keyboards.cancel_operation(),
+            parse_mode="HTML",
         )
 
     @staticmethod
@@ -291,6 +334,7 @@ class IchancyHandler:
             await update.message.reply_text(
                 f"🔄 حاول مرة اخرى\n\n{err}",
                 reply_markup=Keyboards.cancel_operation(),
+                parse_mode="HTML",
             )
             return
 
