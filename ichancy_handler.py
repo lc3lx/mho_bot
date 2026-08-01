@@ -434,7 +434,7 @@ class IchancyHandler:
     async def start_topup(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """شحن حساب ichancy من رصيد البوت"""
         user = db.get_user(update.effective_user.id)
-        min_topup = Config.ICHANCY_CONFIG.get("min_topup", 20000)
+        min_topup = Config.ICHANCY_CONFIG.get("min_topup", 200)
 
         if not user.ichancy_player_id:
             await safe_edit_callback_message(
@@ -467,7 +467,7 @@ class IchancyHandler:
     ):
         """تنفيذ شحن ichancy عبر depositToPlayer وخصم من رصيد البوت"""
         user = db.get_user(update.effective_user.id)
-        min_topup = Config.ICHANCY_CONFIG.get("min_topup", 20000)
+        min_topup = Config.ICHANCY_CONFIG.get("min_topup", 200)
 
         try:
             amount = float(amount)

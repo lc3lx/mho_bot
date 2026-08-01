@@ -104,6 +104,7 @@ class Config:
         "trongrid_url": os.getenv("TRONGRID_URL", "https://api.trongrid.io"),
         "trongrid_api_key": os.getenv("TRONGRID_API_KEY", ""),
         "syp_rate": float(os.getenv("USDT_SYP_RATE", "15000")),
+        "min_usdt": float(os.getenv("USDT_MIN_DEPOSIT", "2")),
         "deposit_timeout_minutes": int(os.getenv("USDT_DEPOSIT_TIMEOUT", "30")),
         "poll_interval_seconds": int(os.getenv("USDT_POLL_INTERVAL", "30")),
         "min_confirmations": int(os.getenv("USDT_MIN_CONFIRMATIONS", "1")),
@@ -138,7 +139,7 @@ class Config:
     }
     
     # الحد الأدنى والأقصى للمعاملات
-    MIN_DEPOSIT = float(os.getenv("MIN_DEPOSIT", "10"))
+    MIN_DEPOSIT = float(os.getenv("MIN_DEPOSIT", "200"))
     MAX_DEPOSIT = float(os.getenv("MAX_DEPOSIT", "10000"))
     MIN_WITHDRAWAL = float(os.getenv("MIN_WITHDRAWAL", "20"))
     MAX_WITHDRAWAL = float(os.getenv("MAX_WITHDRAWAL", "5000"))
@@ -313,7 +314,7 @@ class Config:
     SYRIATEL_DEPOSIT = {
         "timeout_minutes": int(os.getenv("SYRIATEL_DEPOSIT_TIMEOUT", "5")),
         "tx_digits": int(os.getenv("SYRIATEL_TX_DIGITS", "12")),
-        "min_amount": float(os.getenv("SYRIATEL_MIN_DEPOSIT", os.getenv("MIN_DEPOSIT", "1000"))),
+        "min_amount": float(os.getenv("SYRIATEL_MIN_DEPOSIT", os.getenv("MIN_DEPOSIT", "200"))),
     }
 
     @classmethod
@@ -349,7 +350,7 @@ class Config:
         # كل زبون يسحب من المنصة للبوت مرة واحدة كل نصف ساعة
         "withdraw_cooldown_minutes": int(os.getenv("ICHANCY_WITHDRAW_COOLDOWN", "30")),
         # الحد الأدنى لشحن حساب ichancy من رصيد البوت
-        "min_topup": float(os.getenv("ICHANCY_MIN_TOPUP", "20000")),
+        "min_topup": float(os.getenv("ICHANCY_MIN_TOPUP", "200")),
         # بروكسي لطلبات Ichancy فقط (لتجاوز Cloudflare على IP السيرفر)
         "proxy_url": os.getenv("ICHANCY_PROXY", "").strip(),
         "proxy_user": os.getenv("ICHANCY_PROXY_USER", "").strip(),
@@ -479,14 +480,38 @@ class Config:
     @classmethod
     def get_shamcash_usd_rate(cls) -> float:
         """سعر صرف شام كاش دولار → ل.س (من DB أو .env)"""
-        from database import DatabaseManager
-        db = DatabaseManager()
-        default = str(cls.SHAMCASH_DEPOSIT.get("usd_rate", 13125))
-        raw = db.get_setting("shamcash_usd_rate", default)
+        default = float(cls.SHAMCASH_DEPOSIT.get("usd_rate", 13125))
         try:
+            from database import DatabaseManager
+
+            db = DatabaseManager()
+            raw = db.get_setting("shamcash_usd_rate", str(default))
             return float(raw)
-        except (TypeError, ValueError):
-            return float(default)
+        except Exception:
+            return default
+
+    @classmethod
+    def get_usdt_syp_rate(cls) -> float:
+        """سعر صرف USDT/دولار → ل.س (من لوحة الأدمن أو .env)"""
+        default = float(cls.USDT_CONFIG.get("syp_rate", 15000))
+        try:
+            from database import DatabaseManager
+
+            db = DatabaseManager()
+            raw = db.get_setting("usdt_syp_rate", str(default))
+            return float(raw)
+        except Exception:
+            return default
+
+    @classmethod
+    def usd_to_syp(cls, usd_amount: float, source: str = "usdt") -> float:
+        """تحويل دولار/USDT إلى ليرة حسب سعر الأدمن."""
+        rate = (
+            cls.get_shamcash_usd_rate()
+            if source == "shamcash"
+            else cls.get_usdt_syp_rate()
+        )
+        return round(float(usd_amount) * float(rate), 2)
 
     @classmethod
     def get_ichancy_proxy_config(cls) -> dict:

@@ -176,7 +176,9 @@ class PaymentHandler:
             text = (
                 f"❝ شحن SHAM CASH - USD\n\n"
                 f"اشحن البوت عن طريق شام كاش بالدولار الأمريكي.\n"
-                f"الحد الأدنى لشحن شام كاش بالدولار هو {min_amount:.2f} $.\n\n"
+                f"الحد الأدنى لشحن شام كاش بالدولار هو {min_amount:.2f} $.\n"
+                f"بعد التحقق يُضاف الرصيد لمحفظتك بالليرة حسب سعر الأدمن "
+                f"({format_currency(Config.get_shamcash_usd_rate())} ل.س = 1 $).\n\n"
                 f"قم بالتحويل إلى العنوان المرفق (انقر على العنوان للنسخ):\n"
                 f"{tg_code(account)}\n\n"
                 f"⏰ المهلة: {timeout} دقيقة فقط\n"
@@ -301,14 +303,14 @@ class PaymentHandler:
                 )
                 return
             rate = Config.get_shamcash_usd_rate()
-            syp_amount = round(amount * rate, 2)
+            syp_amount = Config.usd_to_syp(amount, source="shamcash")
             summary = (
                 f"❝ طلب شحن - شام كاش USD\n\n"
                 f"معلومات الطلب:\n"
                 f"• العملة: الدولار الأمريكي\n"
-                f"• سعر الصرف الحالي: {format_currency(rate)}\n"
+                f"• سعر الصرف الحالي: {format_currency(rate)} ل.س = 1 $\n"
                 f"• المبلغ بالدولار: {amount:.2f} $\n"
-                f"• المبلغ بالليرة تقريباً: {format_currency(syp_amount)}\n"
+                f"• يُضاف للمحفظة بالليرة: {format_currency(syp_amount)}\n"
                 f"• رقم العملية: {tg_code(tx_number)}\n\n"
                 f"يرجى التأكد من صحة المعلومات قبل الضغط على إرسال"
             )
@@ -976,10 +978,44 @@ class PaymentHandler:
         """معالجة طلب الإيداع"""
         user = db.get_user(update.effective_user.id)
 
+        # عملات رقمية: المبلغ المدخل بالدولار/USDT ثم يُحوَّل لليرة بسعر الأدمن
+        if method == "usdt":
+            min_usdt = float(Config.USDT_CONFIG.get("min_usdt", 2))
+            try:
+                usdt_amount = float(amount)
+            except (TypeError, ValueError):
+                await update.message.reply_text(
+                    "❌ المبلغ غير صحيح",
+                    reply_markup=Keyboards.cancel_operation(),
+                )
+                return
+            if usdt_amount < min_usdt:
+                await update.message.reply_text(
+                    f"❌ الحد الأدنى للشحن بالدولار/USDT هو {min_usdt:.2f} $",
+                    reply_markup=Keyboards.cancel_operation(),
+                )
+                return
+            if not PaymentHandler._api_ready(method):
+                await update.message.reply_text(
+                    "❌ خدمة USDT غير مُعدّة حالياً.\nتواصل مع الإدارة.",
+                    reply_markup=Keyboards.main_menu(),
+                )
+                return
+            await PaymentHandler.start_usdt_deposit(
+                update, context, user, usdt_amount
+            )
+            return
+
+        min_dep = Config.MIN_DEPOSIT
+        if method == "syriatel_cash":
+            min_dep = float(
+                Config.SYRIATEL_DEPOSIT.get("min_amount", Config.MIN_DEPOSIT)
+            )
+
         is_valid, validated_amount, error_msg = validate_amount(
             str(amount),
-            Config.MIN_DEPOSIT,
-            Config.MAX_DEPOSIT
+            min_dep,
+            Config.MAX_DEPOSIT,
         )
 
         if not is_valid:
@@ -994,10 +1030,9 @@ class PaymentHandler:
                     reply_markup=Keyboards.main_menu()
                 )
                 return
-            if PaymentHandler._get_provider(method) == "tron":
-                await PaymentHandler.start_usdt_deposit(update, context, user, validated_amount)
-            else:
-                await PaymentHandler.start_auto_deposit(update, context, user, validated_amount, method)
+            await PaymentHandler.start_auto_deposit(
+                update, context, user, validated_amount, method
+            )
             return
 
         session = db.get_session()
@@ -1022,9 +1057,12 @@ class PaymentHandler:
         update: Update,
         context: ContextTypes.DEFAULT_TYPE,
         user: User,
-        syp_amount: float,
+        usdt_amount: float,
     ):
-        """بدء إيداع USDT TRC20 بمبلغ فريد عشري"""
+        """بدء إيداع USDT — المبلغ بالدولار، والرصيد يُضاف بالليرة حسب سعر الأدمن."""
+        rate = Config.get_usdt_syp_rate()
+        syp_amount = Config.usd_to_syp(usdt_amount, source="usdt")
+
         session = db.get_session()
         try:
             transaction = Transaction(
@@ -1033,7 +1071,10 @@ class PaymentHandler:
                 amount=syp_amount,
                 method="usdt",
                 status="pending",
-                description="إيداع USDT TRC20 تلقائي",
+                description=(
+                    f"إيداع USDT TRC20 تلقائي — "
+                    f"{usdt_amount:.2f} USDT × {rate:g} = {syp_amount:g} ل.س"
+                ),
             )
             session.add(transaction)
             session.commit()
@@ -1041,8 +1082,8 @@ class PaymentHandler:
 
             used_amounts = db.get_used_usdt_amounts()
             try:
-                unique_usdt = tron_client.generate_unique_usdt_amount(
-                    syp_amount, used_amounts, transaction.id
+                unique_usdt = tron_client.generate_unique_usdt_amount_from_usdt(
+                    usdt_amount, used_amounts, transaction.id
                 )
             except TronUsdtError as exc:
                 transaction.status = "cancelled"
@@ -1062,14 +1103,14 @@ class PaymentHandler:
 
             wallet = Config.USDT_CONFIG["wallet_address"]
             timeout = Config.USDT_CONFIG["deposit_timeout_minutes"]
-            rate = Config.get_usdt_syp_rate()
             usdt_display = TronUsdtClient.format_usdt(unique_usdt)
 
             message = f"""
 ✅ تم إنشاء طلب إيداع USDT
 
-💵 المبلغ بالليرة: {format_currency(syp_amount)}
-💱 سعر الصرف: {format_currency(rate)} ل.س = 1 USDT
+💵 المبلغ بالدولار: {usdt_amount:.2f} $
+💱 سعر الصرف: {format_currency(rate)} ل.س = 1 $
+💰 يُضاف لمحفظتك: {format_currency(syp_amount)}
 
 ⚠️ {tg_bold("مهم جداً — حوّل المبلغ بالضبط:")}
 💰 {tg_code(usdt_display)} USDT
@@ -1084,7 +1125,7 @@ class PaymentHandler:
 {tg_code(wallet)}
 
 ⏰ صالح لمدة {timeout} دقيقة
-🔄 البوت يراقب المحفظة تلقائياً ويضيف الرصيد فور وصول التحويل
+🔄 البوت يراقب المحفظة تلقائياً ويضيف الرصيد بالليرة فور وصول التحويل
 
 🔢 رقم الطلب: {transaction.id}
             """

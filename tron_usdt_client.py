@@ -55,6 +55,15 @@ class TronUsdtClient:
         """تحويل الليرة إلى USDT (جزء أساسي بخانتين عشريتين)"""
         return math.floor((syp_amount / self.current_syp_rate()) * 100) / 100
 
+    def generate_unique_usdt_amount_from_usdt(
+        self, usdt_amount: float, used_amounts: Set[float], transaction_id: int
+    ) -> float:
+        """توليد مبلغ USDT فريد انطلاقاً من مبلغ الدولار المدخل."""
+        base = math.floor(float(usdt_amount) * 100) / 100
+        if base <= 0:
+            raise TronUsdtError("مبلغ USDT غير صالح")
+        return self._unique_usdt_candidate(base, used_amounts, transaction_id)
+
     def generate_unique_usdt_amount(
         self, syp_amount: float, used_amounts: Set[float], transaction_id: int
     ) -> float:
@@ -65,7 +74,11 @@ class TronUsdtClient:
         base = self.syp_to_usdt_base(syp_amount)
         if base <= 0:
             raise TronUsdtError("المبلغ صغير جداً بعد التحويل لـ USDT")
+        return self._unique_usdt_candidate(base, used_amounts, transaction_id)
 
+    def _unique_usdt_candidate(
+        self, base: float, used_amounts: Set[float], transaction_id: int
+    ) -> float:
         normalized_used = {round(a, USDT_DECIMALS) for a in used_amounts if a}
 
         for suffix in range(1, 1000):

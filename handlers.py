@@ -1635,21 +1635,51 @@ async def handle_payment_method(update: Update, context: ContextTypes.DEFAULT_TY
         auto_note = ""
         if method_info.get("auto_deposit", method_info.get("auto_enabled")):
             if method_info.get("provider") == "tron":
+                rate = Config.get_usdt_syp_rate()
+                min_usdt = float(Config.USDT_CONFIG.get("min_usdt", 2))
                 auto_note = (
                     "\n\n⚡ التحقق تلقائي — سيُعطى مبلغ USDT فريد بالضبط "
-                    "(فواصل عشرية) لتمييز تحويلك."
+                    "(فواصل عشرية) لتمييز تحويلك.\n"
+                    f"💱 السعر الحالي: {format_currency(rate)} ل.س = 1 $\n"
+                    "الرصيد يُضاف لمحفظتك بالليرة السورية."
                 )
+                message = f"""
+💰 الإيداع عبر {method_info['name']} {method_info['emoji']}
+
+📝 أرسل المبلغ بالدولار / USDT اللي بدك تحوّله.
+بعد وصول التحويل، ينضاف الرصيد بالليرة حسب سعر الأدمن.{auto_note}
+
+💰 الحد الأدنى: {min_usdt:.2f} $
+💰 الحد الأقصى: {format_currency(Config.MAX_DEPOSIT)} ل.س (بعد التحويل)
+
+أرسل مبلغ الدولار الآن:
+                """
+                context.user_data['state'] = WAITING_FOR_AMOUNT
+                context.user_data['operation'] = operation
+                context.user_data['method'] = method
+                await safe_edit_callback_message(
+                    update,
+                    message,
+                    reply_markup=Keyboards.cancel_operation(),
+                    context=context,
+                )
+                return
             else:
                 auto_note = "\n\n⚡ التحقق تلقائي — بعد التحويل أرسل رقم العملية."
+        min_label = format_currency(Config.MIN_DEPOSIT)
+        if method == "syriatel_cash":
+            min_label = format_currency(
+                float(Config.SYRIATEL_DEPOSIT.get("min_amount", Config.MIN_DEPOSIT))
+            )
         message = f"""
 💰 الإيداع عبر {method_info['name']} {method_info['emoji']}
 
 📝 تعليمات الإيداع:
-1. أرسل المبلغ الذي تريد إيداعه
+1. أرسل المبلغ الذي تريد إيداعه (بالليرة)
 2. حوّل المبلغ حسب التعليمات
 3. أرسل رقم العملية للتحقق التلقائي{auto_note}
 
-💰 الحد الأدنى: {format_currency(Config.MIN_DEPOSIT)}
+💰 الحد الأدنى: {min_label}
 💰 الحد الأقصى: {format_currency(Config.MAX_DEPOSIT)}
 
 أرسل المبلغ الآن:
