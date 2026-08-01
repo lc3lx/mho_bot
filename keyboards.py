@@ -126,26 +126,203 @@ class Keyboards:
                 InlineKeyboardButton("⬇️ سحب للحساب", callback_data="ichancy_withdraw_start"),
             ],
             [InlineKeyboardButton("🖊️ تغيير كلمة المرور", callback_data="ichancy_change_password")],
-            [InlineKeyboardButton("🏠 القائمة الرئيسية", callback_data="main_menu")],
+            [Keyboards.home_btn()],
         ]
         return InlineKeyboardMarkup(keyboard)
 
     @staticmethod
-    def wallet_menu():
-        """محفظة البوت — إهداء فقط (بدون حجز)"""
+    def home_btn():
+        return InlineKeyboardButton("🏠 رجّعني للمقر", callback_data="main_menu")
+
+    @staticmethod
+    def back_to_main():
+        """زر العودة لمقر نابليون"""
+        return InlineKeyboardMarkup([[Keyboards.home_btn()]])
+
+    @staticmethod
+    def extras_menu():
+        """🧰 شغلات زيادة"""
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton(
-                "🎁 إهداء لشخص بالبوت (بالـ ID)",
-                callback_data="gift_send",
-            )],
-            [InlineKeyboardButton("🏠 القائمة الرئيسية", callback_data="main_menu")],
+            [
+                InlineKeyboardButton("🔁 رجّعلي حوالتي", callback_data="refund_request"),
+                InlineKeyboardButton("🌐 لفّة عالفيس", url=Config.FACEBOOK_URL),
+            ],
+            [
+                InlineKeyboardButton("📘 الدليل الكامل", callback_data="terms"),
+                InlineKeyboardButton("🎁 مفاجآت المعلم", callback_data="extras_surprises"),
+            ],
+            [
+                InlineKeyboardButton("📢 آخر الأخبار", callback_data="extras_news"),
+                InlineKeyboardButton("⚙️ الإعدادات", callback_data="extras_settings"),
+            ],
+            [
+                InlineKeyboardButton("📋 المزيد من الخدمات", callback_data="full_menu"),
+            ],
+            [Keyboards.home_btn()],
         ])
 
     @staticmethod
+    def ichancy_topup_gate():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ بعرف الآيدي", callback_data="ichancy_topup_know_id")],
+            [InlineKeyboardButton("🆘 وين بلاقيه؟", callback_data="ichancy_topup_where_id")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def ichancy_withdraw_gate():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ كمّل السحب", callback_data="ichancy_withdraw_continue")],
+            [InlineKeyboardButton("📋 شروط السحب", callback_data="ichancy_withdraw_rules")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def wallet_deposit_menu():
+        """عبّي محفظتي — طرق الدفع"""
+        keyboard = []
+        methods = Config.get_payment_methods_buttons()
+        order = ["syriatel_cash", "shamcash", "usdt"]
+        by_id = {m["method_id"]: m for m in methods}
+        for method_id in order:
+            method = by_id.get(method_id)
+            if method:
+                keyboard.append([InlineKeyboardButton(
+                    text=method["text"],
+                    callback_data=f"deposit_{method_id}",
+                )])
+        keyboard.append([InlineKeyboardButton("💵 طرق ثانية", callback_data="deposit_other")])
+        keyboard.append([Keyboards.home_btn()])
+        return InlineKeyboardMarkup(keyboard)
+
+    @staticmethod
+    def wallet_withdraw_gate():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("💰 اكتب المبلغ", callback_data="withdraw_enter_amount")],
+            [InlineKeyboardButton("📋 شروط السحب", callback_data="withdraw_rules")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def wallet_menu():
+        """جيبتي"""
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("⚡ عبّيها", callback_data="deposit"),
+                InlineKeyboardButton("🏧 فضّيها", callback_data="withdraw"),
+            ],
+            [InlineKeyboardButton("🔄 حدّث الرصيد", callback_data="wallet_refresh")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def ledger_menu():
+        """دفتر الفضايح"""
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("💸 عمليات التعبئة", callback_data="history_deposits"),
+                InlineKeyboardButton("💰 عمليات السحب", callback_data="history_withdrawals"),
+            ],
+            [
+                InlineKeyboardButton("⏳ العمليات المعلقة", callback_data="history_pending"),
+                InlineKeyboardButton("📆 اختيار التاريخ", callback_data="history_by_date"),
+            ],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def profile_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("✏️ تعديل بياناتي", callback_data="profile_edit")],
+            [InlineKeyboardButton("🔐 إعدادات الأمان", callback_data="profile_security")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def support_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("📝 عندي مشكلة", callback_data="message_admin")],
+            [InlineKeyboardButton("📸 إرسال صورة", callback_data="support_photo")],
+            [InlineKeyboardButton("🧾 مشكلة بعملية", callback_data="support_tx_issue")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def gift_code_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("⌨️ اكتب الكود", callback_data="gift_code_enter")],
+            [InlineKeyboardButton("📋 أكوادي السابقة", callback_data="gift_code_history")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def guide_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("💸 كيف أعبّي؟", callback_data="guide_deposit")],
+            [InlineKeyboardButton("💰 كيف أسحب؟", callback_data="guide_withdraw")],
+            [InlineKeyboardButton("👛 كيف تعمل المحفظة؟", callback_data="guide_wallet")],
+            [InlineKeyboardButton("🆘 مشكلة شائعة", callback_data="guide_faq")],
+            [InlineKeyboardButton("🔞 استخدام مسؤول", callback_data="guide_responsible")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def referral_menu():
+        """جيب رفيقك"""
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("📤 ابعت الرابط لرفيقك", callback_data="share_referral")],
+            [InlineKeyboardButton("👥 مين جبت معي؟", callback_data="referral_recruits")],
+            [InlineKeyboardButton("🎁 وين مكافأتي؟", callback_data="referral_rewards")],
+            [InlineKeyboardButton("📜 الشروط بلا فلسفة", callback_data="referral_rules")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def withdraw_review_menu(locked: bool = False):
+        if locked:
+            return InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔒 فات الطلب عالتنفيذ", callback_data="withdraw_locked")],
+                [Keyboards.home_btn()],
+            ])
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ ثبّت الطلب", callback_data="withdraw_confirm_submit")],
+            [InlineKeyboardButton("✏️ عدّل البيانات", callback_data="withdraw_edit_data")],
+            [InlineKeyboardButton("🗑️ انسف العملية", callback_data="withdraw_abort")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def withdraw_pending_menu(can_cancel: bool = True):
+        rows = []
+        if can_cancel:
+            rows.append([InlineKeyboardButton("🗑️ انسف الطلب", callback_data="withdraw_cancel_pending")])
+        else:
+            rows.append([InlineKeyboardButton("🔒 فات الطلب عالتنفيذ", callback_data="withdraw_locked")])
+        rows.append([Keyboards.home_btn()])
+        return InlineKeyboardMarkup(rows)
+
+    @staticmethod
+    def payment_methods(operation_type="deposit"):
+        """لوحة مفاتيح طرق الدفع"""
+        if operation_type == "deposit":
+            return Keyboards.wallet_deposit_menu()
+
+        keyboard = []
+        methods = Config.get_payment_methods_buttons()
+        for method in methods:
+            keyboard.append([InlineKeyboardButton(
+                text=method["text"],
+                callback_data=f"{operation_type}_{method['method_id']}",
+            )])
+        keyboard.append([Keyboards.home_btn()])
+        return InlineKeyboardMarkup(keyboard)
+
+    @staticmethod
     def cancel_operation(back_callback: str = "cancel_operation"):
-        """إلغاء والعودة للمرحلة الصحيحة"""
+        """إلغاء والعودة"""
         keyboard = [
             [InlineKeyboardButton("❌ إلغاء والرجوع", callback_data=back_callback)],
+            [Keyboards.home_btn()],
         ]
         return InlineKeyboardMarkup(keyboard)
 
@@ -157,31 +334,13 @@ class Keyboards:
         return Keyboards.start_menu()
 
     @staticmethod
-    def payment_methods(operation_type="deposit"):
-        """لوحة مفاتيح طرق الدفع — مثل شاشة الشحن في الصورة"""
-        keyboard = []
-        methods = Config.get_payment_methods_buttons()
+    def contact_menu():
+        return Keyboards.support_menu()
 
-        if operation_type == "deposit":
-            # ترتيب مثل الصورة: سيريتل، شام كاش، USDT، رجوع
-            order = ["syriatel_cash", "shamcash", "usdt"]
-            by_id = {m["method_id"]: m for m in methods}
-            for method_id in order:
-                method = by_id.get(method_id)
-                if method:
-                    keyboard.append([InlineKeyboardButton(
-                        text=method["text"],
-                        callback_data=f"{operation_type}_{method_id}",
-                    )])
-        else:
-            for method in methods:
-                keyboard.append([InlineKeyboardButton(
-                    text=method["text"],
-                    callback_data=f"{operation_type}_{method['method_id']}",
-                )])
+    @staticmethod
+    def transaction_history_menu():
+        return Keyboards.ledger_menu()
 
-        keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data="cancel_operation")])
-        return InlineKeyboardMarkup(keyboard)
     
     @staticmethod
     def confirm_transaction(transaction_id):
@@ -191,7 +350,7 @@ class Keyboards:
                 InlineKeyboardButton("✅ تأكيد", callback_data=f"confirm_{transaction_id}"),
                 InlineKeyboardButton("❌ إلغاء", callback_data=f"cancel_{transaction_id}")
             ],
-            [InlineKeyboardButton("🔙 العودة للقائمة الرئيسية", callback_data="main_menu")]
+            [Keyboards.home_btn()],
         ]
         return InlineKeyboardMarkup(keyboard)
     
@@ -255,38 +414,6 @@ class Keyboards:
         return InlineKeyboardMarkup(keyboard)
     
     @staticmethod
-    def back_to_main():
-        """زر العودة للقائمة الرئيسية"""
-        keyboard = [[InlineKeyboardButton("🏠 القائمة الرئيسية", callback_data="main_menu")]]
-        return InlineKeyboardMarkup(keyboard)
-    
-    @staticmethod
-    def referral_menu():
-        """قائمة الإحالات مثل الصورة"""
-        keyboard = [
-            [InlineKeyboardButton("🔗 شارك رابط الإحالة الخاص بك", callback_data="share_referral")],
-            [InlineKeyboardButton("↩️ العودة إلى القائمة", callback_data="main_menu")],
-        ]
-        return InlineKeyboardMarkup(keyboard)
-    
-    @staticmethod
-    def transaction_history_menu():
-        """قائمة سجل المعاملات"""
-        keyboard = [
-            [
-                InlineKeyboardButton("💰 الإيداعات", callback_data="history_deposits"),
-                InlineKeyboardButton("💸 السحوبات", callback_data="history_withdrawals")
-            ],
-            [
-                InlineKeyboardButton("🎁 الهدايا", callback_data="history_gifts"),
-                InlineKeyboardButton("👥 الإحالات", callback_data="history_referrals")
-            ],
-            [InlineKeyboardButton("📊 جميع المعاملات", callback_data="history_all")],
-            [InlineKeyboardButton("🔙 العودة للقائمة الرئيسية", callback_data="main_menu")]
-        ]
-        return InlineKeyboardMarkup(keyboard)
-    
-    @staticmethod
     def pagination(current_page, total_pages, callback_prefix):
         """أزرار التنقل بين الصفحات"""
         keyboard = []
@@ -307,20 +434,8 @@ class Keyboards:
             
             keyboard.append(nav_buttons)
         
-        keyboard.append([InlineKeyboardButton("🔙 العودة للقائمة الرئيسية", callback_data="main_menu")])
+        keyboard.append([Keyboards.home_btn()])
         return InlineKeyboardMarkup(keyboard)
-    
-    @staticmethod
-    def contact_menu():
-        """قائمة التواصل"""
-        keyboard = [
-            [InlineKeyboardButton("📧 إرسال رسالة للإدمن", callback_data="message_admin")],
-            [InlineKeyboardButton("📞 معلومات التواصل", callback_data="contact_info")],
-            [InlineKeyboardButton("❓ الأسئلة الشائعة", callback_data="faq")],
-            [InlineKeyboardButton("🔙 العودة للقائمة الرئيسية", callback_data="main_menu")]
-        ]
-        return InlineKeyboardMarkup(keyboard)
-
 
     
     @staticmethod
@@ -330,7 +445,7 @@ class Keyboards:
             [InlineKeyboardButton("🎲 معلومات الجاكبوت", callback_data="jackpot_info")],
             [InlineKeyboardButton("🏆 آخر الفائزين", callback_data="jackpot_winners")],
             [InlineKeyboardButton("🌐 العب على ichancy.com", callback_data="open_ichancy")],
-            [InlineKeyboardButton("🔙 العودة للقائمة الرئيسية", callback_data="main_menu")]
+            [Keyboards.home_btn()],
         ]
         return InlineKeyboardMarkup(keyboard)
     
@@ -597,6 +712,7 @@ class Keyboards:
         keyboard.append([
             InlineKeyboardButton("❌ إلغاء العملية", callback_data="cancel_operation")
         ])
+        keyboard.append([Keyboards.home_btn()])
         return InlineKeyboardMarkup(keyboard)
     
     @staticmethod

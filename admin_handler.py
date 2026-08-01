@@ -910,26 +910,35 @@ PRIZE100 10000
                 
                 # إشعار المستخدم
                 try:
-                    user_msg = (
-                        f"{emoji} {status_text} طلب {transaction.transaction_type} "
-                        f"بقيمة {format_currency(transaction.amount)}"
-                    )
+                    import napoleon_ui
+
+                    when = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
                     if action == "approve" and transaction.transaction_type == "withdraw":
-                        fee, net_amount = calculate_withdrawal_fee(transaction.amount)
-                        dest = transaction.withdraw_destination or ""
-                        user_msg += (
-                            f"\n📉 رسوم البوت ({Config.WITHDRAWAL_FEE_PERCENTAGE:g}%): "
-                            f"{format_currency(fee)}"
-                            f"\n💵 المبلغ المحوّل: {format_currency(net_amount)}"
+                        user_msg = napoleon_ui.withdraw_done_receipt(
+                            transaction.id,
+                            transaction.amount,
+                            transaction.withdraw_destination or "—",
+                            when,
                         )
-                        if dest:
-                            user_msg += f"\n📍 تم التحويل إلى: {dest}"
-                    elif action == "reject" and transaction.transaction_type == "withdraw":
-                        user_msg += "\n💵 تم إرجاع المبلغ لرصيدك"
+                        parse_mode = "HTML"
+                    elif action != "approve" and transaction.transaction_type == "withdraw":
+                        user_msg = napoleon_ui.withdraw_failed_receipt(
+                            transaction.id, when
+                        )
+                        if True:
+                            user_msg += "\n💵 تم إرجاع المبلغ لرصيدك"
+                        parse_mode = "HTML"
+                    else:
+                        user_msg = (
+                            f"{emoji} {status_text} طلب {transaction.transaction_type} "
+                            f"بقيمة {format_currency(transaction.amount)}"
+                        )
+                        parse_mode = None
 
                     await context.bot.send_message(
                         chat_id=user.telegram_id,
                         text=user_msg,
+                        parse_mode=parse_mode,
                     )
                 except TelegramError:
                     logger.warning(f"لا يمكن إرسال إشعار للمستخدم {user.telegram_id}")

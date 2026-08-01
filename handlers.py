@@ -9,6 +9,8 @@ from telegram.ext import ContextTypes
 from telegram.error import TelegramError
 
 import ui
+import napoleon_ui
+import screens
 from database import DatabaseManager, User, Transaction
 from config import Config
 from keyboards import Keyboards
@@ -253,37 +255,24 @@ async def interactive_answer(query, text: str, alert: bool = False):
 
 
 def build_home_card(user) -> str:
-    """بطاقة القائمة الرئيسية بتنسيق HTML"""
-    return (
-        ui.quote(Config.MESSAGES["ad_warning"])
-        + "\n"
-        + ui.card(
-            f"⚡️ {Config.BOT_DISPLAY_NAME} — القائمة الرئيسية",
-            [
-                ("💎 رصيدك:", f"<b>{format_currency(user.balance or 0)}</b>"),
-                ("🆔 آيديك:", tg_code(user.telegram_id)),
-            ],
-            footer="اختر الخدمة من الأزرار 👇",
-        )
-    )
+    """بطاقة مقر نابليون"""
+    return napoleon_ui.build_hq_home(user)
 
 
 async def show_funded_home(update: Update, context: ContextTypes.DEFAULT_TYPE, user):
     """القائمة الرئيسية."""
     welcome_message = build_home_card(user)
     markup = Keyboards.start_menu()
+    context.user_data.pop("state", None)
 
     if await ui.show_banner_screen(
         update, context, welcome_message, markup, Config.MENU_BANNER
     ):
         if update.callback_query:
-            await interactive_answer(update.callback_query, "🔓 القائمة الرئيسية")
+            await interactive_answer(update.callback_query, "🏠 رجوع للمقر")
         return
 
     if update.callback_query:
-        await interactive_answer(update.callback_query, "🔓 جاري فتح القائمة…")
-        if Config.UI_ANIMATIONS:
-            await ui.animate(update.callback_query, reply_markup=markup)
         await safe_edit_callback_message(
             update,
             welcome_message,
@@ -329,13 +318,21 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             last_name=update.effective_user.last_name,
         )
         if user and referral_code and referral_code != user.referral_code:
-            await handle_referral(user, referral_code)
+            await handle_referral(user, referral_code, context)
 
         if not user:
             await update.effective_message.reply_text(
                 "❌ تعذر إنشاء الحساب. أرسل /start وحاول مرة أخرى."
             )
             return
+    elif referral_code:
+        # مستخدم قديم فتح رابط إحالة
+        if update.effective_message:
+            await update.effective_message.reply_text(
+                "🔴 الإحالة ما انحسبت.\n\n"
+                "الحساب كان مسجل سابقًا،\n"
+                "يعني رفيقك وصل قبل الدعوة وسبقك عالباب 😌"
+            )
 
     if user_is_banned(user) and user_id not in Config.ADMIN_IDS:
         text = "🚫 حسابك محظور من استخدام البوت.\nتواصل مع الدعم إن كنت تظن أن هذا خطأ."
@@ -398,7 +395,7 @@ async def start_continue_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالج القائمة الرئيسية"""
+    """معالج القائمة الرئيسية / رجوع للمقر"""
     subscribed, reason = await check_channel_subscription(
         context, update.effective_user.id
     )
@@ -413,20 +410,10 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await start_handler(update, context)
         return
 
-    message = build_home_card(user)
+    if update.callback_query:
+        await interactive_answer(update.callback_query, napoleon_ui.HOME_BACK_TEXT[:180])
 
-    if update.message:
-        await update.message.reply_text(
-            message, reply_markup=Keyboards.main_menu(), parse_mode="HTML"
-        )
-    else:
-        await safe_edit_callback_message(
-            update,
-            message,
-            reply_markup=Keyboards.main_menu(),
-            parse_mode="HTML",
-            context=context,
-        )
+    await show_funded_home(update, context, user)
 
 
 async def full_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -435,200 +422,74 @@ async def full_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user or not user_accepted_terms(user):
         await start_handler(update, context)
         return
-
-    message = build_home_card(user)
-    markup = Keyboards.main_menu()
-    if await ui.show_banner_screen(update, context, message, markup, Config.MENU_BANNER):
-        return
-
-    if update.callback_query:
-        await safe_edit_callback_message(
-            update, message, reply_markup=markup, parse_mode="HTML", context=context
-        )
-    else:
-        await update.message.reply_text(
-            message, reply_markup=markup, parse_mode="HTML"
-        )
+    await show_funded_home(update, context, user)
 
 
 async def profile_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معلومات الملف الشخصي"""
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-
+    """بطاقة المستخدم"""
     user = db.get_user(update.effective_user.id)
     if not user:
         await start_handler(update, context)
         return
-
-    tg = update.effective_user
-    ichancy_line = (
-        f"🎰 Ichancy: `{user.ichancy_username}` | Id `{user.ichancy_player_id}`"
-        if user.ichancy_player_id
-        else "🎰 Ichancy: غير مرتبط"
-    )
-    sy_count = db.count_saved_accounts(user.id, "syriatel_cash")
-    sc_count = db.count_saved_accounts(user.id, "shamcash")
-
-    message = f"""
-👤 معلومات الملف الشخصي
-
-🆔 الايدي: `{user.telegram_id}`
-👤 الاسم: {get_user_display_name(user)}
-📱 يوزر تليجرام: @{tg.username or '—'}
-💵 رصيد البوت: {format_currency(user.balance)}
-👥 الإحالات: {user.referral_count} | أرباح: {format_currency(user.referral_earnings)}
-{ichancy_line}
-📱 أرقام سيريتل محفوظة: {sy_count}/{Config.max_saved_accounts('syriatel_cash')}
-💳 حساب شام كاش: {sc_count}/{Config.max_saved_accounts('shamcash')}
-"""
-    markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📱 حساباتي المحفوظة", callback_data="saved_accounts")],
-        [InlineKeyboardButton("⚡️ حساب Ichancy", callback_data="ichancy_hub")],
-        [InlineKeyboardButton("↪️ رجوع", callback_data="full_menu")],
-    ])
-
-    if update.callback_query:
-        await update.callback_query.edit_message_text(
-            message, reply_markup=markup, parse_mode="Markdown"
-        )
-    else:
-        await update.message.reply_text(
-            message, reply_markup=markup, parse_mode="Markdown"
-        )
+    await screens.show_card(update, context, user, update.effective_user)
 
 
 async def refund_request_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """طلب استرداد حوالة — يُرسل للإدمن"""
-    message = """
-🔄 طلب استرداد حوالة
-
-أرسل تفاصيل الطلب في رسالة واحدة:
-• نوع الحوالة (سيريتل / شام كاش / USDT)
-• رقم العملية
-• المبلغ
-• سبب الاسترداد
-
-سيتم مراجعة الطلب من الإدارة.
-"""
+    """طلب استرداد حوالة"""
+    message = (
+        "🔁 رجّعلي حوالتي\n\n"
+        "أرسل تفاصيل الطلب في رسالة واحدة:\n"
+        "• نوع الحوالة\n• رقم العملية\n• المبلغ\n• سبب الاسترداد\n\n"
+        "المحاسب رح يراجع الطلب... بلا دراما زيادة 😂"
+    )
     context.user_data["state"] = WAITING_FOR_MESSAGE
     context.user_data["operation"] = "refund_request"
-    await update.callback_query.edit_message_text(
-        message,
-        reply_markup=Keyboards.cancel_operation(),
+    await safe_edit_callback_message(
+        update, message, reply_markup=Keyboards.cancel_operation(), context=context
     )
 
 
 async def deposit_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالج الإيداع — شاشة شحن مثل الصورة"""
+    """عبّي محفظتي"""
     from payment_handler import reset_payment_session
-
     user = db.get_user(update.effective_user.id)
     if not user:
         await start_handler(update, context)
         return
-
     chat_id = update.effective_chat.id if update.effective_chat else None
     await reset_payment_session(context, bot=context.bot, chat_id=chat_id)
+    await screens.show_deposit_hub(update, context, user)
 
-    message = f"""❞ شحن رصيد البوت ❝
-
-💰 الرصيد الخاص بك: {format_currency(user.balance)}
-
-اشحن رصيد في البوت عن طريق احدى وسائل الدفع
-اختر طريقة واحدة فقط (سيريتل أو شام كاش أو USDT):
-"""
-
-    if update.callback_query:
-        await safe_edit_callback_message(
-            update,
-            message,
-            reply_markup=Keyboards.payment_methods("deposit"),
-            context=context,
-        )
-    else:
-        await update.message.reply_text(
-            message,
-            reply_markup=Keyboards.payment_methods("deposit"),
-        )
 
 async def withdraw_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالج السحب"""
+    """فضّي محفظتي"""
     user = db.get_user(update.effective_user.id)
-    
-    if user.balance < Config.MIN_WITHDRAWAL:
-        message = (
-            f"❌ الحد الأدنى للسحب هو {format_currency(Config.MIN_WITHDRAWAL)}\n"
-            f"💵 رصيدك الحالي: {format_currency(user.balance)}"
-        )
-        if update.callback_query:
-            await safe_edit_callback_message(
-                update, message, reply_markup=Keyboards.main_menu(), context=context
-            )
-        else:
-            await update.message.reply_text(message, reply_markup=Keyboards.main_menu())
+    if not user:
+        await start_handler(update, context)
         return
-    
-    message = f"""
-💸 سحب من محفظة البوت إلى الواقع
+    await screens.show_withdraw_hub(update, context, user)
 
-💵 رصيدك الحالي: {format_currency(user.balance)}
-💰 الحد الأدنى: {format_currency(Config.MIN_WITHDRAWAL)}
-💰 الحد الأقصى: {format_currency(Config.MAX_WITHDRAWAL)}
-📉 رسوم السحب: {Config.WITHDRAWAL_FEE_PERCENTAGE:g}% لصاحب البوت
-
-⏳ يتطلب موافقة الإدمن — سيتم تحويل المبلغ يدوياً
-
-اختر طريقة الاستلام:
-    """
-    
-    if update.callback_query:
-        await safe_edit_callback_message(
-            update,
-            message,
-            reply_markup=Keyboards.payment_methods("withdraw"),
-            context=context,
-        )
-    else:
-        await update.message.reply_text(
-            message,
-            reply_markup=Keyboards.payment_methods("withdraw")
-        )
 
 async def referral_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالج نظام الإحالات"""
     user = db.get_user(update.effective_user.id)
     if not user:
         await start_handler(update, context)
         return
     await ReferralHandler.show_referral_menu(update, context)
 
+
 async def wallet_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """شاشة محفظة البوت — إهداء بالـ ID فقط"""
+    """جيبتي"""
     user = db.get_user(update.effective_user.id)
     if not user:
         await start_handler(update, context)
         return
+    await screens.show_pocket(update, context, user)
 
-    message = ui.card(
-        "💼 محفظة البوت",
-        [
-            ("💵 رصيدك:", f"<b>{format_currency(user.balance)}</b>"),
-            ("🆔 آيديك:", tg_code(user.telegram_id)),
-        ],
-        footer="تقدر تهدي رصيد لأي شخص على البوت عن طريق الآيدي تبعه 🎁",
-    )
-    if update.callback_query:
-        await safe_edit_callback_message(
-            update,
-            message,
-            reply_markup=Keyboards.wallet_menu(),
-            parse_mode="HTML",
-            context=context,
-        )
-    else:
-        await update.message.reply_text(
-            message, reply_markup=Keyboards.wallet_menu(), parse_mode="HTML"
-        )
+
+async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """الحقني يا دعم"""
+    await screens.show_support(update, context)
 
 
 async def gift_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -681,46 +542,20 @@ async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await AdminHandler.admin_panel(update, context)
 
 async def transaction_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالج سجل المعاملات"""
-    message = """
-📜 سجل العمليات
+    """دفتر الفضايح"""
+    await screens.show_ledger(update, context)
 
-اختر نوع المعاملات التي تريد عرضها:
-    """
-    
-    if update.callback_query:
-        await update.callback_query.edit_message_text(
-            message,
-            reply_markup=Keyboards.transaction_history_menu()
-        )
-    else:
-        await update.message.reply_text(
-            message,
-            reply_markup=Keyboards.transaction_history_menu()
-        )
-
-async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالج التواصل"""
-    message = """
-📧 تواصل معنا
-
-يمكنك التواصل معنا من خلال الخيارات التالية:
-    """
-    
-    if update.callback_query:
-        await safe_edit_callback_message(
-            update, message, reply_markup=Keyboards.contact_menu(), context=context
-        )
-    else:
-        await update.message.reply_text(
-            message,
-            reply_markup=Keyboards.contact_menu()
-        )
 
 async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالج الاستعلامات المضمنة"""
     query = update.callback_query
     data = query.data
+
+    # منع الضغط المتكرر (ثانيتان) — عدا الاشتراك/الموافقة
+    if data not in ("accept_side_effects", "check_subscription"):
+        if napoleon_ui.rate_limited(context, update.effective_user.id):
+            await interactive_answer(query, napoleon_ui.PRESS_SPAM_TEXT, alert=True)
+            return
 
     if data == "accept_side_effects":
         db.create_user(
@@ -753,30 +588,34 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     # ردود تفاعلية قصيرة حسب الزر
     toast = {
-        "deposit": "📥 نفتحلك بوابة الشحن…",
-        "withdraw": "📤 نجهّزلك السحب…",
-        "ichancy_hub": "⚡️ نجيب بيانات حسابك…",
-        "ichancy_create_start": "⚔️ يلا نعملك حساب…",
-        "ichancy_topup_start": "📊 شحن Ichancy جاهز…",
-        "ichancy_withdraw_start": "📉 سحب من Ichancy…",
-        "gift_code": "🏆 جرّب حظك بالكود…",
-        "gift_balance": "💼 محفظتك عم تفتح…",
-        "gift_send": "🎁 خلينا نهدي حدا…",
-        "contact": "✉️ الدعم معك خلال ثواني…",
-        "referrals": "💠 أرباح الإحالات…",
-        "profile": "📌 ملفك الشخصي…",
-        "transactions": "📜 نفتح السجل…",
-        "main_menu": "🏠 رجوع للقائمة…",
-        "full_menu": "📋 كل الخدمات…",
-        "refund_request": "🧾 طلب استرداد…",
-        "terms": "🗺 الدليل الشامل…",
-        "deposit_usdt": "🟢 قسم الدولار…",
+        "deposit": "⚡ تنعش المحفظة…",
+        "withdraw": "🏧 قسم الإخراج…",
+        "ichancy_hub": "⚡️ حسابك…",
+        "ichancy_create_start": "⚔️ إنشاء حساب…",
+        "ichancy_topup_start": "💸 بوابة التعبئة…",
+        "ichancy_withdraw_start": "💰 قسم السحب…",
+        "gift_code": "🎟️ الكود يا بطل…",
+        "gift_balance": "👛 جيبتي…",
+        "gift_send": "🎁 هدية…",
+        "contact": "🚑 الدعم…",
+        "referrals": "👥 جيب رفيقك…",
+        "profile": "🪪 بطاقتك…",
+        "transactions": "🧾 دفتر الفضايح…",
+        "main_menu": "🏠 رجوع للمقر…",
+        "full_menu": "📋 القائمة…",
+        "extras_menu": "🧰 شغلات زيادة…",
+        "guide_quick": "📘 فهمني بسرعة…",
+        "refund_request": "🔁 استرداد…",
+        "terms": "📘 الدليل…",
         "cancel_operation": "❌ تم الإلغاء",
     }.get(data)
     if toast:
         await interactive_answer(query, toast)
     else:
-        await query.answer()
+        try:
+            await query.answer()
+        except TelegramError:
+            pass
 
     # اعتراض دفاعي للأزرار القديمة قبل جميع بوابات التسجيل.
     if data == "ichancy_link_account":
@@ -793,7 +632,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         )
         return
 
-    # بوابة الموافقة: قبل الضغط على «أوافق» لا شيء متاح (الإدمن مستثنى)
+    # بوابة الموافقة
     user = db.get_user(update.effective_user.id)
     if user_is_banned(user) and not is_admin:
         await interactive_answer(query, "حساب محظور", alert=True)
@@ -810,20 +649,226 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     # القائمة الرئيسية
     if data == "main_menu":
         await main_menu_handler(update, context)
-    elif data == "full_menu":
+        return
+    if data == "full_menu":
         await full_menu_handler(update, context)
-    elif data == "start_continue":
+        return
+    if data == "start_continue":
         await start_continue_handler(update, context)
-    
-    # الإيداع والسحب
-    elif data == "deposit":
-        await deposit_handler(update, context)
-    elif data == "withdraw":
+        return
+
+    # شاشات نابليون الجديدة
+    if data == "extras_menu":
+        await screens.show_extras(update, context)
+        return
+    if data == "guide_quick":
+        await screens.show_guide(update, context)
+        return
+    if data == "extras_surprises":
+        await safe_edit_callback_message(
+            update,
+            "🎁 مفاجآت المعلم\n\nلسا عم نحضّرها بالمستودع الخلفي.\nخلّيك قريب 😂",
+            reply_markup=Keyboards.extras_menu(),
+            context=context,
+        )
+        return
+    if data == "extras_news":
+        await safe_edit_callback_message(
+            update,
+            "📢 آخر الأخبار\n\nما في بيان رسمي اليوم.\nالمقر هادي… وهذا خبر كويس 😌",
+            reply_markup=Keyboards.extras_menu(),
+            context=context,
+        )
+        return
+    if data == "extras_settings":
+        await safe_edit_callback_message(
+            update,
+            "⚙️ الإعدادات\n\nقريبًا من هون بتقدر تضبط إشعاراتك وحساباتك المحفوظة.",
+            reply_markup=Keyboards.extras_menu(),
+            context=context,
+        )
+        return
+    if data == "wallet_refresh":
+        user = db.get_user(update.effective_user.id)
+        await screens.show_pocket(update, context, user)
+        return
+    if data == "deposit_other":
+        await safe_edit_callback_message(
+            update,
+            "💵 طرق ثانية\n\nحاليًا المتاح: سيرياتيل / شام كاش / عملات رقمية.\nإذا عندك طريقة خاصة تواصل مع الدعم.",
+            reply_markup=Keyboards.wallet_deposit_menu(),
+            context=context,
+        )
+        return
+    if data == "withdraw_enter_amount":
+        context.user_data["state"] = WAITING_FOR_AMOUNT
+        context.user_data["operation"] = "withdraw"
+        context.user_data.pop("method", None)
+        await safe_edit_callback_message(
+            update,
+            "💰 اكتب المبلغ رقمًا فقط\n\n"
+            f"الحد الأدنى: {format_currency(Config.MIN_WITHDRAWAL)}\n"
+            f"الحد الأقصى: {format_currency(Config.MAX_WITHDRAWAL)}",
+            reply_markup=Keyboards.cancel_operation(),
+            context=context,
+        )
+        return
+    if data == "withdraw_rules":
+        await safe_edit_callback_message(
+            update,
+            "📋 شروط السحب\n\n"
+            f"• الحد الأدنى: {format_currency(Config.MIN_WITHDRAWAL)}\n"
+            f"• الرسوم: {Config.WITHDRAWAL_FEE_PERCENTAGE:g}%\n"
+            "• الطلب يمر بمراجعة يدوية\n"
+            "• لا تضغط مرتين على نفس الطلب\n"
+            "• استخدم الخدمة بمسؤولية 🔞",
+            reply_markup=Keyboards.wallet_withdraw_gate(),
+            context=context,
+        )
+        return
+    if data == "ichancy_topup_know_id":
+        await IchancyHandler.start_topup(update, context)
+        return
+    if data == "ichancy_topup_where_id":
+        await safe_edit_callback_message(
+            update,
+            "🆘 وين بلاقي الـ ID؟\n\n"
+            "من معلومات حسابك داخل البوت (🪪 بطاقتي / حساب Ichancy)\n"
+            "أو من لوحة اللاعب على المنصة — أرقام فقط بدون مسافات.",
+            reply_markup=Keyboards.ichancy_topup_gate(),
+            context=context,
+        )
+        return
+    if data == "ichancy_withdraw_continue":
+        await IchancyHandler.start_withdraw_from_ichancy(update, context)
+        return
+    if data == "ichancy_withdraw_rules":
+        mins = Config.ICHANCY_CONFIG.get("withdraw_cooldown_minutes", 30)
+        await safe_edit_callback_message(
+            update,
+            "📋 شروط السحب من iChancy\n\n"
+            f"• سحب واحد كل {mins} دقيقة\n"
+            "• لازم يكون عندك حساب مرتبط بالبوت\n"
+            "• المبلغ ينزل لمحفظة البوت بعد التنفيذ\n"
+            "• استخدم الخدمة بمسؤولية 🔞",
+            reply_markup=Keyboards.ichancy_withdraw_gate(),
+            context=context,
+        )
+        return
+    if data == "gift_code_enter":
+        context.user_data["state"] = WAITING_FOR_GIFT_CODE
+        await safe_edit_callback_message(
+            update,
+            "⌨️ اكتب الكود هون مثل ما هو\nولا تزخرفه... الكود حساس وبيزعل بسرعة 😂",
+            reply_markup=Keyboards.cancel_operation(),
+            context=context,
+        )
+        return
+    if data == "gift_code_history":
+        await safe_edit_callback_message(
+            update,
+            "📋 أكوادك السابقة\n\nالسجل التفصيلي قريبًا.\nإذا استخدمت كود ناجح، الرصيد بينضاف مباشرة.",
+            reply_markup=Keyboards.gift_code_menu(),
+            context=context,
+        )
+        return
+    if data.startswith("guide_"):
+        tips = {
+            "guide_deposit": "💸 عبّي محفظتك من زر «عبّي محفظتي»، اختار الطريقة واتبع الخطوات.",
+            "guide_withdraw": "💰 اسحب من «فضّي محفظتي»، راجع الشاشة النهائية قبل التثبيت.",
+            "guide_wallet": "👛 المحفظة رصيد البوت الداخلي: تعبئة ← شحن iChancy أو سحب للواقع.",
+            "guide_faq": "🆘 مشكلة شائعة: تأكد من الأرقام، لا تضغط مرتين، وتأكد إن الطلب مش معلّق.",
+            "guide_responsible": "🔞 الخدمة للبالغين فقط. استخدمها بمسؤولية وبدون مخاطرة زيادة.",
+        }
+        tip = tips.get(data, "📘 اختار موضوع من الدليل.")
+        await safe_edit_callback_message(
+            update, tip, reply_markup=Keyboards.guide_menu(), context=context
+        )
+        return
+    if data in ("history_deposits", "history_withdrawals", "history_pending", "history_by_date", "history_all", "history_gifts", "history_referrals"):
+        user = db.get_user(update.effective_user.id)
+        kind = {
+            "history_deposits": "deposits",
+            "history_withdrawals": "withdrawals",
+            "history_pending": "pending",
+            "history_all": "all",
+            "history_gifts": "all",
+            "history_referrals": "all",
+            "history_by_date": "all",
+        }[data]
+        if data == "history_by_date":
+            await safe_edit_callback_message(
+                update,
+                "📆 اختيار التاريخ\n\nقريبًا تقدر تصفّي حسب يوم معيّن.\nهلّق اعرض السجل من الأزرار الثانية.",
+                reply_markup=Keyboards.ledger_menu(),
+                context=context,
+            )
+            return
+        await screens.show_history(update, context, user, kind)
+        return
+    if data in ("profile_edit", "profile_security"):
+        await safe_edit_callback_message(
+            update,
+            "🪪 القسم قيد التجهيز.\nالحسابات المحفوظة من زر بطاقتي السابق صارت ضمن الإعدادات قريبًا.",
+            reply_markup=Keyboards.profile_menu(),
+            context=context,
+        )
+        return
+    if data in ("support_photo", "support_tx_issue"):
+        context.user_data["state"] = WAITING_FOR_MESSAGE
+        context.user_data["operation"] = "message_admin"
+        await safe_edit_callback_message(
+            update,
+            "📝 اكتب مشكلتك برسالة واحدة واضحة.\nإذا صورة، أرسلها مع تعليق قصير.",
+            reply_markup=Keyboards.cancel_operation(),
+            context=context,
+        )
+        return
+    if data == "referral_recruits":
+        await ReferralHandler.show_recruits(update, context)
+        return
+    if data == "referral_rewards":
+        await ReferralHandler.show_rewards(update, context)
+        return
+    if data == "referral_rules":
+        await ReferralHandler.show_rules(update, context)
+        return
+    if data == "withdraw_confirm_submit":
+        await PaymentHandler.confirm_withdraw_review(update, context)
+        return
+    if data == "withdraw_edit_data":
         await withdraw_handler(update, context)
-    elif data == "profile":
+        return
+    if data == "withdraw_abort":
+        context.user_data.clear()
+        await safe_edit_callback_message(
+            update,
+            "🗑️ انسفنا العملية.\nما صار شي بالحساب.",
+            reply_markup=Keyboards.back_to_main(),
+            context=context,
+        )
+        return
+    if data == "withdraw_cancel_pending":
+        await PaymentHandler.cancel_pending_withdraw(update, context)
+        return
+    if data == "withdraw_locked":
+        await interactive_answer(query, "🔒 فات الطلب عالتنفيذ", alert=True)
+        return
+
+    # الإيداع والسحب
+    if data == "deposit":
+        await deposit_handler(update, context)
+        return
+    if data == "withdraw":
+        await withdraw_handler(update, context)
+        return
+    if data == "profile":
         await profile_handler(update, context)
-    elif data == "refund_request":
+        return
+    if data == "refund_request":
         await refund_request_handler(update, context)
+        return
+
 
     # ichancy — حساب / شحن / سحب
     elif data in ("ichancy_to_bot", "ichancy_hub"):
@@ -831,9 +876,9 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     elif data == "ichancy_create_start":
         await IchancyHandler.start_create_account(update, context)
     elif data == "ichancy_topup_start":
-        await IchancyHandler.start_topup(update, context)
+        await screens.show_ichancy_topup_gate(update, context)
     elif data == "ichancy_withdraw_start":
-        await IchancyHandler.start_withdraw_from_ichancy(update, context)
+        await screens.show_ichancy_withdraw_gate(update, context)
     elif data == "ichancy_change_password":
         await IchancyHandler.change_password_info(update, context)
     elif data == "open_facebook":
@@ -953,7 +998,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
                 reply_markup=Keyboards.cancel_operation(),
             )
             return
-        await PaymentHandler.execute_manual_withdraw(
+        await PaymentHandler.show_withdraw_review(
             update, context, account.account_value
         )
     elif data.startswith("withdraw_manual_dest_"):
@@ -1112,6 +1157,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             update, context, update.message.text.strip()
         )
     else:
+        # ردود سرّية على كلمات معيّنة
+        secret = napoleon_ui.match_secret_reply(update.message.text or "")
+        if secret:
+            await update.message.reply_text(secret)
+            return
         if user:
             await show_user_home(update, context, user)
         else:
@@ -1126,9 +1176,9 @@ async def handle_tx_number_input(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def handle_withdraw_destination_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة وجهة السحب للواقع — يدوي بموافقة الإدمن"""
+    """بعد إدخال الوجهة — شاشة مراجعة نهائية قبل التثبيت"""
     destination = update.message.text.strip()
-    await PaymentHandler.execute_manual_withdraw(update, context, destination)
+    await PaymentHandler.show_withdraw_review(update, context, destination)
 
 
 async def handle_ichancy_player_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1166,7 +1216,7 @@ async def cancel_pending_payment(context: ContextTypes.DEFAULT_TYPE):
 
 
 
-async def handle_referral(user, referral_ref):
+async def handle_referral(user, referral_ref, context=None):
     """معالجة الإحالة — يقبل آيدي تليجرام أو كود الإحالة"""
     if not referral_ref:
         return
@@ -1191,11 +1241,12 @@ async def handle_referral(user, referral_ref):
         if not referrer or referrer.id == user.id:
             return
 
-        # حفظ آيدي المُحيل لربط رابط الإحالة
         db_user = session.query(User).filter(User.id == user.id).first()
         if db_user.referred_by:
-            return  # سبق تسجيل إحالة
+            # مستخدم قديم / إحالة سابقة
+            return
 
+        # إذا الحساب موجود من قبل وما كان جديد — ما ينحسب (create_user فقط يستدعي)
         db_user.referred_by = str(referrer.telegram_id)
         referrer.referral_count = (referrer.referral_count or 0) + 1
         session.commit()
@@ -1204,6 +1255,17 @@ async def handle_referral(user, referral_ref):
             user.telegram_id,
             referrer.telegram_id,
         )
+        if context:
+            try:
+                await context.bot.send_message(
+                    chat_id=referrer.telegram_id,
+                    text=(
+                        "🟡 رفيقك وصل للمقر،\n"
+                        "بس لسا عم يتفرّج عالأزرار."
+                    ),
+                )
+            except Exception:
+                pass
     finally:
         session.close()
 
@@ -1257,6 +1319,33 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             await IchancyHandler.process_topup(update, context, amount)
         
         elif operation == 'withdraw':
+            if not method:
+                is_valid, validated_amount, error_msg = validate_amount(
+                    str(amount),
+                    Config.MIN_WITHDRAWAL,
+                    Config.MAX_WITHDRAWAL,
+                )
+                if not is_valid:
+                    await update.message.reply_text(
+                        error_msg, reply_markup=Keyboards.cancel_operation()
+                    )
+                    return
+                user = db.get_user(update.effective_user.id)
+                if user.balance < validated_amount:
+                    await update.message.reply_text(
+                        f"❌ رصيدك غير كافي\n💵 رصيدك: {format_currency(user.balance)}",
+                        reply_markup=Keyboards.cancel_operation(),
+                    )
+                    return
+                context.user_data["amount"] = validated_amount
+                context.user_data["state"] = None
+                context.user_data["operation"] = "withdraw"
+                await update.message.reply_text(
+                    f"💰 المبلغ: {format_currency(validated_amount)}\n\n"
+                    "اختار طريقة الاستلام:",
+                    reply_markup=Keyboards.payment_methods("withdraw"),
+                )
+                return
             await PaymentHandler.process_withdraw_request(update, context, amount, method)
     
     except ValueError:
@@ -1357,21 +1446,8 @@ async def handle_recipient_input(update: Update, context: ContextTypes.DEFAULT_T
         session.close()
 
 async def handle_gift_code_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """مود أكواد الجوائز — مثل الصورة"""
-    message = "🏆 ادخل الكود للحصول على الجائزة"
-
-    context.user_data['state'] = WAITING_FOR_GIFT_CODE
-
-    if update.callback_query:
-        await update.callback_query.edit_message_text(
-            message,
-            reply_markup=Keyboards.cancel_operation(),
-        )
-    else:
-        await update.message.reply_text(
-            message,
-            reply_markup=Keyboards.cancel_operation(),
-        )
+    """كودك يا بطل"""
+    await screens.show_gift_code(update, context)
 
 
 async def handle_gift_code_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1389,7 +1465,7 @@ async def handle_gift_code_input(update: Update, context: ContextTypes.DEFAULT_T
 
         # كود خاطئ أو غير موجود — نفس رسالة الصورة
         if not gift_code or gift_code.current_uses >= gift_code.max_uses:
-            await update.message.reply_text("🚫 الكود خاطيء")
+            await update.message.reply_text("🤨 هالكود دخل متنكّر.\n\nتأكد من الأحرف والأرقام،\nوجرّب مرة ثانية بلا بهارات 😂", reply_markup=Keyboards.gift_code_menu())
             # يبقى في المود حتى يحاول مرة أخرى أو يلغي
             return
 
@@ -1400,7 +1476,7 @@ async def handle_gift_code_input(update: Update, context: ContextTypes.DEFAULT_T
         ).first()
 
         if existing_usage:
-            await update.message.reply_text("🚫 الكود خاطيء")
+            await update.message.reply_text("🤨 هالكود دخل متنكّر.\n\nتأكد من الأحرف والأرقام،\nوجرّب مرة ثانية بلا بهارات 😂", reply_markup=Keyboards.gift_code_menu())
             return
 
         # تطبيق الكود بنجاح — مرة واحدة فقط ثم تعطيله
@@ -1424,7 +1500,7 @@ async def handle_gift_code_input(update: Update, context: ContextTypes.DEFAULT_T
             f"✅ تم قبول الكود!\n"
             f"🏆 الجائزة: {format_currency(gift_code.amount)}\n"
             f"💰 رصيدك الآن: {format_currency(db_user.balance)}",
-            reply_markup=Keyboards.start_menu(),
+            reply_markup=Keyboards.back_to_main(),
         )
 
     finally:
@@ -1489,10 +1565,8 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
                 logger.warning(f"لا يمكن إرسال إشعار للإدمن {admin_id}")
         
         await update.message.reply_text(
-            "✅ تم إرسال طلب الاسترداد للإدارة."
-            if is_refund
-            else "✅ تم إرسال رسالتك للإدارة. سيتم الرد عليك قريباً",
-            reply_markup=Keyboards.main_menu(),
+            "✅ وصلت رسالتك للدعم.\n\nصار الملف برقبتهم رسميًا...\nوالبوت انسحب من القضية بكل احترام 😂",
+            reply_markup=Keyboards.back_to_main(),
         )
         
         context.user_data.clear()
@@ -1544,6 +1618,17 @@ async def handle_payment_method(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     chat_id = update.effective_chat.id if update.effective_chat else None
+
+    # سحب: إذا المبلغ محدد مسبقاً من شاشة «اكتب المبلغ»
+    if operation == "withdraw" and context.user_data.get("amount"):
+        amount = context.user_data["amount"]
+        context.user_data["method"] = method
+        context.user_data["operation"] = "withdraw"
+        await PaymentHandler.process_withdraw_request_from_callback(
+            update, context, float(amount), method
+        )
+        return
+
     await reset_payment_session(context, bot=context.bot, chat_id=chat_id)
     
     if operation == "deposit":

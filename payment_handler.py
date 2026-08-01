@@ -1448,14 +1448,12 @@ class PaymentHandler:
             dest_prompt = f"📝 أرسل {tg_bold('بيانات الاستلام')} (رقم أو عنوان):"
 
         message = f"""
-✅ تم تسجيل طلب السحب
+🧾 تجهيز السحب
 
 💸 المبلغ: {format_currency(validated_amount)}
 📉 رسوم البوت ({fee_pct:g}%): {format_currency(fee)}
 💵 المبلغ المستلم: {format_currency(net_amount)}
 🏦 الطريقة: {method_info['name']} {method_info['emoji']}
-
-⏳ {tg_bold("يتطلب موافقة الإدمن")} — سيتم تحويل المبلغ يدوياً بعد المراجعة
 
 {dest_prompt}
         """
@@ -1481,17 +1479,215 @@ class PaymentHandler:
             )
 
     @staticmethod
+    async def process_withdraw_request_from_callback(
+        update: Update, context: ContextTypes.DEFAULT_TYPE, amount: float, method: str
+    ):
+        """نفس تجهيز السحب لكن من زر callback (edit message)."""
+        user = db.get_user(update.effective_user.id)
+        is_valid, validated_amount, error_msg = validate_amount(
+            str(amount),
+            Config.MIN_WITHDRAWAL,
+            min(Config.MAX_WITHDRAWAL, user.balance),
+        )
+        if not is_valid:
+            await safe_edit_callback_message(
+                update, error_msg, reply_markup=Keyboards.back_to_main(), context=context
+            )
+            return
+
+        method_info = Config.PAYMENT_METHODS[method]
+        fee, net_amount = calculate_withdrawal_fee(validated_amount)
+        if method == "syriatel_cash":
+            dest_prompt = "📱 اختر رقم سيريتل كاش المحفوظ أو أدخل رقماً جديداً:"
+        elif method == "shamcash":
+            dest_prompt = "💳 اختر حساب شام كاش المحفوظ أو أدخل حساباً جديداً:"
+        elif method == "usdt":
+            dest_prompt = "💰 أرسل عنوان محفظة USDT (TRC20) لاستلام المبلغ:"
+        else:
+            dest_prompt = "📝 أرسل بيانات الاستلام (رقم أو عنوان):"
+
+        message = (
+            "🧾 تجهيز السحب\n\n"
+            f"💸 المبلغ: {format_currency(validated_amount)}\n"
+            f"📉 الرسوم: {format_currency(fee)}\n"
+            f"💵 الصافي: {format_currency(net_amount)}\n"
+            f"🏦 الطريقة: {method_info['name']}\n\n"
+            f"{dest_prompt}"
+        )
+        context.user_data["state"] = "waiting_for_withdraw_destination"
+        context.user_data["operation"] = "withdraw_manual"
+        context.user_data["method"] = method
+        context.user_data["amount"] = validated_amount
+
+        markup = Keyboards.cancel_operation()
+        if method in ("syriatel_cash", "shamcash"):
+            accounts = db.get_saved_accounts(user.id, method)
+            markup = Keyboards.withdraw_destination_choices(accounts, method)
+        await safe_edit_callback_message(
+            update, message, reply_markup=markup, context=context
+        )
+
+    @staticmethod
+    async def show_withdraw_review(
+        update: Update, context: ContextTypes.DEFAULT_TYPE, destination: str
+    ):
+        """شاشة مراجعة نهائية قبل تثبيت طلب السحب."""
+        import napoleon_ui
+
+        method = context.user_data.get("method")
+        amount = context.user_data.get("amount")
+        operation = context.user_data.get("operation")
+        if operation != "withdraw_manual" or not method or not amount:
+            context.user_data.clear()
+            target = update.effective_message
+            await target.reply_text(
+                "❌ انتهت جلسة العملية. ابدأ من جديد.",
+                reply_markup=Keyboards.back_to_main(),
+            )
+            return
+
+        destination = (destination or "").strip()
+        if len(destination) < 5:
+            await update.effective_message.reply_text(
+                "❌ بيانات الاستلام غير صحيحة. حاول مرة أخرى.",
+                reply_markup=Keyboards.cancel_operation(),
+            )
+            return
+
+        # منع نسخة مكررة لنفس الطلب المعلّق
+        user = db.get_user(update.effective_user.id)
+        session = db.get_session()
+        try:
+            dup = (
+                session.query(Transaction)
+                .filter(
+                    Transaction.user_id == user.id,
+                    Transaction.transaction_type == "withdraw",
+                    Transaction.status == "pending",
+                    Transaction.amount == float(amount),
+                    Transaction.method == method,
+                    Transaction.withdraw_destination == destination,
+                )
+                .first()
+            )
+            if dup:
+                await update.effective_message.reply_text(
+                    napoleon_ui.duplicate_order_text(),
+                    reply_markup=Keyboards.withdraw_pending_menu(can_cancel=True),
+                )
+                context.user_data["pending_withdraw_id"] = dup.id
+                return
+        finally:
+            session.close()
+
+        method_info = Config.PAYMENT_METHODS.get(method, {})
+        method_name = method_info.get("name", method)
+        context.user_data["withdraw_destination"] = destination
+        context.user_data["state"] = "waiting_withdraw_confirm"
+        context.user_data["operation"] = "withdraw_manual"
+
+        text = napoleon_ui.withdraw_review_text(destination, float(amount), method_name)
+        target = update.callback_query
+        if target:
+            await safe_edit_callback_message(
+                update,
+                text,
+                reply_markup=Keyboards.withdraw_review_menu(),
+                parse_mode="HTML",
+                context=context,
+            )
+        else:
+            await update.effective_message.reply_text(
+                text,
+                reply_markup=Keyboards.withdraw_review_menu(),
+                parse_mode="HTML",
+            )
+
+    @staticmethod
+    async def confirm_withdraw_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        destination = context.user_data.get("withdraw_destination")
+        if not destination:
+            await safe_edit_callback_message(
+                update,
+                "❌ ما في بيانات للمراجعة. ابدأ السحب من جديد.",
+                reply_markup=Keyboards.back_to_main(),
+                context=context,
+            )
+            return
+        # قفل الزر ضد الضغط المزدوج
+        if context.user_data.get("withdraw_submit_lock"):
+            import napoleon_ui
+            await update.callback_query.answer(napoleon_ui.duplicate_order_text()[:180], show_alert=True)
+            return
+        context.user_data["withdraw_submit_lock"] = True
+        await PaymentHandler.execute_manual_withdraw(update, context, destination)
+
+    @staticmethod
+    async def cancel_pending_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        import napoleon_ui
+
+        user = db.get_user(update.effective_user.id)
+        tx_id = context.user_data.get("pending_withdraw_id")
+        session = db.get_session()
+        try:
+            q = session.query(Transaction).filter(
+                Transaction.user_id == user.id,
+                Transaction.transaction_type == "withdraw",
+                Transaction.status == "pending",
+            )
+            if tx_id:
+                q = q.filter(Transaction.id == int(tx_id))
+            tx = q.order_by(Transaction.created_at.desc()).first()
+            if not tx:
+                await safe_edit_callback_message(
+                    update,
+                    "ما في طلب معلّق للإلغاء.",
+                    reply_markup=Keyboards.back_to_main(),
+                    context=context,
+                )
+                return
+            if tx.admin_notes and "تنفيذ" in (tx.admin_notes or ""):
+                await safe_edit_callback_message(
+                    update,
+                    "🔒 فات الطلب عالتنفيذ\nما عاد فينا نلغيه من هون.",
+                    reply_markup=Keyboards.withdraw_pending_menu(can_cancel=False),
+                    context=context,
+                )
+                return
+            db_user = session.query(User).filter(User.id == user.id).first()
+            db_user.balance += float(tx.amount or 0)
+            tx.status = "cancelled"
+            tx.admin_notes = "ألغى المستخدم قبل التنفيذ"
+            tx.processed_at = datetime.utcnow()
+            session.commit()
+            context.user_data.clear()
+            await safe_edit_callback_message(
+                update,
+                f"🗑️ انسفنا الطلب #{tx.id}\nتم إرجاع المبلغ للمحفظة.",
+                reply_markup=Keyboards.back_to_main(),
+                context=context,
+            )
+        finally:
+            session.close()
+
+    @staticmethod
     async def execute_manual_withdraw(
         update: Update, context: ContextTypes.DEFAULT_TYPE, destination: str
     ):
         """تسجيل سحب للواقع وانتظار موافقة الإدمن"""
+        import napoleon_ui
+
         method = context.user_data.get("method")
         amount = context.user_data.get("amount")
         operation = context.user_data.get("operation")
 
         async def reply(text, **kwargs):
-            target = update.effective_message
-            await target.reply_text(text, **kwargs)
+            if update.callback_query:
+                await safe_edit_callback_message(
+                    update, text, context=context, **kwargs
+                )
+            else:
+                await update.effective_message.reply_text(text, **kwargs)
 
         if operation != "withdraw_manual" or not method or not amount:
             context.user_data.clear()
@@ -1542,6 +1738,27 @@ class PaymentHandler:
 
         session = db.get_session()
         try:
+            # منع التكرار
+            dup = (
+                session.query(Transaction)
+                .filter(
+                    Transaction.user_id == user.id,
+                    Transaction.transaction_type == "withdraw",
+                    Transaction.status == "pending",
+                    Transaction.amount == float(amount),
+                    Transaction.method == method,
+                    Transaction.withdraw_destination == destination,
+                )
+                .first()
+            )
+            if dup:
+                context.user_data["pending_withdraw_id"] = dup.id
+                await reply(
+                    napoleon_ui.duplicate_order_text(),
+                    reply_markup=Keyboards.withdraw_pending_menu(can_cancel=True),
+                )
+                return
+
             db_user = session.query(User).filter(User.id == user.id).first()
             if db_user.balance < amount:
                 await reply(
@@ -1572,25 +1789,19 @@ class PaymentHandler:
             session.commit()
             session.refresh(transaction)
 
+            when = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
             context.user_data.clear()
+            context.user_data["pending_withdraw_id"] = transaction.id
+
+            receipt = napoleon_ui.withdraw_pending_receipt(
+                transaction.id, amount, destination, when
+            )
+            if save_note:
+                receipt += save_note
 
             await reply(
-                f"""
-✅ تم إرسال طلب السحب للإدارة
-
-💸 المبلغ: {format_currency(amount)}
-📉 رسوم البوت ({fee_pct:g}%): {format_currency(fee)}
-💵 المبلغ المستلم: {format_currency(net_amount)}
-🏦 الطريقة: {method_info['name']} {method_info['emoji']}
-📍 الوجهة: {tg_code(destination)}
-🔢 رقم الطلب: {transaction.id}
-⏳ الحالة: {tg_bold("بانتظار موافقة الإدمن")}
-{save_note}
-
-💵 تم خصم المبلغ مؤقتاً من رصيدك
-⏰ سيتم التحويل خلال 24 ساعة بعد الموافقة
-                """,
-                reply_markup=Keyboards.main_menu(),
+                receipt,
+                reply_markup=Keyboards.withdraw_pending_menu(can_cancel=True),
                 parse_mode="HTML",
             )
 
@@ -1834,8 +2045,34 @@ class PaymentHandler:
             transaction.status = "completed"
             transaction.processed_at = datetime.utcnow()
 
+            referrer_notify_id = None
             if user.referred_by:
-                await PaymentHandler.process_referral_earnings(user, transaction.amount, session)
+                ref_user = session.query(User).filter(
+                    User.telegram_id == str(user.referred_by)
+                ).first()
+                before_ids = {
+                    r[0]
+                    for r in session.query(Transaction.id)
+                    .filter(
+                        Transaction.user_id == (ref_user.id if ref_user else -1),
+                        Transaction.transaction_type == "referral",
+                    )
+                    .all()
+                }
+                await PaymentHandler.process_referral_earnings(
+                    user, transaction.amount, session
+                )
+                if ref_user:
+                    after = (
+                        session.query(Transaction.id)
+                        .filter(
+                            Transaction.user_id == ref_user.id,
+                            Transaction.transaction_type == "referral",
+                        )
+                        .all()
+                    )
+                    if any(r[0] not in before_ids for r in after):
+                        referrer_notify_id = ref_user.telegram_id
 
             session.commit()
 
@@ -1854,6 +2091,18 @@ class PaymentHandler:
                         f"💵 رصيدك الآن: {format_currency(new_balance)}"
                     ),
                 )
+                if referrer_notify_id:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=referrer_notify_id,
+                            text=(
+                                "🟢 تمت الإحالة بنجاح.\n\n"
+                                "رفيقك صار من أهل المقر،\n"
+                                "والمحاسب اضطر يفتح سجل المكافآت 😂"
+                            ),
+                        )
+                    except TelegramError:
+                        pass
                 if not has_ichancy:
                     await context.bot.send_message(
                         chat_id=telegram_id,
@@ -1948,11 +2197,10 @@ class PaymentHandler:
 
     @staticmethod
     async def process_referral_earnings(user: User, deposit_amount: float, session):
-        """معالجة أرباح الإحالة"""
+        """مكافأة إحالة مرة واحدة بعد أول تعبئة ناجحة للمُحال."""
         if not user.referred_by:
             return
 
-        # البحث عن المُحيل (آيدي تليجرام أو كود إحالة)
         referrer = session.query(User).filter(
             User.telegram_id == str(user.referred_by)
         ).first()
@@ -1961,6 +2209,31 @@ class PaymentHandler:
                 User.referral_code == user.referred_by
             ).first()
         if not referrer:
+            return
+
+        # منع تكرار المكافأة لنفس الشخص المدعو
+        already = (
+            session.query(Transaction.id)
+            .filter(
+                Transaction.user_id == referrer.id,
+                Transaction.transaction_type == "referral",
+                Transaction.description.like(f"%{user.telegram_id}%"),
+            )
+            .first()
+        )
+        if already:
+            return
+        # احتياط: أي إحالة سابقة مرتبطة بنفس المدعو عبر الوصف
+        prior_for_invitee = (
+            session.query(Transaction.id)
+            .filter(
+                Transaction.user_id == referrer.id,
+                Transaction.transaction_type == "referral",
+                Transaction.description.like(f"%من {get_user_display_name(user)}%"),
+            )
+            .first()
+        )
+        if prior_for_invitee:
             return
 
         earnings = deposit_amount * (Config.REFERRAL_PERCENTAGE / 100)
@@ -1972,7 +2245,10 @@ class PaymentHandler:
             transaction_type="referral",
             amount=earnings,
             status="completed",
-            description=f"أرباح إحالة من {get_user_display_name(user)} - إيداع {format_currency(deposit_amount)}"
+            description=(
+                f"أرباح إحالة من {get_user_display_name(user)} "
+                f"(ID {user.telegram_id}) - إيداع {format_currency(deposit_amount)}"
+            ),
         )
         session.add(referral_transaction)
 

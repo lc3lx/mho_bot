@@ -112,25 +112,25 @@ class Config:
     # إعدادات الدفع
     PAYMENT_METHODS = {
         "syriatel_cash": {
-            "name": "SYRIATEL Cash",
-            "emoji": "🔴",
-            "button_label": "🔴 SYRIATEL Cash",
+            "name": "سيرياتيل كاش",
+            "emoji": "📱",
+            "button_label": "📱 سيرياتيل كاش",
             "auto_deposit": True,
             "auto_withdraw": False,
             "provider": "apisyria",
         },
         "shamcash": {
-            "name": "SHAM Cash",
-            "emoji": "🔼",
-            "button_label": "🔼 SHAM Cash (AUTO)",
+            "name": "شام كاش",
+            "emoji": "💳",
+            "button_label": "💳 شام كاش",
             "auto_deposit": True,
             "auto_withdraw": False,
             "provider": "apisyria",
         },
         "usdt": {
-            "name": "USDT",
-            "emoji": "🟢",
-            "button_label": "🟢 USDT",
+            "name": "عملات رقمية",
+            "emoji": "🪙",
+            "button_label": "🪙 عملات رقمية",
             "auto_deposit": True,
             "auto_withdraw": False,
             "provider": "tron",
@@ -147,9 +147,9 @@ class Config:
     # رسائل البوت — طابع داكن/تحذيري
     MESSAGES = {
         "ad_warning": (
-            "⚠️ تنبيه أمني\n"
-            "أي إعلان يظهر داخل البوت ويدّعي إن الخدمة ستتوقف أو يوجّهك لجهة ثانية = احتيال.\n"
-            "لا تصدّق إلا الدعم الرسمي من داخل البوت."
+            "🛡️ تنبيه أمني\n"
+            "لا تعتمد أي رابط أو رسالة خارج هذا البوت\n"
+            "الدعم الرسمي موجود من زر الدعم فقط."
         ),
         "terms_gate": """☠️ بوابة الدخول — {bot_name}
 
@@ -240,35 +240,36 @@ class Config:
         "session_expired": "⏱ انتهت الجلسة.\nابدأ من جديد من الأزرار.",
     }
     
-    # القائمة الرئيسية — نفس ترتيب شاشة المرجع
+    # مقر نابليون — القائمة الرئيسية
     START_MENU_BUTTONS = [
-        [{"text": "⚡️ معلومات الحساب", "callback": "ichancy_hub"}],
         [
-            {"text": "⬇️ شحن محفظة البوت", "callback": "deposit"},
-            {"text": "⬆️ السحب من محفظة البوت", "callback": "withdraw"},
+            {"text": "💸 عبّي iChancy", "callback": "ichancy_topup_start"},
+            {"text": "💰 اسحب من iChancy", "callback": "ichancy_withdraw_start"},
         ],
         [
-            {"text": "📊 شحن حساب ichancy", "callback": "ichancy_topup_start"},
-            {"text": "📉 سحب من ichancy", "callback": "ichancy_withdraw_start"},
-        ],
-        [{"text": "💼 محفظة البوت", "callback": "gift_balance"}],
-        [
-            {"text": "✉️ تواصل مع الدعم", "callback": "contact"},
-            {"text": "🧾 استرداد حوالة", "callback": "refund_request"},
+            {"text": "⚡ عبّي محفظتي", "callback": "deposit"},
+            {"text": "🏧 فضّي محفظتي", "callback": "withdraw"},
         ],
         [
-            {"text": "🗺 الدليل الشامل", "callback": "terms"},
-            {"text": "📱 فيسبوك", "url": "FACEBOOK_URL"},
+            {"text": "👛 جيبتي", "callback": "gift_balance"},
+            {"text": "🧾 دفتر الفضايح", "callback": "transactions"},
         ],
         [
-            {"text": "🏆 أكواد الجوائز", "callback": "gift_code"},
-            {"text": "💠 برنامج الإحالات", "callback": "referrals"},
+            {"text": "🪪 بطاقتي", "callback": "profile"},
+            {"text": "🚑 الحقني يا دعم", "callback": "contact"},
         ],
-        [{"text": "📋 المزيد من الخدمات", "callback": "full_menu"}],
+        [
+            {"text": "🎟️ كودك يا بطل", "callback": "gift_code"},
+            {"text": "👥 جيب رفيقك", "callback": "referrals"},
+        ],
+        [
+            {"text": "📘 فهمني بسرعة", "callback": "guide_quick"},
+            {"text": "🧰 شغلات زيادة", "callback": "extras_menu"},
+        ],
     ]
 
-    # الواجهة الكاملة — نفس الترتيب بدون زر «المزيد»
-    MAIN_BUTTONS = START_MENU_BUTTONS[:-1]
+    # نفس القائمة الرئيسية (بدون تفرقة start/full)
+    MAIN_BUTTONS = START_MENU_BUTTONS
 
     # حد الحسابات المحفوظة: سيريتل 10 — شام كاش 1 فقط
     MAX_SAVED_SYRIATEL = int(os.getenv("MAX_SAVED_SYRIATEL", "10"))
