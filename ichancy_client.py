@@ -677,6 +677,14 @@ class IchancyClient:
             "refreshToken": self._refresh_token or "",
         }
 
+    def force_reauth(self) -> Dict[str, str]:
+        """مسح التوكنات وتسجيل دخول جديد بالكامل."""
+        with self._lock:
+            self._access_token = None
+            self._refresh_token = None
+            self._warmed_up = False
+        return self.sign_in()
+
     def _request(
         self,
         endpoint: str,
@@ -689,11 +697,33 @@ class IchancyClient:
         result = body.get("result")
 
         if result == "ex" and retry_on_ex:
-            self.refresh_access_token()
+            logger.warning(
+                "Ichancy returned result=ex on %s — forcing fresh signIn",
+                endpoint,
+            )
+            # لا تعتمد على refresh فقط؛ بعد تغيير الدومين التوكن القديم غالباً باطل
+            try:
+                self.force_reauth()
+            except IchancyError:
+                raise
             body = self._raw_post(endpoint, data=data, use_auth=True, timeout=timeout)
             result = body.get("result")
             if result == "ex":
-                raise IchancyError("انتهت صلاحية الجلسة. أعد المحاولة.")
+                detail = self._extract_error(body)
+                logger.error(
+                    "Ichancy still result=ex after reauth on %s: %s",
+                    endpoint,
+                    str(body)[:300],
+                )
+                raise IchancyError(
+                    detail
+                    if detail and detail != "فشل الطلب على ichancy"
+                    else (
+                        "انتهت صلاحية جلسة الوكيل أو الحساب بلا صلاحية لهذه العملية.\n"
+                        "تحقق من ICHANCY_USERNAME / PASSWORD / PARENT_ID "
+                        "أو أعد تسجيل دخول الوكيل من لوحة الأدمن."
+                    )
+                )
 
         if result is False:
             raise IchancyError(self._extract_error(body))
@@ -872,6 +902,9 @@ class IchancyClient:
         if not parent:
             raise IchancyError("ICHANCY_PARENT_ID مطلوب لتسجيل لاعب جديد")
 
+        # جلسة نظيفة قبل إنشاء حساب (يتجنب توكن قديم بعد تغيير الدومين)
+        self.force_reauth()
+
         return self._request(
             "global/api/UserApi/registerPlayer",
             {
@@ -882,4 +915,5 @@ class IchancyClient:
                     "login": login,
                 }
             },
+            timeout=60,
         )
