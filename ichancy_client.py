@@ -58,8 +58,8 @@ class IchancyClient:
         self.username = cfg.get("username", "")
         self.password = cfg.get("password", "")
         self.parent_id = cfg.get("parent_id", "")
-        self.currency = cfg.get("currency", "EUR")
-        self.currency_code = cfg.get("currency_code", cfg.get("currency", "EUR"))
+        self.currency = cfg.get("currency", "SYP")
+        self.currency_code = cfg.get("currency_code", cfg.get("currency", "SYP"))
         self.money_status = int(cfg.get("money_status", 5))
         self.default_timeout = int(cfg.get("request_timeout", 60))
 
@@ -813,22 +813,26 @@ class IchancyClient:
 
     def find_player_by_id(self, player_id: str) -> Optional[Dict[str, Any]]:
         """POST getPlayersForCurrentAgent — بحث بـ playerId"""
-        result = self._request(
-            "global/api/Player/getPlayersForCurrentAgent",
-            {
-                "start": 0,
-                "limit": 20,
-                "filter": {
-                    "withoutTotalCount": {"action": "=", "value": True},
-                    "playerId": {
-                        "action": "=",
-                        "value": str(player_id),
-                        "valueLabel": str(player_id),
+        try:
+            result = self._request(
+                "global/api/Player/getPlayersForCurrentAgent",
+                {
+                    "start": 0,
+                    "limit": 20,
+                    "filter": {
+                        "withoutTotalCount": {"action": "=", "value": True},
+                        "playerId": {
+                            "action": "=",
+                            "value": str(player_id),
+                            "valueLabel": str(player_id),
+                        },
                     },
+                    "isNextPage": False,
                 },
-                "isNextPage": False,
-            },
-        )
+            )
+        except IchancyError as exc:
+            logger.warning("find_player_by_id failed: %s", exc.message)
+            return None
 
         if not isinstance(result, dict):
             return None
@@ -837,31 +841,93 @@ class IchancyClient:
 
     def find_player_by_username(self, username: str) -> Optional[Dict[str, Any]]:
         """POST getPlayersForCurrentAgent — بحث بـ userName (like)"""
-        result = self._request(
-            "global/api/Player/getPlayersForCurrentAgent",
-            {
-                "start": 0,
-                "limit": 20,
-                "filter": {
-                    "withoutTotalCount": {"action": "=", "value": True},
-                    "userName": {
-                        "action": "like",
-                        "value": username,
-                        "valueLabel": username,
+        try:
+            result = self._request(
+                "global/api/Player/getPlayersForCurrentAgent",
+                {
+                    "start": 0,
+                    "limit": 20,
+                    "filter": {
+                        "withoutTotalCount": {"action": "=", "value": True},
+                        "userName": {
+                            "action": "like",
+                            "value": username,
+                            "valueLabel": username,
+                        },
                     },
+                    "isNextPage": False,
                 },
-                "isNextPage": False,
-            },
-        )
+            )
+        except IchancyError as exc:
+            # على بعض بوابات الوكيل هذا الـ endpoint يرجع result=ex رغم صلاحية التسجيل
+            logger.warning(
+                "find_player_by_username(%s) failed: %s", username, exc.message
+            )
+            return None
 
         if not isinstance(result, dict):
             return None
         records = result.get("records") or []
-        # تفضيل تطابق تام إن وُجد
         for record in records:
             if str(record.get("username", "")).lower() == username.lower():
                 return record
         return records[0] if records else None
+
+    @staticmethod
+    def extract_player_from_register(result: Any, login: str = "") -> Optional[Dict[str, Any]]:
+        """استخراج بيانات اللاعب من رد registerPlayer بأشكال مختلفة."""
+        if result is None or result is False or result == "ex":
+            return None
+
+        candidates: List[Any] = []
+        if isinstance(result, dict):
+            candidates.append(result)
+            for key in ("player", "Player", "data", "user", "record"):
+                nested = result.get(key)
+                if nested is not None:
+                    candidates.append(nested)
+            records = result.get("records")
+            if isinstance(records, list):
+                candidates.extend(records)
+        elif isinstance(result, list):
+            candidates.extend(result)
+        elif isinstance(result, bool):
+            return None
+        elif isinstance(result, (int, float)) or (
+            isinstance(result, str) and str(result).isdigit()
+        ):
+            return {"playerId": str(int(result)), "username": login}
+
+        for item in candidates:
+            if isinstance(item, bool):
+                continue
+            if not isinstance(item, dict):
+                if isinstance(item, (int, float)) or (
+                    isinstance(item, str) and str(item).isdigit()
+                ):
+                    return {"playerId": str(int(item)), "username": login}
+                continue
+            pid = (
+                item.get("playerId")
+                or item.get("PlayerId")
+                or item.get("id")
+                or item.get("player_id")
+                or item.get("userId")
+            )
+            if pid is None or pid is False or pid == "":
+                continue
+            username = (
+                item.get("username")
+                or item.get("userName")
+                or item.get("login")
+                or login
+            )
+            out = {"playerId": str(pid), "username": str(username or login)}
+            for k, v in item.items():
+                if k not in ("password",) and k not in out:
+                    out[k] = v
+            return out
+        return None
 
     def verify_player(self, player_ref: str) -> Dict[str, Any]:
         """التحقق من اللاعب عبر معرف أو اسم مستخدم"""
@@ -875,7 +941,6 @@ class IchancyClient:
             player = self.find_player_by_username(player_ref)
 
         if not player:
-            # محاولة أخيرة: رصيد مباشر بالمعرف
             try:
                 balance = self.get_player_balance(player_ref)
                 return {
@@ -897,15 +962,14 @@ class IchancyClient:
         email: str,
         parent_id: Optional[str] = None,
     ) -> Any:
-        """POST global/api/UserApi/registerPlayer"""
+        """POST global/api/UserApi/registerPlayer — يعيد dict فيه playerId إن أمكن."""
         parent = parent_id or self.parent_id
         if not parent:
             raise IchancyError("ICHANCY_PARENT_ID مطلوب لتسجيل لاعب جديد")
 
-        # جلسة نظيفة قبل إنشاء حساب (يتجنب توكن قديم بعد تغيير الدومين)
         self.force_reauth()
 
-        return self._request(
+        result = self._request(
             "global/api/UserApi/registerPlayer",
             {
                 "player": {
@@ -916,4 +980,29 @@ class IchancyClient:
                 }
             },
             timeout=60,
+        )
+        logger.info(
+            "registerPlayer raw result type=%s preview=%s",
+            type(result).__name__,
+            str(result)[:300],
+        )
+
+        player = self.extract_player_from_register(result, login=login)
+        if player and player.get("playerId"):
+            return player
+
+        found = self.find_player_by_username(login)
+        if found and found.get("playerId"):
+            return found
+
+        if result is True or result == {} or result is None:
+            raise IchancyError(
+                "تم إنشاء الحساب على المنصة لكن تعذر جلب معرف اللاعب "
+                "(البحث getPlayersForCurrentAgent غير متاح لهذا الوكيل). "
+                "تحقق من صلاحيات الوكيل أو PARENT_ID."
+            )
+
+        raise IchancyError(
+            "تم التسجيل لكن الرد لم يتضمن معرف اللاعب. "
+            f"رد المنصة: {str(result)[:180]}"
         )

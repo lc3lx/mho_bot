@@ -326,21 +326,37 @@ class IchancyHandler:
 
         email = f"{username.lower()}@gmail.com"
         try:
-            await asyncio.to_thread(
+            registered = await asyncio.to_thread(
                 ichancy_client.register_player, username, password, email
             )
-            # بعد التسجيل نجلب playerId
-            player = await asyncio.to_thread(
-                ichancy_client.find_player_by_username, username
-            )
-            if not player:
-                # محاولة تحقق بديلة
-                player = await asyncio.to_thread(
-                    ichancy_client.verify_player, username
+
+            player = None
+            if isinstance(registered, dict) and registered.get("playerId"):
+                player = registered
+            else:
+                player = ichancy_client.extract_player_from_register(
+                    registered, login=username
                 )
-            player_id = str(player.get("playerId") or "")
+
+            if not player or not player.get("playerId"):
+                player = await asyncio.to_thread(
+                    ichancy_client.find_player_by_username, username
+                )
+
+            if not player or not player.get("playerId"):
+                try:
+                    player = await asyncio.to_thread(
+                        ichancy_client.verify_player, username
+                    )
+                except IchancyError:
+                    player = None
+
+            player_id = str((player or {}).get("playerId") or "")
             if not player_id:
-                raise IchancyError("تم التسجيل لكن تعذر جلب معرف اللاعب")
+                raise IchancyError(
+                    "تم إنشاء الحساب على المنصة لكن تعذر جلب معرف اللاعب.\n"
+                    "البحث عن اللاعبين غير متاح لهذا الوكيل حالياً."
+                )
 
             owner = db.get_user_by_ichancy_player_id(player_id)
             if owner and str(owner.telegram_id) != str(update.effective_user.id):
