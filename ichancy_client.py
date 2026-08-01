@@ -731,14 +731,15 @@ class IchancyClient:
         return result
 
     def get_player_balance(self, player_id: str) -> float:
-        """POST global/api/UserApi/getPlayerBalanceById"""
+        """POST global/api/UserApi/getPlayerBalanceById — يعيد 0 عند رصيد فارغ."""
         result = self._request(
             "global/api/UserApi/getPlayerBalanceById",
             {"playerId": str(player_id)},
         )
 
-        if not result:
-            raise IchancyError("اللاعب غير موجود أو لا يوجد رصيد")
+        # بعض البوابات ترجع result فارغ/False لما الرصيد صفر — مو معناه اللاعب مش موجود
+        if result is None or result is False or result == "" or result == [] or result == {}:
+            return 0.0
 
         if isinstance(result, list):
             for item in result:
@@ -749,9 +750,15 @@ class IchancyClient:
             return 0.0
 
         if isinstance(result, dict):
-            return float(result.get("balance", 0) or 0)
+            return float(
+                result.get("balance", result.get("Balance", result.get("amount", 0)))
+                or 0
+            )
 
-        return 0.0
+        try:
+            return float(result)
+        except (TypeError, ValueError):
+            return 0.0
 
     def withdraw_from_player(
         self,

@@ -713,9 +713,17 @@ class IchancyHandler:
                 platform_balance = await asyncio.to_thread(
                     ichancy_client.get_player_balance, user.ichancy_player_id
                 )
+                if platform_balance <= 0:
+                    raise IchancyError(
+                        "ما عندك فلوس يا غالي 😅\n"
+                        f"رصيد iChancy الحالي: {format_currency(0)}\n"
+                        "عبّي الحساب أول شي، بعدين تفضل عالسحب."
+                    )
                 if platform_balance < validated_amount:
                     raise IchancyError(
-                        f"رصيد المنصة غير كافٍ. المتاح: {format_currency(platform_balance)}"
+                        "ما بيكفّي الرصيد يا غالي 😅\n"
+                        f"المطلوب: {format_currency(validated_amount)}\n"
+                        f"المتوفر على iChancy: {format_currency(platform_balance)}"
                     )
 
                 result = await asyncio.to_thread(
@@ -756,8 +764,15 @@ class IchancyHandler:
                 transaction.processed_at = datetime.utcnow()
                 session.commit()
                 context.user_data.clear()
+                msg = exc.message
+                if "غير موجود أو لا يوجد رصيد" in msg:
+                    msg = (
+                        "ما عندك فلوس يا غالي 😅\n"
+                        "رصيد iChancy فاضي أو ما قدرنا نقرأه.\n"
+                        "عبّي الحساب أول شي، بعدين تفضل عالسحب."
+                    )
                 await update.message.reply_text(
-                    f"❌ فشل السحب من ichancy:\n{exc.message}",
+                    f"❌ فشل السحب من ichancy:\n{msg}",
                     reply_markup=Keyboards.main_menu(),
                 )
         finally:
