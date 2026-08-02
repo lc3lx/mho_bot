@@ -423,7 +423,7 @@ class IchancyHandler:
             )
         if not player or not player.get("playerId"):
             player = await asyncio.to_thread(
-                ichancy_client.find_player_by_username, username
+                ichancy_client.resolve_player_after_register, username, registered
             )
         if not player or not player.get("playerId"):
             try:
@@ -433,9 +433,16 @@ class IchancyHandler:
             except IchancyError:
                 player = None
 
-        player_id = str((player or {}).get("playerId") or "")
+        player_id = str((player or {}).get("playerId") or "").strip()
+        if player_id.lower() in ("none", "null", "undefined"):
+            player_id = ""
+
         if not player_id:
             context.user_data.clear()
+            context.user_data["state"] = "waiting_for_ichancy_player_id"
+            context.user_data["operation"] = "link_after_create"
+            context.user_data["ichancy_pending_username"] = username
+            context.user_data["ichancy_pending_password"] = password
             await clear_wait()
             session = db.get_session()
             try:
@@ -446,15 +453,24 @@ class IchancyHandler:
                     db_user.ichancy_username = username
                     db_user.ichancy_password = password
                     session.commit()
+                    logger.info(
+                        "Ichancy soft-create saved without playerId user=%s login=%s",
+                        update.effective_user.id,
+                        username,
+                    )
+            except Exception:
+                session.rollback()
+                logger.exception("فشل حفظ حساب Ichancy بدون playerId")
             finally:
                 session.close()
             await reply(
-                "✅ الحساب انخلق على المنصة بس ما قدرنا نجيب الـ ID تلقائياً.\n\n"
+                "✅ الحساب انخلق على المنصة\n"
                 f"Username: {tg_code(username)}\n"
                 f"Password: {tg_code(password)}\n\n"
-                "احفظهن وتواصل مع الدعم لربط الـ ID، "
-                "أو جرّب إنشاء باسم آخر.",
-                reply_markup=Keyboards.ichancy_required_menu(),
+                "بس الـ ID ما رجع تلقائياً من المنصة.\n\n"
+                "🆔 ابعت هون رقم الـ ID من حسابك على iChancy "
+                "(أرقام فقط) لنربطه ونفتح باقي الخدمات.",
+                reply_markup=Keyboards.cancel_operation(),
                 parse_mode="HTML",
             )
             return
@@ -475,7 +491,9 @@ class IchancyHandler:
             db_user = session.query(User).filter(
                 User.telegram_id == str(update.effective_user.id)
             ).first()
-            if db_user.ichancy_player_id:
+            if not db_user:
+                raise RuntimeError("user missing while saving ichancy")
+            if db_user.ichancy_player_id and str(db_user.ichancy_player_id) != player_id:
                 context.user_data.clear()
                 await clear_wait()
                 await reply(
@@ -488,8 +506,40 @@ class IchancyHandler:
             db_user.ichancy_username = username
             db_user.ichancy_password = password
             session.commit()
+            session.refresh(db_user)
+            logger.info(
+                "Ichancy linked user=%s playerId=%s login=%s",
+                update.effective_user.id,
+                player_id,
+                username,
+            )
+        except Exception:
+            session.rollback()
+            logger.exception("فشل حفظ ichancy_player_id في قاعدة البيانات")
+            context.user_data.clear()
+            await clear_wait()
+            await reply(
+                "❌ الحساب انخلق على المنصة بس فشل حفظ الـ ID بالبوت.\n"
+                f"Username: {tg_code(username)}\n"
+                f"Password: {tg_code(password)}\n"
+                f"ID: {tg_code(player_id)}\n\n"
+                "تواصل مع الدعم لربط الحساب.",
+                reply_markup=Keyboards.ichancy_required_menu(),
+                parse_mode="HTML",
+            )
+            return
         finally:
             session.close()
+
+        # تأكيد القراءة من DB
+        refreshed_check = db.get_user(update.effective_user.id)
+        if not refreshed_check or str(refreshed_check.ichancy_player_id or "") != player_id:
+            logger.error(
+                "Ichancy playerId mismatch after commit user=%s expected=%s got=%s",
+                update.effective_user.id,
+                player_id,
+                getattr(refreshed_check, "ichancy_player_id", None),
+            )
 
         try:
             from referral_service import ReferralArmyService, STATUS_PENDING
@@ -745,11 +795,115 @@ class IchancyHandler:
     async def process_link_account(
         update: Update, context: ContextTypes.DEFAULT_TYPE, player_ref: str
     ):
-        """رفض مسار ربط الحسابات القديمة دون أي كتابة في قاعدة البيانات."""
+        """ربط الـ ID بعد إنشاء حساب بدون معرف، أو رفض الربط الخارجي."""
+        operation = context.user_data.get("operation")
+        raw = (player_ref or "").strip()
+        user = db.get_user(update.effective_user.id)
+
+        allow_link = operation == "link_after_create" or (
+            user
+            and user.ichancy_username
+            and not user.ichancy_player_id
+        )
+        if not allow_link:
+            context.user_data.clear()
+            await update.message.reply_text(
+                "❌ ربط حساب خارجي غير مسموح.\nأنشئ حسابك من داخل البوت فقط.",
+                reply_markup=Keyboards.ichancy_required_menu(),
+            )
+            return
+
+        if not raw.isdigit():
+            await update.message.reply_text(
+                "🤨 هاد مو ID يا معلم\n\n"
+                "أرقام فقط...\n"
+                "لا اسم، لا @، لا قصة حياة 😂",
+                reply_markup=Keyboards.cancel_operation(),
+            )
+            context.user_data["state"] = "waiting_for_ichancy_player_id"
+            context.user_data["operation"] = "link_after_create"
+            return
+
+        owner = db.get_user_by_ichancy_player_id(raw)
+        if owner and str(owner.telegram_id) != str(update.effective_user.id):
+            context.user_data.clear()
+            await update.message.reply_text(
+                "❌ هذا الـ ID مرتبط بمستخدم تليجرام آخر.",
+                reply_markup=Keyboards.ichancy_required_menu(),
+            )
+            return
+
+        username = context.user_data.get("ichancy_pending_username") or (
+            user.ichancy_username if user else None
+        )
+        password = context.user_data.get("ichancy_pending_password") or (
+            user.ichancy_password if user else None
+        )
+
+        session = db.get_session()
+        try:
+            db_user = session.query(User).filter(
+                User.telegram_id == str(update.effective_user.id)
+            ).first()
+            if not db_user:
+                await update.message.reply_text(Config.MESSAGES["user_not_found"])
+                return
+            if db_user.ichancy_player_id and str(db_user.ichancy_player_id) != raw:
+                context.user_data.clear()
+                await update.message.reply_text(
+                    IchancyHandler._already_linked_message(db_user),
+                    reply_markup=Keyboards.ichancy_account_menu(),
+                    parse_mode="HTML",
+                )
+                return
+            db_user.ichancy_player_id = raw
+            if username:
+                db_user.ichancy_username = username
+            if password:
+                db_user.ichancy_password = password
+            session.commit()
+            logger.info(
+                "Ichancy ID linked after create user=%s playerId=%s",
+                update.effective_user.id,
+                raw,
+            )
+        except Exception:
+            session.rollback()
+            logger.exception("فشل ربط ichancy_player_id بعد الإنشاء")
+            await update.message.reply_text(
+                "❌ فشل حفظ الـ ID. حاول مرة ثانية أو تواصل مع الدعم.",
+                reply_markup=Keyboards.cancel_operation(),
+            )
+            return
+        finally:
+            session.close()
+
+        try:
+            from referral_service import ReferralArmyService, STATUS_PENDING
+            refreshed = db.get_user(update.effective_user.id)
+            status = ReferralArmyService.evaluate_after_ichancy_link(refreshed)
+            if status == STATUS_PENDING and refreshed.referred_by:
+                try:
+                    await context.bot.send_message(
+                        chat_id=refreshed.referred_by,
+                        text=(
+                            "🟠 رفيقك ربط حساب iChancy.\n"
+                            "الإحالة قيد التحقق بانتظار النشاط المؤهل/مراجعة الإدارة."
+                        ),
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            logger.exception("فشل تقييم إحالة بعد ربط ID")
+
         context.user_data.clear()
         await update.message.reply_text(
-            "❌ ربط حساب خارجي غير مسموح.\nأنشئ حسابك من داخل البوت فقط.",
-            reply_markup=Keyboards.ichancy_required_menu(),
+            "✅ تم ربط الـ ID بنجاح\n\n"
+            f"Username: {tg_code(username or '—')}\n"
+            f"ID: {tg_code(raw)}\n\n"
+            "✅ تم فتح باقي خدمات البوت.",
+            parse_mode="HTML",
+            reply_markup=Keyboards.start_menu(),
         )
 
     @staticmethod

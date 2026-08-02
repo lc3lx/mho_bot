@@ -685,14 +685,14 @@ class IchancyClient:
             self._warmed_up = False
         return self.sign_in()
 
-    def _request(
+    def _request_full(
         self,
         endpoint: str,
         data: Optional[Dict[str, Any]] = None,
         timeout: int = 30,
         retry_on_ex: bool = True,
-    ) -> Any:
-        """طلب محمي مع معالجة انتهاء التوكن (result == 'ex')"""
+    ) -> Dict[str, Any]:
+        """مثل _request لكن يعيد جسم الرد كاملاً (مهم لـ registerPlayer)."""
         body = self._raw_post(endpoint, data=data, use_auth=True, timeout=timeout)
         result = body.get("result")
 
@@ -701,7 +701,6 @@ class IchancyClient:
                 "Ichancy returned result=ex on %s — forcing fresh signIn",
                 endpoint,
             )
-            # لا تعتمد على refresh فقط؛ بعد تغيير الدومين التوكن القديم غالباً باطل
             try:
                 self.force_reauth()
             except IchancyError:
@@ -728,7 +727,312 @@ class IchancyClient:
         if result is False:
             raise IchancyError(self._extract_error(body))
 
-        return result
+        return body if isinstance(body, dict) else {"result": body}
+
+    def _request(
+        self,
+        endpoint: str,
+        data: Optional[Dict[str, Any]] = None,
+        timeout: int = 30,
+        retry_on_ex: bool = True,
+    ) -> Any:
+        """طلب محمي مع معالجة انتهاء التوكن (result == 'ex')"""
+        body = self._request_full(
+            endpoint, data=data, timeout=timeout, retry_on_ex=retry_on_ex
+        )
+        return body.get("result")
+
+    @staticmethod
+    def _deep_find_player_id(obj: Any, depth: int = 0) -> Optional[str]:
+        """بحث عميق عن أي مفتاح يشبه playerId داخل الرد."""
+        if depth > 6 or obj is None:
+            return None
+        if isinstance(obj, bool):
+            return None
+        if isinstance(obj, (int, float)) and not isinstance(obj, bool):
+            # أرقام مجردة ما منعتبرها ID إلا ضمن dict بمفتاح معروف
+            return None
+        if isinstance(obj, str):
+            s = obj.strip()
+            if s.isdigit() and 3 <= len(s) <= 18:
+                return s
+            return None
+        if isinstance(obj, dict):
+            for key in (
+                "playerId",
+                "PlayerId",
+                "player_id",
+                "playerid",
+                "userId",
+                "UserId",
+                "clientId",
+                "ClientId",
+            ):
+                val = obj.get(key)
+                if isinstance(val, bool) or val is None or val == "":
+                    continue
+                if isinstance(val, (int, float)) or (
+                    isinstance(val, str) and str(val).strip().isdigit()
+                ):
+                    return str(int(val)) if str(val).replace(".", "", 1).isdigit() and "." not in str(val) else str(val).strip()
+            # id فقط إذا ما كان parentId/context
+            for key, val in obj.items():
+                lk = str(key).lower()
+                if lk in ("id", "playerid", "player_id", "userid") and "parent" not in lk:
+                    if isinstance(val, bool) or val is None or val == "":
+                        continue
+                    if isinstance(val, (int, float)) or (
+                        isinstance(val, str) and str(val).strip().isdigit()
+                    ):
+                        return str(int(float(val))) if isinstance(val, float) else str(val).strip()
+            for val in obj.values():
+                found = IchancyClient._deep_find_player_id(val, depth + 1)
+                if found:
+                    return found
+        if isinstance(obj, list):
+            for item in obj:
+                found = IchancyClient._deep_find_player_id(item, depth + 1)
+                if found:
+                    return found
+        return None
+
+    def find_player_by_username(self, username: str) -> Optional[Dict[str, Any]]:
+        """بحث باليوزر — يجرب like و = وفلاتر متعددة."""
+        username = (username or "").strip()
+        if not username:
+            return None
+
+        filter_variants = [
+            {
+                "withoutTotalCount": {"action": "=", "value": True},
+                "userName": {
+                    "action": "like",
+                    "value": username,
+                    "valueLabel": username,
+                },
+            },
+            {
+                "withoutTotalCount": {"action": "=", "value": True},
+                "userName": {
+                    "action": "=",
+                    "value": username,
+                    "valueLabel": username,
+                },
+            },
+            {
+                "withoutTotalCount": {"action": "=", "value": True},
+                "login": {
+                    "action": "=",
+                    "value": username,
+                    "valueLabel": username,
+                },
+            },
+        ]
+
+        for filt in filter_variants:
+            try:
+                result = self._request(
+                    "global/api/Player/getPlayersForCurrentAgent",
+                    {
+                        "start": 0,
+                        "limit": 20,
+                        "filter": filt,
+                        "isNextPage": False,
+                    },
+                    retry_on_ex=False,
+                )
+            except IchancyError as exc:
+                logger.warning(
+                    "find_player_by_username(%s) failed: %s", username, exc.message
+                )
+                continue
+
+            if not isinstance(result, dict):
+                continue
+            records = result.get("records") or []
+            for record in records:
+                uname = str(
+                    record.get("username")
+                    or record.get("userName")
+                    or record.get("login")
+                    or ""
+                )
+                if uname.lower() == username.lower():
+                    return record
+            if records:
+                return records[0]
+        return None
+
+    def resolve_player_after_register(
+        self, login: str, register_body: Any = None, attempts: int = 4
+    ) -> Optional[Dict[str, Any]]:
+        """محاولات متكررة لجلب playerId بعد التسجيل."""
+        import time
+
+        player = self.extract_player_from_register(register_body, login=login)
+        if player and player.get("playerId"):
+            return player
+
+        for i in range(attempts):
+            if i:
+                time.sleep(0.7 * i)
+            found = self.find_player_by_username(login)
+            if found and found.get("playerId"):
+                return found
+            # بعض البوابات ترجع الـ ID كرقم نتيجة لطلبات أخرى
+            for ep, payload in (
+                ("global/api/UserApi/getPlayerByLogin", {"login": login}),
+                ("global/api/UserApi/getPlayerByUserName", {"userName": login}),
+                ("global/api/UserApi/getPlayerInfo", {"login": login}),
+                ("global/api/Player/getPlayerByUserName", {"userName": login}),
+            ):
+                try:
+                    body = self._request_full(ep, payload, timeout=20, retry_on_ex=False)
+                except IchancyError:
+                    continue
+                extracted = self.extract_player_from_register(body, login=login)
+                if extracted and extracted.get("playerId"):
+                    return extracted
+                pid = self._deep_find_player_id(body)
+                if pid:
+                    return {"playerId": pid, "username": login}
+        return player
+
+    @staticmethod
+    def extract_player_from_register(result: Any, login: str = "") -> Optional[Dict[str, Any]]:
+        """استخراج بيانات اللاعب من رد registerPlayer (result أو الجسم الكامل)."""
+        if result is None or result is False or result == "ex":
+            return None
+
+        # إذا مرّ الجسم الكامل {status, result, ...}
+        if isinstance(result, dict) and "result" in result and (
+            "status" in result or "notification" in result or "html" in result
+        ):
+            nested = IchancyClient.extract_player_from_register(
+                result.get("result"), login=login
+            )
+            if nested and nested.get("playerId"):
+                return nested
+            pid = IchancyClient._deep_find_player_id(result)
+            if pid:
+                return {"playerId": pid, "username": login}
+            return None
+
+        candidates: List[Any] = []
+        if isinstance(result, dict):
+            candidates.append(result)
+            for key in ("player", "Player", "data", "user", "record", "value"):
+                nested = result.get(key)
+                if nested is not None:
+                    candidates.append(nested)
+            records = result.get("records")
+            if isinstance(records, list):
+                candidates.extend(records)
+        elif isinstance(result, list):
+            candidates.extend(result)
+        elif isinstance(result, bool):
+            return None
+        elif isinstance(result, (int, float)) or (
+            isinstance(result, str) and str(result).strip().isdigit()
+        ):
+            return {"playerId": str(int(result)), "username": login}
+
+        for item in candidates:
+            if isinstance(item, bool):
+                continue
+            if not isinstance(item, dict):
+                if isinstance(item, (int, float)) or (
+                    isinstance(item, str) and str(item).strip().isdigit()
+                ):
+                    return {"playerId": str(int(item)), "username": login}
+                continue
+            pid = (
+                item.get("playerId")
+                or item.get("PlayerId")
+                or item.get("player_id")
+                or item.get("userId")
+                or item.get("UserId")
+            )
+            # تجنب أخذ parentId بالخطأ عبر مفتاح id العام إلا إذا وُجد مع login/username
+            if pid is None or pid is False or pid == "":
+                raw_id = item.get("id")
+                has_user_marker = any(
+                    item.get(k)
+                    for k in ("username", "userName", "login", "email", "playerId")
+                )
+                if has_user_marker and raw_id is not None and raw_id is not False and raw_id != "":
+                    pid = raw_id
+            if pid is None or pid is False or pid == "":
+                continue
+            if isinstance(pid, bool):
+                continue
+            username = (
+                item.get("username")
+                or item.get("userName")
+                or item.get("login")
+                or login
+            )
+            out = {"playerId": str(pid).strip(), "username": str(username or login)}
+            for k, v in item.items():
+                if k not in ("password",) and k not in out:
+                    out[k] = v
+            return out
+
+        pid = IchancyClient._deep_find_player_id(result)
+        if pid:
+            return {"playerId": pid, "username": login}
+        return None
+
+    def register_player(
+        self,
+        login: str,
+        password: str,
+        email: str,
+        parent_id: Optional[str] = None,
+    ) -> Any:
+        """POST global/api/UserApi/registerPlayer — يعيد dict فيه playerId إن أمكن."""
+        parent = parent_id or self.parent_id
+        if not parent:
+            raise IchancyError("ICHANCY_PARENT_ID مطلوب لتسجيل لاعب جديد")
+
+        self.force_reauth()
+
+        body = self._request_full(
+            "global/api/UserApi/registerPlayer",
+            {
+                "player": {
+                    "email": email,
+                    "password": password,
+                    "parentId": str(parent),
+                    "login": login,
+                }
+            },
+            timeout=60,
+        )
+        result = body.get("result")
+        logger.info(
+            "registerPlayer raw body preview=%s | result type=%s preview=%s",
+            str(body)[:400],
+            type(result).__name__,
+            str(result)[:300],
+        )
+
+        player = self.resolve_player_after_register(login, register_body=body)
+        if player and player.get("playerId"):
+            return player
+
+        # التسجيل غالباً نجح حتى لو ما قدرنا نجيب playerId (قائمة اللاعبين معطّلة).
+        logger.warning(
+            "registerPlayer succeeded for %s but playerId missing; soft result",
+            login,
+        )
+        return {
+            "login": login,
+            "username": login,
+            "playerId": None,
+            "created": True,
+            "raw": result,
+        }
 
     def get_player_balance(self, player_id: str) -> float:
         """POST global/api/UserApi/getPlayerBalanceById — يعيد 0 عند رصيد فارغ."""
@@ -846,95 +1150,6 @@ class IchancyClient:
         records = result.get("records") or []
         return records[0] if records else None
 
-    def find_player_by_username(self, username: str) -> Optional[Dict[str, Any]]:
-        """POST getPlayersForCurrentAgent — بحث بـ userName (like)"""
-        try:
-            result = self._request(
-                "global/api/Player/getPlayersForCurrentAgent",
-                {
-                    "start": 0,
-                    "limit": 20,
-                    "filter": {
-                        "withoutTotalCount": {"action": "=", "value": True},
-                        "userName": {
-                            "action": "like",
-                            "value": username,
-                            "valueLabel": username,
-                        },
-                    },
-                    "isNextPage": False,
-                },
-            )
-        except IchancyError as exc:
-            # على بعض بوابات الوكيل هذا الـ endpoint يرجع result=ex رغم صلاحية التسجيل
-            logger.warning(
-                "find_player_by_username(%s) failed: %s", username, exc.message
-            )
-            return None
-
-        if not isinstance(result, dict):
-            return None
-        records = result.get("records") or []
-        for record in records:
-            if str(record.get("username", "")).lower() == username.lower():
-                return record
-        return records[0] if records else None
-
-    @staticmethod
-    def extract_player_from_register(result: Any, login: str = "") -> Optional[Dict[str, Any]]:
-        """استخراج بيانات اللاعب من رد registerPlayer بأشكال مختلفة."""
-        if result is None or result is False or result == "ex":
-            return None
-
-        candidates: List[Any] = []
-        if isinstance(result, dict):
-            candidates.append(result)
-            for key in ("player", "Player", "data", "user", "record"):
-                nested = result.get(key)
-                if nested is not None:
-                    candidates.append(nested)
-            records = result.get("records")
-            if isinstance(records, list):
-                candidates.extend(records)
-        elif isinstance(result, list):
-            candidates.extend(result)
-        elif isinstance(result, bool):
-            return None
-        elif isinstance(result, (int, float)) or (
-            isinstance(result, str) and str(result).isdigit()
-        ):
-            return {"playerId": str(int(result)), "username": login}
-
-        for item in candidates:
-            if isinstance(item, bool):
-                continue
-            if not isinstance(item, dict):
-                if isinstance(item, (int, float)) or (
-                    isinstance(item, str) and str(item).isdigit()
-                ):
-                    return {"playerId": str(int(item)), "username": login}
-                continue
-            pid = (
-                item.get("playerId")
-                or item.get("PlayerId")
-                or item.get("id")
-                or item.get("player_id")
-                or item.get("userId")
-            )
-            if pid is None or pid is False or pid == "":
-                continue
-            username = (
-                item.get("username")
-                or item.get("userName")
-                or item.get("login")
-                or login
-            )
-            out = {"playerId": str(pid), "username": str(username or login)}
-            for k, v in item.items():
-                if k not in ("password",) and k not in out:
-                    out[k] = v
-            return out
-        return None
 
     def verify_player(self, player_ref: str) -> Dict[str, Any]:
         """التحقق من اللاعب عبر معرف أو اسم مستخدم"""
@@ -961,56 +1176,3 @@ class IchancyClient:
                 )
 
         return player
-
-    def register_player(
-        self,
-        login: str,
-        password: str,
-        email: str,
-        parent_id: Optional[str] = None,
-    ) -> Any:
-        """POST global/api/UserApi/registerPlayer — يعيد dict فيه playerId إن أمكن."""
-        parent = parent_id or self.parent_id
-        if not parent:
-            raise IchancyError("ICHANCY_PARENT_ID مطلوب لتسجيل لاعب جديد")
-
-        self.force_reauth()
-
-        result = self._request(
-            "global/api/UserApi/registerPlayer",
-            {
-                "player": {
-                    "email": email,
-                    "password": password,
-                    "parentId": str(parent),
-                    "login": login,
-                }
-            },
-            timeout=60,
-        )
-        logger.info(
-            "registerPlayer raw result type=%s preview=%s",
-            type(result).__name__,
-            str(result)[:300],
-        )
-
-        player = self.extract_player_from_register(result, login=login)
-        if player and player.get("playerId"):
-            return player
-
-        found = self.find_player_by_username(login)
-        if found and found.get("playerId"):
-            return found
-
-        # التسجيل غالباً نجح حتى لو ما قدرنا نجيب playerId (قائمة اللاعبين معطّلة).
-        if result is True or result == {} or result is None or result is False:
-            logger.warning(
-                "registerPlayer succeeded for %s but playerId missing; returning soft result",
-                login,
-            )
-            return {"login": login, "playerId": None, "created": True}
-
-        logger.warning(
-            "registerPlayer opaque result for %s: %s", login, str(result)[:180]
-        )
-        return {"login": login, "playerId": None, "created": True, "raw": result}
