@@ -39,8 +39,9 @@ class IchancyHandler:
     def _already_linked_message(user: User) -> str:
         return (
             "✅ لديك حساب Ichancy واحد مرتبط مسبقاً.\n\n"
-            f"👤 المستخدم: {tg_code(user.ichancy_username or '—')}\n"
-            f"🆔 Id: {tg_code(user.ichancy_player_id or '—')}\n\n"
+            f"👤 Username: {tg_code(user.ichancy_username or '—')}\n"
+            f"🔑 Password: {tg_code(user.ichancy_password or '—')}\n\n"
+            "اضغط على القيم للنسخ\n\n"
             "لا يمكن إنشاء حساب ثانٍ."
         )
 
@@ -204,7 +205,6 @@ class IchancyHandler:
         user = db.get_user(update.effective_user.id)
         username = user.ichancy_username or "—"
         password = user.ichancy_password or "—"
-        player_id = user.ichancy_player_id or "—"
 
         platform_balance = "—"
         if user.ichancy_player_id and ichancy_client.is_configured:
@@ -220,7 +220,6 @@ class IchancyHandler:
             "🔐 معلومات حسابك في ايشانسي\n\n"
             f"👤 Username: {tg_code(username)}\n"
             f"🔑 Password: {tg_code(password)}\n"
-            f"🆔 Id: {tg_code(player_id)}\n"
             f"💰 Balance: {platform_balance}\n\n"
             "اضغط على اسم المستخدم وكلمة المرور للنسخ"
         )
@@ -257,13 +256,7 @@ class IchancyHandler:
             return
 
         if user.ichancy_username or user.ichancy_player_id:
-            await safe_edit_callback_message(
-                update,
-                IchancyHandler._already_linked_message(user),
-                reply_markup=Keyboards.ichancy_account_menu(),
-                context=context,
-                parse_mode="HTML",
-            )
+            await IchancyHandler.show_account_info(update, context)
             return
 
         if not ichancy_client.is_configured:
@@ -334,11 +327,14 @@ class IchancyHandler:
         user = db.get_user(update.effective_user.id)
         if user and IchancyHandler._user_has_account(user):
             context.user_data.clear()
-            await reply(
-                IchancyHandler._already_linked_message(user),
-                reply_markup=Keyboards.ichancy_account_menu(),
-                parse_mode="HTML",
-            )
+            if via_callback and update.callback_query:
+                await IchancyHandler.show_account_info(update, context)
+            elif update.effective_message:
+                await update.effective_message.reply_text(
+                    IchancyHandler._already_linked_message(user),
+                    reply_markup=Keyboards.ichancy_account_menu(),
+                    parse_mode="HTML",
+                )
             return
 
         name_part, err = IchancyHandler.normalize_name_part(raw_name)
@@ -419,13 +415,8 @@ class IchancyHandler:
             )
             return
 
-        # الـ ID اختياري — المنصة غالباً ترجع result=1 بدون معرف
-        player_id = ""
-        if isinstance(registered, dict):
-            raw_pid = registered.get("playerId")
-            if ichancy_client._is_plausible_player_id(raw_pid):
-                player_id = str(raw_pid).strip()
-
+        # المعرف عندنا = اليوزر اللي البوت بيبنيه (Na_...)
+        # ما منعتمد على playerId من رد المنصة (غالباً result=1 بس)
         session = db.get_session()
         try:
             db_user = session.query(User).filter(
@@ -444,18 +435,12 @@ class IchancyHandler:
                 return
             db_user.ichancy_username = username
             db_user.ichancy_password = password
-            if player_id:
-                owner = db.get_user_by_ichancy_player_id(player_id)
-                if owner and str(owner.telegram_id) != str(update.effective_user.id):
-                    player_id = ""
-                else:
-                    db_user.ichancy_player_id = player_id
+            # لا نحفظ playerId من API هنا — مو مصدرنا
             session.commit()
             logger.info(
-                "Ichancy account saved user=%s login=%s playerId=%s",
+                "Ichancy account saved user=%s login=%s (no platform playerId)",
                 update.effective_user.id,
                 username,
-                player_id or "-",
             )
         except Exception:
             session.rollback()
@@ -494,13 +479,11 @@ class IchancyHandler:
 
         context.user_data.clear()
         await clear_wait()
-        id_line = f"ID: {tg_code(player_id)}\n" if player_id else ""
         await reply(
             "✅ تم إنشاء حسابك بنجاح\n"
             "معلومات الحساب هي:\n\n"
             f"اسم المستخدم: {tg_code(username)}\n"
-            f"كلمة السر: {tg_code(password)}\n"
-            f"{id_line}\n"
+            f"كلمة السر: {tg_code(password)}\n\n"
             "اضغط على القيم للنسخ\n\n"
             "⚠️ هذا حسابك الوحيد المرتبط بهذا البوت.\n"
             "✅ تم فتح باقي خدمات البوت.",
