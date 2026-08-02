@@ -743,6 +743,25 @@ class IchancyClient:
         return body.get("result")
 
     @staticmethod
+    def _is_plausible_player_id(val: Any) -> bool:
+        """
+        يميّز معرف اللاعب الحقيقي عن أكواد النجاح.
+        على بوابة Ichancy: registerPlayer يرجع result=1 عند النجاح — مو playerId.
+        """
+        if val is None or isinstance(val, bool):
+            return False
+        s = str(val).strip()
+        if not s.isdigit():
+            return False
+        # 0/1 أكواد نجاح/فشل شائعة — ليست معرف لاعب
+        if s in ("0", "1"):
+            return False
+        # معرفات اللاعبين عادة أطول من 3 أرقام
+        if len(s) < 4:
+            return False
+        return True
+
+    @staticmethod
     def _deep_find_player_id(obj: Any, depth: int = 0) -> Optional[str]:
         """بحث عميق عن أي مفتاح يشبه playerId داخل الرد."""
         if depth > 6 or obj is None:
@@ -754,7 +773,7 @@ class IchancyClient:
             return None
         if isinstance(obj, str):
             s = obj.strip()
-            if s.isdigit() and 3 <= len(s) <= 18:
+            if IchancyClient._is_plausible_player_id(s):
                 return s
             return None
         if isinstance(obj, dict):
@@ -769,21 +788,13 @@ class IchancyClient:
                 "ClientId",
             ):
                 val = obj.get(key)
-                if isinstance(val, bool) or val is None or val == "":
-                    continue
-                if isinstance(val, (int, float)) or (
-                    isinstance(val, str) and str(val).strip().isdigit()
-                ):
-                    return str(int(val)) if str(val).replace(".", "", 1).isdigit() and "." not in str(val) else str(val).strip()
+                if IchancyClient._is_plausible_player_id(val):
+                    return str(int(val)) if isinstance(val, float) else str(val).strip()
             # id فقط إذا ما كان parentId/context
             for key, val in obj.items():
                 lk = str(key).lower()
                 if lk in ("id", "playerid", "player_id", "userid") and "parent" not in lk:
-                    if isinstance(val, bool) or val is None or val == "":
-                        continue
-                    if isinstance(val, (int, float)) or (
-                        isinstance(val, str) and str(val).strip().isdigit()
-                    ):
+                    if IchancyClient._is_plausible_player_id(val):
                         return str(int(float(val))) if isinstance(val, float) else str(val).strip()
             for val in obj.values():
                 found = IchancyClient._deep_find_player_id(val, depth + 1)
@@ -935,15 +946,16 @@ class IchancyClient:
         elif isinstance(result, (int, float)) or (
             isinstance(result, str) and str(result).strip().isdigit()
         ):
+            # result=1 يعني نجاح على Ichancy — ليس معرف لاعب
+            if not IchancyClient._is_plausible_player_id(result):
+                return None
             return {"playerId": str(int(result)), "username": login}
 
         for item in candidates:
             if isinstance(item, bool):
                 continue
             if not isinstance(item, dict):
-                if isinstance(item, (int, float)) or (
-                    isinstance(item, str) and str(item).strip().isdigit()
-                ):
+                if IchancyClient._is_plausible_player_id(item):
                     return {"playerId": str(int(item)), "username": login}
                 continue
             pid = (
@@ -954,17 +966,17 @@ class IchancyClient:
                 or item.get("UserId")
             )
             # تجنب أخذ parentId بالخطأ عبر مفتاح id العام إلا إذا وُجد مع login/username
-            if pid is None or pid is False or pid == "":
+            if not IchancyClient._is_plausible_player_id(pid):
                 raw_id = item.get("id")
                 has_user_marker = any(
                     item.get(k)
                     for k in ("username", "userName", "login", "email", "playerId")
                 )
-                if has_user_marker and raw_id is not None and raw_id is not False and raw_id != "":
+                if has_user_marker and IchancyClient._is_plausible_player_id(raw_id):
                     pid = raw_id
-            if pid is None or pid is False or pid == "":
-                continue
-            if isinstance(pid, bool):
+                else:
+                    pid = None
+            if not IchancyClient._is_plausible_player_id(pid):
                 continue
             username = (
                 item.get("username")

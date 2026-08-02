@@ -424,6 +424,24 @@ class DatabaseManager:
                     )
                 except Exception:
                     pass
+
+            # تنظيف معرفات وهمية: registerPlayer كان يرجع result=1 فيُحفظ كـ playerId
+            with self.engine.begin() as conn:
+                try:
+                    result = conn.execute(
+                        text(
+                            "UPDATE users SET ichancy_player_id = NULL "
+                            "WHERE ichancy_player_id IN ('0', '1')"
+                        )
+                    )
+                    if result.rowcount:
+                        import logging
+                        logging.getLogger(__name__).warning(
+                            "Cleared %s bogus ichancy_player_id values (0/1)",
+                            result.rowcount,
+                        )
+                except Exception:
+                    pass
     def get_session(self):
         """الحصول على جلسة قاعدة البيانات"""
         return self.SessionLocal()

@@ -434,7 +434,7 @@ class IchancyHandler:
                 player = None
 
         player_id = str((player or {}).get("playerId") or "").strip()
-        if player_id.lower() in ("none", "null", "undefined"):
+        if player_id.lower() in ("none", "null", "undefined") or not ichancy_client._is_plausible_player_id(player_id):
             player_id = ""
 
         if not player_id:
