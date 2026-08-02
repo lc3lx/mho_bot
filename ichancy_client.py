@@ -912,12 +912,16 @@ class IchancyClient:
         return None
 
     def find_player_by_username(self, username: str) -> Optional[Dict[str, Any]]:
-        """بحث باليوزر — يجرب like و = وفلاتر متعددة."""
+        """
+        POST getPlayersForCurrentAgent — بحث بـ userName حسب الوثائق.
+        Example B في APIIntegration.pdf: filter.userName action=like
+        """
         username = (username or "").strip()
         if not username:
             return None
 
         filter_variants = [
+            # الوثائق: Example B — Search by userName (like)
             {
                 "withoutTotalCount": {"action": "=", "value": True},
                 "userName": {
@@ -943,39 +947,121 @@ class IchancyClient:
                 },
             },
         ]
+        endpoints = (
+            "global/api/Player/getPlayersForCurrentAgent",
+            "global/api/UserApi/getPlayersForCurrentAgent",
+        )
 
-        for filt in filter_variants:
-            try:
-                result = self._request(
-                    "global/api/Player/getPlayersForCurrentAgent",
-                    {
-                        "start": 0,
-                        "limit": 20,
-                        "filter": filt,
-                        "isNextPage": False,
-                    },
-                    retry_on_ex=False,
-                )
-            except IchancyError as exc:
-                logger.warning(
-                    "find_player_by_username(%s) failed: %s", username, exc.message
-                )
-                continue
+        for endpoint in endpoints:
+            for filt in filter_variants:
+                try:
+                    print(
+                        f"[ICHANCY getPlayers] try endpoint={endpoint} "
+                        f"userName={username!r} filter_keys={list(filt.keys())}",
+                        flush=True,
+                    )
+                    result = self._request(
+                        endpoint,
+                        {
+                            "start": 0,
+                            "limit": 20,
+                            "filter": filt,
+                            "isNextPage": False,
+                        },
+                        retry_on_ex=False,
+                    )
+                except IchancyError as exc:
+                    print(
+                        f"[ICHANCY getPlayers] FAIL {username!r}: {exc.message}",
+                        flush=True,
+                    )
+                    logger.warning(
+                        "find_player_by_username(%s) failed: %s", username, exc.message
+                    )
+                    continue
 
-            if not isinstance(result, dict):
-                continue
-            records = result.get("records") or []
-            for record in records:
-                uname = str(
-                    record.get("username")
-                    or record.get("userName")
-                    or record.get("login")
-                    or ""
+                msg = (
+                    f"[ICHANCY getPlayers] OK type={type(result).__name__} "
+                    f"result={result!r}"
                 )
-                if uname.lower() == username.lower():
-                    return record
-            if records:
-                return records[0]
+                print(msg[:500], flush=True)
+                if not isinstance(result, dict):
+                    continue
+                records = result.get("records") or []
+                for record in records:
+                    if not isinstance(record, dict):
+                        continue
+                    uname = str(
+                        record.get("username")
+                        or record.get("userName")
+                        or record.get("login")
+                        or ""
+                    )
+                    pid = record.get("playerId") or record.get("PlayerId")
+                    if uname.lower() == username.lower() and self._is_plausible_player_id(pid):
+                        print(
+                            f"[ICHANCY getPlayers] MATCH username={uname!r} "
+                            f"playerId={pid!r}",
+                            flush=True,
+                        )
+                        return record
+                # تطابق تقريبي إذا سجل واحد فقط
+                if len(records) == 1 and isinstance(records[0], dict):
+                    pid = records[0].get("playerId") or records[0].get("PlayerId")
+                    if self._is_plausible_player_id(pid):
+                        print(
+                            f"[ICHANCY getPlayers] SINGLE record playerId={pid!r}",
+                            flush=True,
+                        )
+                        return records[0]
+        return None
+
+    def resolve_player_id_by_username(
+        self,
+        username: str,
+        password: str = "",
+        attempts: int = 5,
+    ) -> Optional[str]:
+        """
+        يجيب playerId من اليوزرنيم (خلفية فقط).
+        المسار الرسمي: getPlayersForCurrentAgent → records[].playerId
+        """
+        import time
+
+        username = (username or "").strip()
+        if not username:
+            return None
+
+        for i in range(max(1, attempts)):
+            if i:
+                time.sleep(0.7 * i)
+            found = self.find_player_by_username(username)
+            pid = None
+            if found:
+                pid = found.get("playerId") or found.get("PlayerId")
+            if self._is_plausible_player_id(pid):
+                print(
+                    f"[ICHANCY resolve] username={username!r} -> playerId={pid!r} "
+                    f"(attempt {i + 1})",
+                    flush=True,
+                )
+                return str(pid).strip()
+
+            if password:
+                via_site = self.resolve_player_via_site_login(username, password)
+                if via_site and self._is_plausible_player_id(via_site.get("playerId")):
+                    pid = str(via_site["playerId"]).strip()
+                    print(
+                        f"[ICHANCY resolve] via site login username={username!r} "
+                        f"-> playerId={pid!r}",
+                        flush=True,
+                    )
+                    return pid
+
+        print(
+            f"[ICHANCY resolve] FAILED username={username!r} after {attempts} attempts",
+            flush=True,
+        )
         return None
 
     def resolve_player_via_site_login(
@@ -1215,11 +1301,19 @@ class IchancyClient:
             timeout=60,
         )
         result = body.get("result")
+        # لوج كامل بوضوح بالكونسول لنفهم قصة الـ ID
+        print("=" * 60, flush=True)
+        print("[ICHANCY registerPlayer] FULL RESPONSE", flush=True)
+        print(f"  login={login}", flush=True)
+        print(f"  body={body!r}", flush=True)
+        print(f"  result_type={type(result).__name__} result={result!r}", flush=True)
+        print("=" * 60, flush=True)
         logger.info(
-            "registerPlayer raw body preview=%s | result type=%s preview=%s",
-            str(body)[:400],
+            "registerPlayer FULL login=%s body=%s result_type=%s result=%s",
+            login,
+            body,
             type(result).__name__,
-            str(result)[:300],
+            result,
         )
 
         # نجاح المنصة: True / 1 / dict فيه لاعب
@@ -1232,32 +1326,40 @@ class IchancyClient:
         if result is False or result == "ex":
             raise IchancyError(self._extract_error(body) or "فشل تسجيل اللاعب")
 
-        player = self.extract_player_from_register(body, login=login)
-        player_id = None
-        if player and self._is_plausible_player_id(player.get("playerId")):
-            player_id = str(player.get("playerId")).strip()
-
-        if not ok and not player_id:
-            # رد غريب — نعتبره نجاح ناعم إذا status True
+        # ما عادنا نطارد playerId — اليوزر كافي
+        if not ok:
             if not (isinstance(body, dict) and body.get("status") is True):
                 raise IchancyError(
                     self._extract_error(body)
                     or f"رد تسجيل غير متوقع: {str(result)[:120]}"
                 )
 
+        print(
+            f"[ICHANCY registerPlayer] SUCCESS without requiring playerId "
+            f"login={login} ok={ok}",
+            flush=True,
+        )
         return {
             "login": login,
             "username": login,
-            "playerId": player_id,
             "created": True,
             "raw": result,
         }
-    def get_player_balance(self, player_id: str) -> float:
-        """POST global/api/UserApi/getPlayerBalanceById — يعيد 0 عند رصيد فارغ."""
+    def get_player_balance(self, player_ref: str) -> float:
+        """POST getPlayerBalanceById — حسب الوثائق: playerId فقط."""
+        player_ref = str(player_ref).strip()
+        if not self._is_plausible_player_id(player_ref):
+            raise IchancyError(
+                f"getPlayerBalanceById يحتاج playerId رقمي، وصل: {player_ref!r}"
+            )
+        print(f"[ICHANCY getPlayerBalance] playerId={player_ref}", flush=True)
         result = self._request(
             "global/api/UserApi/getPlayerBalanceById",
-            {"playerId": str(player_id)},
+            {"playerId": player_ref},
+            retry_on_ex=False,
         )
+        print(f"[ICHANCY getPlayerBalance] OK result={result!r}", flush=True)
+        logger.info("getPlayerBalance OK playerId=%s result=%s", player_ref, result)
 
         # بعض البوابات ترجع result فارغ/False لما الرصيد صفر — مو معناه اللاعب مش موجود
         if result is None or result is False or result == "" or result == [] or result == {}:
@@ -1284,58 +1386,79 @@ class IchancyClient:
 
     def withdraw_from_player(
         self,
-        player_id: str,
+        player_ref: str,
         amount: float,
         comment: str = "Bot wallet transfer",
     ) -> Dict[str, Any]:
         """
-        POST global/api/UserApi/withdrawFromPlayer
-        يخصم من رصيد اللاعب على المنصة (للتحويل إلى محفظة البوت).
-        ملاحظة الوثيقة: amount سالب للسحب.
+        POST withdrawFromPlayer — حسب الوثائق: playerId + amount سالب.
         """
         if amount <= 0:
             raise IchancyError("مبلغ السحب يجب أن يكون أكبر من صفر")
 
+        player_ref = str(player_ref).strip()
+        if not self._is_plausible_player_id(player_ref):
+            raise IchancyError(
+                f"withdrawFromPlayer يحتاج playerId رقمي، وصل: {player_ref!r}"
+            )
+
+        payload = {
+            "amount": -abs(float(amount)),
+            "comment": comment[:200],
+            "playerId": player_ref,
+            "currencyCode": self.currency_code,
+            "currency": self.currency,
+            "moneyStatus": self.money_status,
+        }
+        print(f"[ICHANCY withdraw] playerId={player_ref} amount={payload['amount']}", flush=True)
         result = self._request(
             "global/api/UserApi/withdrawFromPlayer",
-            {
-                "amount": -abs(float(amount)),
-                "comment": comment[:200],
-                "playerId": str(player_id),
-                "currencyCode": self.currency_code,
-                "currency": self.currency,
-                "moneyStatus": self.money_status,
-            },
+            payload,
             timeout=60,
+            retry_on_ex=False,
         )
-
+        print(f"[ICHANCY withdraw] OK result={result!r}", flush=True)
+        logger.info("withdraw OK playerId=%s", player_ref)
         if not isinstance(result, dict):
             raise IchancyError("استجابة سحب غير متوقعة من ichancy")
         return result
 
     def deposit_to_player(
         self,
-        player_id: str,
+        player_ref: str,
         amount: float,
         comment: str = "Bot deposit to platform",
     ) -> Dict[str, Any]:
-        """POST global/api/UserApi/depositToPlayer — شحن رصيد اللاعب على المنصة"""
+        """POST depositToPlayer — حسب الوثائق: playerId فقط (مو login)."""
         if amount <= 0:
             raise IchancyError("مبلغ الإيداع يجب أن يكون أكبر من صفر")
 
+        player_ref = str(player_ref).strip()
+        if not self._is_plausible_player_id(player_ref):
+            raise IchancyError(
+                f"depositToPlayer يحتاج playerId رقمي، وصل: {player_ref!r}"
+            )
+
+        payload = {
+            "amount": abs(float(amount)),
+            "comment": comment[:200],
+            "playerId": player_ref,
+            "currencyCode": self.currency_code,
+            "currency": self.currency,
+            "moneyStatus": self.money_status,
+        }
+        print(
+            f"[ICHANCY deposit] playerId={player_ref} amount={payload['amount']}",
+            flush=True,
+        )
         result = self._request(
             "global/api/UserApi/depositToPlayer",
-            {
-                "amount": abs(float(amount)),
-                "comment": comment[:200],
-                "playerId": str(player_id),
-                "currencyCode": self.currency_code,
-                "currency": self.currency,
-                "moneyStatus": self.money_status,
-            },
+            payload,
             timeout=60,
+            retry_on_ex=False,
         )
-
+        print(f"[ICHANCY deposit] OK result={result!r}", flush=True)
+        logger.info("deposit OK playerId=%s result=%s", player_ref, result)
         if not isinstance(result, dict):
             raise IchancyError("استجابة إيداع غير متوقعة من ichancy")
         return result

@@ -731,18 +731,11 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         )
         return
     if data == "ichancy_topup_know_id":
-        await IchancyHandler.start_topup_ask_id(update, context)
+        await IchancyHandler.start_topup(update, context)
         return
     if data == "ichancy_topup_where_id":
-        await safe_edit_callback_message(
-            update,
-            "🆔 بتلاقي الـ ID داخل حسابك على iChancy.\n\n"
-            "انسخ الرقم وابعتلي ياه هون.\n\n"
-            "وإذا بعتلي اسمك بدل الـ ID...\n"
-            "رح نتطلع ببعض ونبلش من جديد 😂",
-            reply_markup=Keyboards.ichancy_topup_gate(),
-            context=context,
-        )
+        # زر قديم — ما عاد في ID
+        await IchancyHandler.start_topup(update, context)
         return
     if data == "ichancy_random_name":
         await IchancyHandler.random_name_and_create(update, context)
@@ -1218,19 +1211,15 @@ async def handle_withdraw_destination_input(update: Update, context: ContextType
 
 
 async def handle_ichancy_player_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """إدخال ID لتعبئة/سحب iChancy أو ربط بعد الإنشاء."""
-    player_id = update.message.text.strip()
+    """مسار قديم لإدخال ID — نحوّله لطلب المبلغ باليوزرنيم."""
     operation = context.user_data.get("operation")
     if operation == "ichancy_topup":
-        await IchancyHandler.process_topup_player_id(update, context, player_id)
+        await IchancyHandler.process_topup_player_id(update, context, "")
         return
     if operation == "ichancy_withdraw":
-        await IchancyHandler.process_withdraw_player_id(update, context, player_id)
+        await IchancyHandler.process_withdraw_player_id(update, context, "")
         return
-    if operation == "link_after_create":
-        await IchancyHandler.process_link_account(update, context, player_id)
-        return
-    await IchancyHandler.process_link_account(update, context, player_id)
+    await IchancyHandler.process_link_account(update, context, "")
 
 
 async def cancel_pending_payment(context: ContextTypes.DEFAULT_TYPE):

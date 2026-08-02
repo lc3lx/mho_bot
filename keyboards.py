@@ -117,8 +117,7 @@ class Keyboards:
     @staticmethod
     def ichancy_topup_gate():
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ بعرف الآيدي", callback_data="ichancy_topup_know_id")],
-            [InlineKeyboardButton("🆘 وين بلاقيه؟", callback_data="ichancy_topup_where_id")],
+            [InlineKeyboardButton("✅ كمّل التعبئة", callback_data="ichancy_topup_know_id")],
             [Keyboards.home_btn()],
         ])
 

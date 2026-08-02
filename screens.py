@@ -38,8 +38,8 @@ async def show_extras(update, context):
 async def show_ichancy_topup_gate(update, context):
     text = (
         "💸 فتحتلك بوابة التعبئة.\n\n"
-        "ابعث ID حساب iChancy أرقام فقط.\n\n"
-        "دقّق منيح...\n"
+        "الشحن عالحساب المرتبط بالبوت (اليوزرنيم).\n"
+        "ما بدنا ID — اضغط كمّل وابعث المبلغ.\n\n"
         "البوت سريع، بس لسا ما تعلّم يقرأ النوايا 😂"
     )
     await show_screen(update, context, text, Keyboards.ichancy_topup_gate())
@@ -48,7 +48,8 @@ async def show_ichancy_topup_gate(update, context):
 async def show_ichancy_withdraw_gate(update, context):
     text = (
         "💰 قسم السحب صار واقف عإجر وحدة.\n\n"
-        "ابعث ID حساب iChancy أرقام فقط.\n\n"
+        "السحب من حسابك المرتبط بالبوت (اليوزرنيم).\n"
+        "ما بدنا ID — اضغط كمّل وابعث المبلغ.\n\n"
         "ولا تكتب «مستعجل»...\n"
         "المحاسب بياخدها تحدّي شخصي 😂"
     )
