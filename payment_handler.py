@@ -2093,7 +2093,7 @@ class PaymentHandler:
             # مكافأة الإحالة القديمة على التعبئة ملغاة — العمولة من جيش نابليون فقط
             session.commit()
 
-            has_ichancy = bool(user.ichancy_player_id)
+            has_ichancy = bool(user.ichancy_player_id or user.ichancy_username)
             telegram_id = user.telegram_id
             credited = transaction.amount
             new_balance = user.balance

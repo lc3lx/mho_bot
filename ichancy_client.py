@@ -55,6 +55,9 @@ class IchancyClient:
     def __init__(self):
         cfg = Config.ICHANCY_CONFIG
         self.base_url = cfg["api_base_url"].rstrip("/")
+        self.player_api_url = (
+            cfg.get("player_api_url") or "https://www.ichancy.com"
+        ).rstrip("/")
         self.username = cfg.get("username", "")
         self.password = cfg.get("password", "")
         self.parent_id = cfg.get("parent_id", "")
@@ -70,6 +73,7 @@ class IchancyClient:
         self._refresh_token: Optional[str] = None
         self._lock = threading.Lock()
         self._warmed_up = False
+        self._player_warmed_up = False
 
         self._session = self._make_session(self._proxies)
 
@@ -502,6 +506,9 @@ class IchancyClient:
     def _url(self, endpoint: str) -> str:
         return f"{self.base_url}/{endpoint.lstrip('/')}"
 
+    def _player_url(self, endpoint: str) -> str:
+        return f"{self.player_api_url}/{endpoint.lstrip('/')}"
+
     def _extract_error(self, body: Dict[str, Any]) -> str:
         notifications = body.get("notification") or []
         if notifications and isinstance(notifications, list):
@@ -510,14 +517,49 @@ class IchancyClient:
                 return str(first["content"])
         return "فشل الطلب على ichancy"
 
-    def _warm_up(self, timeout: int) -> None:
-        """زيارة الصفحة الرئيسية مرة واحدة لالتقاط كوكيز Cloudflare."""
-        if self._warmed_up:
-            return
-        self._warmed_up = True
+    @staticmethod
+    def _id_from_jwt(token: str) -> Optional[str]:
+        """استخراج معرف مستخدم محتمل من JWT بدون تحقق توقيع."""
+        if not token or not isinstance(token, str) or token.count(".") < 2:
+            return None
+        try:
+            import base64
+            import json
+
+            payload_b64 = token.split(".")[1]
+            pad = "=" * (-len(payload_b64) % 4)
+            data = json.loads(base64.urlsafe_b64decode(payload_b64 + pad))
+        except Exception:
+            return None
+        if not isinstance(data, dict):
+            return None
+        for key in (
+            "playerId",
+            "PlayerId",
+            "userId",
+            "UserId",
+            "clientId",
+            "ClientId",
+            "sub",
+            "id",
+            "uid",
+        ):
+            val = data.get(key)
+            if IchancyClient._is_plausible_player_id(val):
+                return str(val).strip()
+        # بعض التوكنات تضع المعرف داخل كائن user
+        for nest_key in ("user", "player", "data", "profile"):
+            nested = data.get(nest_key)
+            if isinstance(nested, dict):
+                found = IchancyClient._deep_find_player_id(nested)
+                if found:
+                    return found
+        return IchancyClient._deep_find_player_id(data)
+
+    def _warm_up_host(self, base_url: str, timeout: int) -> None:
         try:
             self._session.get(
-                f"{self.base_url}/",
+                f"{base_url.rstrip('/')}/",
                 headers={
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                     "Accept-Language": "en-US,en;q=0.9",
@@ -525,7 +567,69 @@ class IchancyClient:
                 timeout=timeout,
             )
         except Exception as exc:
-            logger.debug("Ichancy warm-up failed: %s", exc)
+            logger.debug("Ichancy warm-up (%s) failed: %s", base_url, exc)
+
+    def _warm_up(self, timeout: int) -> None:
+        """زيارة الصفحة الرئيسية مرة واحدة لالتقاط كوكيز Cloudflare."""
+        if self._warmed_up:
+            return
+        self._warmed_up = True
+        self._warm_up_host(self.base_url, timeout)
+
+    def _post_json(
+        self,
+        url: str,
+        data: Optional[Dict[str, Any]] = None,
+        *,
+        headers: Optional[Dict[str, str]] = None,
+        timeout: int = None,
+    ) -> Dict[str, Any]:
+        """POST JSON إلى URL مطلق مع نفس معالجة Cloudflare."""
+        req_timeout = timeout if timeout is not None else self.default_timeout
+        hdrs = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/plain, */*",
+        }
+        if curl_requests is None:
+            hdrs["User-Agent"] = (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/122.0.0.0 Safari/537.36"
+            )
+        if headers:
+            hdrs.update(headers)
+        try:
+            response = self._session.post(
+                url, json=data or {}, headers=hdrs, timeout=req_timeout
+            )
+        except Exception as exc:
+            raise IchancyError(f"تعذر الاتصال بـ ichancy: {exc}") from exc
+
+        content_type = (response.headers.get("content-type") or "").lower()
+        raw_text = (response.text or "")[:500]
+        if "text/html" in content_type or raw_text.lstrip().startswith("<!"):
+            if response.status_code in (403, 503) or "cloudflare" in raw_text.lower():
+                raise IchancyError(
+                    "منصة Ichancy حجب الاتصال (Cloudflare 403).",
+                    status_code=response.status_code,
+                )
+            raise IchancyError(
+                f"استجابة غير صالحة من ichancy (HTTP {response.status_code})",
+                status_code=response.status_code,
+            )
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise IchancyError(
+                f"استجابة غير صالحة من ichancy (HTTP {response.status_code})",
+                status_code=response.status_code,
+            ) from exc
+        if response.status_code >= 400:
+            raise IchancyError(
+                self._extract_error(body) if isinstance(body, dict) else "فشل الطلب",
+                status_code=response.status_code,
+            )
+        return body if isinstance(body, dict) else {"result": body}
 
     def _raw_post(
         self,
@@ -874,8 +978,80 @@ class IchancyClient:
                 return records[0]
         return None
 
+    def resolve_player_via_site_login(
+        self, login: str, password: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        بعد registerPlayer (result=1 بدون ID): نسجّل دخول اللاعب على موقع اللعب
+        ونستخرج playerId من الرد أو من الـ JWT.
+        """
+        login = (login or "").strip()
+        password = (password or "").strip()
+        if not login or not password:
+            return None
+
+        if not self._player_warmed_up:
+            self._warm_up_host(self.player_api_url, self.default_timeout)
+            self._player_warmed_up = True
+
+        url = self._player_url("global/api/UserApi/signIn")
+        try:
+            body = self._post_json(
+                url,
+                {"username": login, "password": password},
+                headers={
+                    "Origin": self.player_api_url,
+                    "Referer": f"{self.player_api_url}/",
+                },
+                timeout=45,
+            )
+        except IchancyError as exc:
+            logger.warning(
+                "player site signIn failed for %s: %s", login, exc.message
+            )
+            return None
+
+        logger.info(
+            "player site signIn for %s preview=%s",
+            login,
+            str(body)[:350],
+        )
+
+        extracted = self.extract_player_from_register(body, login=login)
+        if extracted and self._is_plausible_player_id(extracted.get("playerId")):
+            return extracted
+
+        pid = self._deep_find_player_id(body)
+        if pid:
+            return {"playerId": pid, "username": login}
+
+        result = body.get("result") if isinstance(body, dict) else None
+        token = None
+        if isinstance(result, dict):
+            token = (
+                result.get("accessToken")
+                or result.get("token")
+                or result.get("authToken")
+            )
+            for key in ("userId", "playerId", "UserId", "clientId", "id"):
+                if self._is_plausible_player_id(result.get(key)):
+                    return {
+                        "playerId": str(result.get(key)).strip(),
+                        "username": login,
+                    }
+        if isinstance(token, str):
+            jwt_id = self._id_from_jwt(token)
+            if jwt_id:
+                return {"playerId": jwt_id, "username": login}
+
+        return None
+
     def resolve_player_after_register(
-        self, login: str, register_body: Any = None, attempts: int = 4
+        self,
+        login: str,
+        register_body: Any = None,
+        password: str = "",
+        attempts: int = 4,
     ) -> Optional[Dict[str, Any]]:
         """محاولات متكررة لجلب playerId بعد التسجيل."""
         import time
@@ -886,19 +1062,35 @@ class IchancyClient:
 
         for i in range(attempts):
             if i:
-                time.sleep(0.7 * i)
+                time.sleep(0.8 * i)
+
+            # 1) تسجيل دخول اللاعب على الموقع — أهم مسار لما قائمة الوكيل = ex
+            if password:
+                via_site = self.resolve_player_via_site_login(login, password)
+                if via_site and via_site.get("playerId"):
+                    logger.info(
+                        "Resolved playerId via site login: %s -> %s",
+                        login,
+                        via_site.get("playerId"),
+                    )
+                    return via_site
+
             found = self.find_player_by_username(login)
-            if found and found.get("playerId"):
+            if found and self._is_plausible_player_id(found.get("playerId")):
                 return found
-            # بعض البوابات ترجع الـ ID كرقم نتيجة لطلبات أخرى
+
             for ep, payload in (
                 ("global/api/UserApi/getPlayerByLogin", {"login": login}),
                 ("global/api/UserApi/getPlayerByUserName", {"userName": login}),
                 ("global/api/UserApi/getPlayerInfo", {"login": login}),
                 ("global/api/Player/getPlayerByUserName", {"userName": login}),
+                ("global/api/Client/getClientByLogin", {"login": login}),
+                ("global/api/UserApi/findPlayer", {"login": login}),
             ):
                 try:
-                    body = self._request_full(ep, payload, timeout=20, retry_on_ex=False)
+                    body = self._request_full(
+                        ep, payload, timeout=20, retry_on_ex=False
+                    )
                 except IchancyError:
                     continue
                 extracted = self.extract_player_from_register(body, login=login)
@@ -907,9 +1099,9 @@ class IchancyClient:
                 pid = self._deep_find_player_id(body)
                 if pid:
                     return {"playerId": pid, "username": login}
+
         return player
 
-    @staticmethod
     def extract_player_from_register(result: Any, login: str = "") -> Optional[Dict[str, Any]]:
         """استخراج بيانات اللاعب من رد registerPlayer (result أو الجسم الكامل)."""
         if result is None or result is False or result == "ex":
@@ -995,6 +1187,7 @@ class IchancyClient:
             return {"playerId": pid, "username": login}
         return None
 
+
     def register_player(
         self,
         login: str,
@@ -1002,7 +1195,7 @@ class IchancyClient:
         email: str,
         parent_id: Optional[str] = None,
     ) -> Any:
-        """POST global/api/UserApi/registerPlayer — يعيد dict فيه playerId إن أمكن."""
+        """POST registerPlayer — النجاح يكفي (result=1). الـ ID اختياري."""
         parent = parent_id or self.parent_id
         if not parent:
             raise IchancyError("ICHANCY_PARENT_ID مطلوب لتسجيل لاعب جديد")
@@ -1029,23 +1222,36 @@ class IchancyClient:
             str(result)[:300],
         )
 
-        player = self.resolve_player_after_register(login, register_body=body)
-        if player and player.get("playerId"):
-            return player
-
-        # التسجيل غالباً نجح حتى لو ما قدرنا نجيب playerId (قائمة اللاعبين معطّلة).
-        logger.warning(
-            "registerPlayer succeeded for %s but playerId missing; soft result",
-            login,
+        # نجاح المنصة: True / 1 / dict فيه لاعب
+        ok = (
+            result is True
+            or result == 1
+            or result == "1"
+            or (isinstance(result, dict) and result is not False)
         )
+        if result is False or result == "ex":
+            raise IchancyError(self._extract_error(body) or "فشل تسجيل اللاعب")
+
+        player = self.extract_player_from_register(body, login=login)
+        player_id = None
+        if player and self._is_plausible_player_id(player.get("playerId")):
+            player_id = str(player.get("playerId")).strip()
+
+        if not ok and not player_id:
+            # رد غريب — نعتبره نجاح ناعم إذا status True
+            if not (isinstance(body, dict) and body.get("status") is True):
+                raise IchancyError(
+                    self._extract_error(body)
+                    or f"رد تسجيل غير متوقع: {str(result)[:120]}"
+                )
+
         return {
             "login": login,
             "username": login,
-            "playerId": None,
+            "playerId": player_id,
             "created": True,
             "raw": result,
         }
-
     def get_player_balance(self, player_id: str) -> float:
         """POST global/api/UserApi/getPlayerBalanceById — يعيد 0 عند رصيد فارغ."""
         result = self._request(

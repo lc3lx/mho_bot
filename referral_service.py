@@ -215,7 +215,24 @@ class ReferralArmyService:
                     session.commit()
                     return STATUS_REJECTED
 
-            if not invitee.ichancy_player_id:
+            if invitee.ichancy_username:
+                other = (
+                    session.query(User)
+                    .filter(
+                        User.ichancy_username == invitee.ichancy_username,
+                        User.id != invitee.id,
+                    )
+                    .first()
+                )
+                if other:
+                    invite.status = STATUS_REJECTED
+                    invite.reject_reason = "حساب iChancy مكرر / وهمي"
+                    invite.updated_at = datetime.utcnow()
+                    session.commit()
+                    return STATUS_REJECTED
+
+            # يكفي يوزر مرتبط — الـ ID مش شرط لبدء التحقق
+            if not invitee.ichancy_player_id and not invitee.ichancy_username:
                 return invite.status
 
             invite.status = STATUS_PENDING
@@ -245,7 +262,9 @@ class ReferralArmyService:
             if invite.status == STATUS_REJECTED:
                 return False, "الإحالة مرفوضة", None
             invitee = session.query(User).filter(User.id == invite.invitee_id).first()
-            if not invitee or not invitee.ichancy_player_id:
+            if not invitee or (
+                not invitee.ichancy_player_id and not invitee.ichancy_username
+            ):
                 return False, "لا يوجد حساب iChancy موثق", None
             if net_usd < min_usd and net_syp <= 0:
                 return False, f"النشاط أقل من الحد الأدنى ({min_usd:g}$)", None

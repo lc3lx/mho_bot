@@ -342,7 +342,13 @@ class Config:
     # إعدادات ichancy.com — Agent API (signIn / withdrawFromPlayer)
     ICHANCY_CONFIG = {
         "website_url": "https://www.ichancy.com/",
+        # بوابة الوكيل (إنشاء/شحن/سحب)
         "api_base_url": os.getenv("ICHANCY_API_URL", "https://agents.ichancy100.com"),
+        # موقع اللاعب — لجلب playerId عبر signIn بعد الإنشاء إذا قائمة الوكيل ممنوعة
+        "player_api_url": os.getenv(
+            "ICHANCY_PLAYER_API_URL",
+            "https://www.ichancy.com",
+        ).rstrip("/"),
         "username": os.getenv("ICHANCY_USERNAME", ""),
         "password": os.getenv("ICHANCY_PASSWORD", ""),
         "parent_id": os.getenv("ICHANCY_PARENT_ID", ""),

@@ -57,8 +57,8 @@ def user_is_funded(user) -> bool:
 
 
 def user_has_ichancy(user) -> bool:
-    """هل لدى المستخدم حساب Ichancy مرتبط؟"""
-    return bool(user and user.ichancy_player_id)
+    """هل لدى المستخدم حساب Ichancy مرتبط؟ (اليوزر يكفي — الـ ID مش مطلوب)"""
+    return bool(user and (user.ichancy_username or user.ichancy_player_id))
 
 
 def user_is_banned(user) -> bool:
@@ -1218,11 +1218,14 @@ async def handle_withdraw_destination_input(update: Update, context: ContextType
 
 
 async def handle_ichancy_player_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """إدخال ID لتعبئة iChancy أو ربط بعد الإنشاء."""
+    """إدخال ID لتعبئة/سحب iChancy أو ربط بعد الإنشاء."""
     player_id = update.message.text.strip()
     operation = context.user_data.get("operation")
     if operation == "ichancy_topup":
         await IchancyHandler.process_topup_player_id(update, context, player_id)
+        return
+    if operation == "ichancy_withdraw":
+        await IchancyHandler.process_withdraw_player_id(update, context, player_id)
         return
     if operation == "link_after_create":
         await IchancyHandler.process_link_account(update, context, player_id)
@@ -1353,7 +1356,6 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             await PaymentHandler.process_deposit_request(update, context, amount, method)
 
         elif operation == 'ichancy_withdraw':
-            context.user_data.clear()
             await IchancyHandler.process_ichancy_withdraw(update, context, amount)
 
         elif operation == 'ichancy_topup':
