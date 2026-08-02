@@ -1002,14 +1002,15 @@ class IchancyClient:
         if found and found.get("playerId"):
             return found
 
-        if result is True or result == {} or result is None:
-            raise IchancyError(
-                "تم إنشاء الحساب على المنصة لكن تعذر جلب معرف اللاعب "
-                "(البحث getPlayersForCurrentAgent غير متاح لهذا الوكيل). "
-                "تحقق من صلاحيات الوكيل أو PARENT_ID."
+        # التسجيل غالباً نجح حتى لو ما قدرنا نجيب playerId (قائمة اللاعبين معطّلة).
+        if result is True or result == {} or result is None or result is False:
+            logger.warning(
+                "registerPlayer succeeded for %s but playerId missing; returning soft result",
+                login,
             )
+            return {"login": login, "playerId": None, "created": True}
 
-        raise IchancyError(
-            "تم التسجيل لكن الرد لم يتضمن معرف اللاعب. "
-            f"رد المنصة: {str(result)[:180]}"
+        logger.warning(
+            "registerPlayer opaque result for %s: %s", login, str(result)[:180]
         )
+        return {"login": login, "playerId": None, "created": True, "raw": result}

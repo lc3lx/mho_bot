@@ -592,6 +592,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         "withdraw": "🏧 قسم الإخراج…",
         "ichancy_hub": "⚡️ حسابك…",
         "ichancy_create_start": "⚔️ إنشاء حساب…",
+        "ichancy_random_name": "🎲 سميني…",
         "ichancy_topup_start": "💸 بوابة التعبئة…",
         "ichancy_withdraw_start": "💰 قسم السحب…",
         "gift_code": "🎟️ الكود يا بطل…",
@@ -727,17 +728,21 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         )
         return
     if data == "ichancy_topup_know_id":
-        await IchancyHandler.start_topup(update, context)
+        await IchancyHandler.start_topup_ask_id(update, context)
         return
     if data == "ichancy_topup_where_id":
         await safe_edit_callback_message(
             update,
-            "🆘 وين بلاقي الـ ID؟\n\n"
-            "من معلومات حسابك داخل البوت (🪪 بطاقتي / حساب Ichancy)\n"
-            "أو من لوحة اللاعب على المنصة — أرقام فقط بدون مسافات.",
+            "🆔 بتلاقي الـ ID داخل حسابك على iChancy.\n\n"
+            "انسخ الرقم وابعتلي ياه هون.\n\n"
+            "وإذا بعتلي اسمك بدل الـ ID...\n"
+            "رح نتطلع ببعض ونبلش من جديد 😂",
             reply_markup=Keyboards.ichancy_topup_gate(),
             context=context,
         )
+        return
+    if data == "ichancy_random_name":
+        await IchancyHandler.random_name_and_create(update, context)
         return
     if data == "ichancy_withdraw_continue":
         await IchancyHandler.start_withdraw_from_ichancy(update, context)
@@ -1210,8 +1215,12 @@ async def handle_withdraw_destination_input(update: Update, context: ContextType
 
 
 async def handle_ichancy_player_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """رفض إدخال ربط حساب Ichancy قديم دفاعياً."""
+    """إدخال ID لتعبئة iChancy (أو رفض الربط القديم)."""
     player_id = update.message.text.strip()
+    operation = context.user_data.get("operation")
+    if operation == "ichancy_topup":
+        await IchancyHandler.process_topup_player_id(update, context, player_id)
+        return
     await IchancyHandler.process_link_account(update, context, player_id)
 
 
@@ -1342,7 +1351,6 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             await IchancyHandler.process_ichancy_withdraw(update, context, amount)
 
         elif operation == 'ichancy_topup':
-            context.user_data.clear()
             await IchancyHandler.process_topup(update, context, amount)
         
         elif operation == 'withdraw':

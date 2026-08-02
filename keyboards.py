@@ -98,12 +98,30 @@ class Keyboards:
     def ichancy_required_menu():
         """إجبار إنشاء حساب Ichancy (الشحن اختياري)"""
         keyboard = [
-            [InlineKeyboardButton("⚔️ إنشاء حساب Ichancy الآن", callback_data="ichancy_create_start")],
+            [InlineKeyboardButton("🎮 بدّي حساب iChancy", callback_data="ichancy_create_start")],
             [InlineKeyboardButton("📥 شحن محفظة البوت (اختياري)", callback_data="deposit")],
             [InlineKeyboardButton("🏆 استخدام كود هدية", callback_data="gift_code")],
             [InlineKeyboardButton("✉️ تواصل مع الدعم", callback_data="contact")],
+            [Keyboards.home_btn()],
         ]
         return InlineKeyboardMarkup(keyboard)
+
+    @staticmethod
+    def ichancy_name_prompt():
+        """بداية إنشاء حساب — اسم بسيط فقط"""
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎲 سميني انت", callback_data="ichancy_random_name")],
+            [InlineKeyboardButton("🏠 رجعني عالمقر", callback_data="main_menu")],
+        ])
+
+    @staticmethod
+    def ichancy_topup_gate():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ بعرف الآيدي", callback_data="ichancy_topup_know_id")],
+            [InlineKeyboardButton("🆘 وين بلاقيه؟", callback_data="ichancy_topup_where_id")],
+            [Keyboards.home_btn()],
+        ])
+
     
     @staticmethod
     def ichancy_menu(linked: bool = False):
@@ -158,14 +176,6 @@ class Keyboards:
             [
                 InlineKeyboardButton("📋 المزيد من الخدمات", callback_data="full_menu"),
             ],
-            [Keyboards.home_btn()],
-        ])
-
-    @staticmethod
-    def ichancy_topup_gate():
-        return InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ بعرف الآيدي", callback_data="ichancy_topup_know_id")],
-            [InlineKeyboardButton("🆘 وين بلاقيه؟", callback_data="ichancy_topup_where_id")],
             [Keyboards.home_btn()],
         ])
 

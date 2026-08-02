@@ -5,7 +5,10 @@
 
 import asyncio
 import logging
+import random
 import re
+import secrets
+import string
 from datetime import datetime, timedelta
 
 from telegram import Update
@@ -20,6 +23,12 @@ from ichancy_client import IchancyClient, IchancyError
 logger = logging.getLogger(__name__)
 db = DatabaseManager()
 ichancy_client = IchancyClient()
+
+ICHANCY_LOGIN_PREFIX = "Na_"
+RANDOM_NAME_POOL = (
+    "Ali", "Omar", "Samer", "Rami", "Nour", "Hadi", "Ziad", "Karim",
+    "Maya", "Lina", "Sara", "Jana", "Adam", "Yazan", "Tarek", "Bassel",
+)
 
 
 class IchancyHandler:
@@ -44,77 +53,80 @@ class IchancyHandler:
         return f"{secs} ثانية"
 
     @staticmethod
+    def generate_password(length: int = 8) -> str:
+        alphabet = string.ascii_letters + string.digits
+        return "".join(secrets.choice(alphabet) for _ in range(length))
+
+    @staticmethod
+    def normalize_name_part(raw: str):
+        """يستخرج الاسم الإنجليزي البسيط من إدخال الزبون."""
+        raw = (raw or "").strip().lstrip("@")
+        if raw.lower().startswith("na_"):
+            raw = raw[3:]
+        raw = re.sub(r"[^A-Za-z0-9]", "", raw)
+        if not raw:
+            return None, (
+                "🔴 ابعت اسم إنجليزي بسيط.\n"
+                f"مثل: {tg_code('Ali')} أو {tg_code('Omar')}"
+            )
+        if not raw[0].isalpha():
+            return None, (
+                "🔴 الاسم لازم يبدأ بحرف إنجليزي.\n"
+                f"مثل: {tg_code('Ali')}"
+            )
+        if len(raw) > 20:
+            return None, "🔴 الاسم طويل زيادة. قصّره شوي."
+        name = raw[0].upper() + raw[1:]
+        return name, None
+
+    @staticmethod
+    def build_login_candidates(name_part: str, attempts: int = 30):
+        """Na_(اسم)(رقم) مع بدائل تلقائية إذا الاسم محجوز."""
+        candidates = []
+        has_digit = bool(re.search(r"\d", name_part))
+        if has_digit:
+            candidates.append(f"{ICHANCY_LOGIN_PREFIX}{name_part}")
+
+        base = re.sub(r"\d+$", "", name_part) or name_part
+        base = base[0].upper() + base[1:] if base else name_part
+        used = set()
+        for _ in range(attempts):
+            n = random.randint(10, 99)
+            if n in used:
+                continue
+            used.add(n)
+            login = f"{ICHANCY_LOGIN_PREFIX}{base}{n}"
+            if login not in candidates:
+                candidates.append(login)
+        for n in range(10, 100):
+            login = f"{ICHANCY_LOGIN_PREFIX}{base}{n}"
+            if login not in candidates:
+                candidates.append(login)
+            if len(candidates) >= attempts + 10:
+                break
+        return candidates
+
+    @staticmethod
+    def is_username_taken_locally(login: str, telegram_id: str) -> bool:
+        taken = db.get_user_by_ichancy_username(login)
+        return bool(taken and str(taken.telegram_id) != str(telegram_id))
+
+    @staticmethod
     def bot_username_prefix() -> str:
-        """بادئة اسم البوت لاسم مستخدم Ichancy (أحرف/أرقام فقط)."""
-        raw = (Config.BOT_DISPLAY_NAME or Config.BOT_USERNAME or "Napoleon").strip()
-        raw = re.sub(r"(?i)_?bot$", "", raw)
-        prefix = re.sub(r"[^A-Za-z0-9]", "", raw)
-        if not prefix:
-            prefix = "Napoleon"
-        # أول حرف كبير ليتوافق مع شرط بداية الاسم
-        return prefix[0].upper() + prefix[1:]
+        return ICHANCY_LOGIN_PREFIX.rstrip("_")
 
     @staticmethod
     def example_username() -> str:
-        return f"{IchancyHandler.bot_username_prefix()}Ali12"
-
-    @staticmethod
-    def build_full_username(user_part: str) -> str:
-        """يلصق اسم البوت تلقائياً قبل اليوزر اللي دخّله الزبون."""
-        user_part = user_part.strip()
-        prefix = IchancyHandler.bot_username_prefix()
-        # لو الزبون كتب البادئة بنفسه ما نكرّرها
-        if user_part.lower().startswith(prefix.lower()):
-            return user_part[0].upper() + user_part[1:] if user_part else user_part
-        return f"{prefix}{user_part}"
-
-    @staticmethod
-    def validate_username(username: str):
-        """يتحقق من الجزء اللي يدخله الزبون ثم يبني الاسم الكامل مع بادئة البوت."""
-        username = username.strip().lstrip("@")
-        prefix = IchancyHandler.bot_username_prefix()
-        example = IchancyHandler.example_username()
-
-        # اقبل الجزء بدون البادئة
-        if username.lower().startswith(prefix.lower()):
-            user_part = username[len(prefix) :]
-        else:
-            user_part = username
-
-        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9]{1,23}", user_part):
-            return None, (
-                "🔴 اسم المستخدم غير صالح.\n"
-                "• أحرف إنجليزية فقط\n"
-                "• يفضّل إضافة أرقام\n"
-                "• بدون رموز خاصة\n"
-                f"• بيصير تلقائي: {prefix} + اسمك\n"
-                f"مثال: أرسل {tg_code('Ali12')} → يصير {tg_code(example)}"
-            )
-        if not re.search(r"\d", user_part):
-            return None, (
-                "🔴 لازم الاسم يحتوي أرقام.\n"
-                f"مثال: أرسل {tg_code('Ali12')} → يصير {tg_code(example)}"
-            )
-
-        full = IchancyHandler.build_full_username(user_part)
-        if len(full) > 32:
-            return None, (
-                "🔴 الاسم النهائي طويل زيادة.\n"
-                f"اختصر الاسم (البادئة {prefix} بتنضاف تلقائي)."
-            )
-        return full, None
+        return f"{ICHANCY_LOGIN_PREFIX}Ali27"
 
     @staticmethod
     def validate_password(password: str):
-        """Ichancy تقبل من 5 أحرف/أرقام — بدون تعقيد إضافي."""
         password = password.strip()
         if not re.fullmatch(r"[A-Za-z0-9]{5,32}", password):
             return None, (
                 "🔴 كلمة المرور غير صالحة.\n"
                 "• من 5 إلى 32\n"
-                "• أحرف إنجليزية و/أو أرقام فقط\n"
-                "• بدون رموز خاصة\n"
-                f"مثال: {tg_code('Abc12')}"
+                "• أحرف إنجليزية و/أو أرقام فقط"
             )
         return password, None
 
@@ -228,7 +240,7 @@ class IchancyHandler:
 
     @staticmethod
     async def start_create_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """بدء إنشاء حساب — طلب اسم المستخدم"""
+        """بداية إنشاء حساب — اسم بسيط فقط."""
         user = db.get_user(update.effective_user.id)
         if not user:
             await safe_edit_callback_message(
@@ -258,265 +270,287 @@ class IchancyHandler:
             )
             return
 
-        prefix = IchancyHandler.bot_username_prefix()
-        example = IchancyHandler.example_username()
         text = (
-            "🔷 إنشاء حساب Ichancy — اسم المستخدم\n\n"
-            "⚠️ مسموح بحساب واحد فقط لكل مستخدم.\n\n"
-            "الشروط:\n"
-            "1) أحرف إنجليزية فقط\n"
-            "2) لازم أرقام ضمن الاسم\n"
-            "3) بدون رموز خاصة\n\n"
-            f"📌 اسم البوت {tg_code(prefix)} بينضاف تلقائي قبل اسمك.\n"
-            f"مثال: أرسل {tg_code('Ali12')} → الحساب يصير {tg_code(example)}\n\n"
-            "أرسل اسمك الآن (بدون اسم البوت)، أو اضغط إلغاء للرجوع."
+            "👤 سمّي حالك والباقي علينا 😂\n\n"
+            "ابعت اسم بسيط بالإنجليزي متل:\n"
+            f"{tg_code('Ali')}\n"
+            f"{tg_code('Omar')}\n"
+            f"{tg_code('Samer')}\n\n"
+            "إنت اختار الاسم بس...\n"
+            "الـ Na_ والأرقام خليهن شغلة لبوت 😎"
         )
         context.user_data["state"] = "waiting_for_ichancy_username"
         context.user_data["operation"] = "create_ichancy"
         await safe_edit_callback_message(
             update,
             text,
-            reply_markup=Keyboards.cancel_operation(),
+            reply_markup=Keyboards.ichancy_name_prompt(),
             context=context,
             parse_mode="HTML",
+        )
+
+    @staticmethod
+    async def random_name_and_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        name = random.choice(RANDOM_NAME_POOL)
+        if update.callback_query:
+            try:
+                await update.callback_query.answer(f"الاسم: {name}")
+            except Exception:
+                pass
+        await IchancyHandler.create_account_from_name(
+            update, context, name, via_callback=True
         )
 
     @staticmethod
     async def process_username(
         update: Update, context: ContextTypes.DEFAULT_TYPE, username: str
     ):
+        await IchancyHandler.create_account_from_name(
+            update, context, username, via_callback=False
+        )
+
+    @staticmethod
+    async def create_account_from_name(
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        raw_name: str,
+        via_callback: bool = False,
+    ):
+        """يبني Na_Name27 + كلمة سر تلقائية وينشئ الحساب مباشرة."""
+
+        async def reply(msg, **kwargs):
+            if via_callback and update.callback_query:
+                await safe_edit_callback_message(
+                    update, msg, context=context, **kwargs
+                )
+            elif update.effective_message:
+                await update.effective_message.reply_text(msg, **kwargs)
+
         user = db.get_user(update.effective_user.id)
         if user and user.ichancy_player_id:
             context.user_data.clear()
-            await update.message.reply_text(
+            await reply(
                 IchancyHandler._already_linked_message(user),
                 reply_markup=Keyboards.ichancy_account_menu(),
                 parse_mode="HTML",
             )
             return
 
-        username, err = IchancyHandler.validate_username(username)
+        name_part, err = IchancyHandler.normalize_name_part(raw_name)
         if err:
-            await update.message.reply_text(
+            context.user_data["state"] = "waiting_for_ichancy_username"
+            await reply(
                 err,
-                reply_markup=Keyboards.cancel_operation(),
+                reply_markup=Keyboards.ichancy_name_prompt(),
                 parse_mode="HTML",
             )
             return
 
-        taken = db.get_user_by_ichancy_username(username)
-        if taken and str(taken.telegram_id) != str(update.effective_user.id):
-            await update.message.reply_text(
-                "❌ اسم المستخدم هذا مرتبط بمستخدم آخر في البوت.\n"
-                "اختر اسماً مختلفاً.",
-                reply_markup=Keyboards.cancel_operation(),
+        if not user:
+            context.user_data.clear()
+            await reply(
+                Config.MESSAGES["user_not_found"],
+                reply_markup=Keyboards.ichancy_required_menu(),
             )
             return
 
-        context.user_data["ichancy_new_username"] = username
-        context.user_data["state"] = "waiting_for_ichancy_password"
-        await update.message.reply_text(
-            f"✅ اسم الحساب النهائي: {tg_code(username)}\n\n"
-            "🔷 كلمة المرور\n\n"
-            "من 5 أحرف أو أرقام على الأقل (إنجليزي/أرقام).\n"
-            "بدون رموز خاصة.\n"
-            f"مثال: {tg_code('Abc12')}",
-            reply_markup=Keyboards.cancel_operation(),
+        wait_text = "⏳ عم نجهّزلك الحساب... الاسم والرقم علينا"
+        wait_msg = None
+        if via_callback and update.callback_query:
+            await safe_edit_callback_message(update, wait_text, context=context)
+        else:
+            wait_msg = await update.effective_message.reply_text(wait_text)
+
+        password = IchancyHandler.generate_password(8)
+        candidates = IchancyHandler.build_login_candidates(name_part)
+        last_error = None
+        registered = None
+        username = None
+
+        for login in candidates:
+            if IchancyHandler.is_username_taken_locally(login, user.telegram_id):
+                continue
+            email = f"{re.sub(r'[^a-z0-9]', '', login.lower())}@gmail.com"
+            try:
+                registered = await asyncio.to_thread(
+                    ichancy_client.register_player, login, password, email
+                )
+                username = login
+                break
+            except IchancyError as exc:
+                last_error = exc
+                msg = (exc.message or "").lower()
+                if any(
+                    k in msg
+                    for k in (
+                        "exist",
+                        "already",
+                        "duplicate",
+                        "taken",
+                        "مستخدم",
+                        "موجود",
+                        "محجوز",
+                    )
+                ):
+                    logger.info("login taken, retry next: %s", login)
+                    continue
+                break
+
+        async def clear_wait():
+            if wait_msg:
+                try:
+                    await wait_msg.delete()
+                except Exception:
+                    pass
+
+        if not username or registered is None:
+            context.user_data["state"] = "waiting_for_ichancy_username"
+            await clear_wait()
+            detail = last_error.message if last_error else "تعذر إنشاء الحساب"
+            await reply(
+                f"❌ فشل إنشاء الحساب:\n{detail}\n\n"
+                "جرّب اسماً ثانياً أو اضغط 🎲 سميني انت.",
+                reply_markup=Keyboards.ichancy_name_prompt(),
+            )
+            return
+
+        player = None
+        if isinstance(registered, dict) and registered.get("playerId"):
+            player = registered
+        else:
+            player = ichancy_client.extract_player_from_register(
+                registered, login=username
+            )
+        if not player or not player.get("playerId"):
+            player = await asyncio.to_thread(
+                ichancy_client.find_player_by_username, username
+            )
+        if not player or not player.get("playerId"):
+            try:
+                player = await asyncio.to_thread(
+                    ichancy_client.verify_player, username
+                )
+            except IchancyError:
+                player = None
+
+        player_id = str((player or {}).get("playerId") or "")
+        if not player_id:
+            context.user_data.clear()
+            await clear_wait()
+            session = db.get_session()
+            try:
+                db_user = session.query(User).filter(
+                    User.telegram_id == str(update.effective_user.id)
+                ).first()
+                if db_user and not db_user.ichancy_player_id:
+                    db_user.ichancy_username = username
+                    db_user.ichancy_password = password
+                    session.commit()
+            finally:
+                session.close()
+            await reply(
+                "✅ الحساب انخلق على المنصة بس ما قدرنا نجيب الـ ID تلقائياً.\n\n"
+                f"Username: {tg_code(username)}\n"
+                f"Password: {tg_code(password)}\n\n"
+                "احفظهن وتواصل مع الدعم لربط الـ ID، "
+                "أو جرّب إنشاء باسم آخر.",
+                reply_markup=Keyboards.ichancy_required_menu(),
+                parse_mode="HTML",
+            )
+            return
+
+        owner = db.get_user_by_ichancy_player_id(player_id)
+        if owner and str(owner.telegram_id) != str(update.effective_user.id):
+            context.user_data.clear()
+            await clear_wait()
+            await reply(
+                "❌ هذا الحساب مرتبط بمستخدم تليجرام آخر.\n"
+                "كل مستخدم يحق له حساب واحد فقط.",
+                reply_markup=Keyboards.ichancy_required_menu(),
+            )
+            return
+
+        session = db.get_session()
+        try:
+            db_user = session.query(User).filter(
+                User.telegram_id == str(update.effective_user.id)
+            ).first()
+            if db_user.ichancy_player_id:
+                context.user_data.clear()
+                await clear_wait()
+                await reply(
+                    IchancyHandler._already_linked_message(db_user),
+                    reply_markup=Keyboards.ichancy_account_menu(),
+                    parse_mode="HTML",
+                )
+                return
+            db_user.ichancy_player_id = player_id
+            db_user.ichancy_username = username
+            db_user.ichancy_password = password
+            session.commit()
+        finally:
+            session.close()
+
+        try:
+            from referral_service import ReferralArmyService, STATUS_PENDING
+            refreshed = db.get_user(update.effective_user.id)
+            status = ReferralArmyService.evaluate_after_ichancy_link(refreshed)
+            if status == STATUS_PENDING and refreshed.referred_by:
+                try:
+                    await context.bot.send_message(
+                        chat_id=refreshed.referred_by,
+                        text=(
+                            "🟠 رفيقك ربط حساب iChancy.\n"
+                            "الإحالة قيد التحقق بانتظار النشاط المؤهل/مراجعة الإدارة."
+                        ),
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            logger.exception("فشل تقييم إحالة بعد إنشاء Ichancy")
+
+        context.user_data.clear()
+        await clear_wait()
+        await reply(
+            "✅ تم إنشاء حسابك بنجاح\n"
+            "معلومات الحساب هي:\n\n"
+            f"اسم المستخدم: {tg_code(username)}\n"
+            f"كلمة السر: {tg_code(password)}\n"
+            f"ID: {tg_code(player_id)}\n\n"
+            "اضغط على القيم للنسخ\n\n"
+            "⚠️ هذا حسابك الوحيد المرتبط بهذا البوت.\n"
+            "✅ تم فتح باقي خدمات البوت.",
             parse_mode="HTML",
+            reply_markup=Keyboards.start_menu(),
         )
 
     @staticmethod
     async def process_password(
         update: Update, context: ContextTypes.DEFAULT_TYPE, password: str
     ):
-        password, err = IchancyHandler.validate_password(password)
-        if err:
-            await update.message.reply_text(
-                f"🔄 حاول مرة اخرى\n\n{err}",
-                reply_markup=Keyboards.cancel_operation(),
-                parse_mode="HTML",
-            )
+        """توافق خلفي — الإنشاء صار تلقائي من الاسم فقط."""
+        raw = context.user_data.get("ichancy_new_username") or ""
+        if raw.lower().startswith("na_"):
+            raw = raw[3:]
+        if raw:
+            await IchancyHandler.create_account_from_name(update, context, raw)
             return
-
-        username = context.user_data.get("ichancy_new_username")
-        if not username:
-            context.user_data.clear()
-            await update.message.reply_text(
-                Config.MESSAGES["session_expired"],
-                reply_markup=Keyboards.ichancy_required_menu(),
-            )
-            return
-
-        # منع إنشاء حساب ثانٍ حتى لو تجاوز زر البداية
-        existing = db.get_user(update.effective_user.id)
-        if not existing:
-            context.user_data.clear()
-            await update.message.reply_text(
-                Config.MESSAGES["user_not_found"],
-                reply_markup=Keyboards.ichancy_required_menu(),
-            )
-            return
-
-        if existing.ichancy_player_id:
-            context.user_data.clear()
-            await update.message.reply_text(
-                IchancyHandler._already_linked_message(existing),
-                reply_markup=Keyboards.ichancy_account_menu(),
-                parse_mode="HTML",
-            )
-            return
-
-        wait_msg = await update.message.reply_text("⏳ انتظر ريثما يتم انشاء الحساب")
-
-        email = f"{username.lower()}@gmail.com"
-        try:
-            registered = await asyncio.to_thread(
-                ichancy_client.register_player, username, password, email
-            )
-
-            player = None
-            if isinstance(registered, dict) and registered.get("playerId"):
-                player = registered
-            else:
-                player = ichancy_client.extract_player_from_register(
-                    registered, login=username
-                )
-
-            if not player or not player.get("playerId"):
-                player = await asyncio.to_thread(
-                    ichancy_client.find_player_by_username, username
-                )
-
-            if not player or not player.get("playerId"):
-                try:
-                    player = await asyncio.to_thread(
-                        ichancy_client.verify_player, username
-                    )
-                except IchancyError:
-                    player = None
-
-            player_id = str((player or {}).get("playerId") or "")
-            if not player_id:
-                raise IchancyError(
-                    "تم إنشاء الحساب على المنصة لكن تعذر جلب معرف اللاعب.\n"
-                    "البحث عن اللاعبين غير متاح لهذا الوكيل حالياً."
-                )
-
-            owner = db.get_user_by_ichancy_player_id(player_id)
-            if owner and str(owner.telegram_id) != str(update.effective_user.id):
-                context.user_data.clear()
-                try:
-                    await wait_msg.delete()
-                except Exception:
-                    pass
-                await update.message.reply_text(
-                    "❌ هذا الحساب مرتبط بمستخدم تليجرام آخر.\n"
-                    "كل مستخدم يحق له حساب واحد فقط.",
-                    reply_markup=Keyboards.ichancy_required_menu(),
-                )
-                return
-
-            session = db.get_session()
-            try:
-                user = session.query(User).filter(
-                    User.telegram_id == str(update.effective_user.id)
-                ).first()
-                if user.ichancy_player_id:
-                    context.user_data.clear()
-                    try:
-                        await wait_msg.delete()
-                    except Exception:
-                        pass
-                    await update.message.reply_text(
-                        IchancyHandler._already_linked_message(user),
-                        reply_markup=Keyboards.ichancy_account_menu(),
-                        parse_mode="HTML",
-                    )
-                    return
-
-                user.ichancy_player_id = player_id
-                user.ichancy_username = username
-                user.ichancy_password = password
-                session.commit()
-                invitee_id = user.id
-            finally:
-                session.close()
-
-            # جيش نابليون: بعد توثيق iChancy → قيد التحقق
-            try:
-                from referral_service import ReferralArmyService, STATUS_PENDING
-
-                refreshed = db.get_user(update.effective_user.id)
-                status = ReferralArmyService.evaluate_after_ichancy_link(refreshed)
-                if status == STATUS_PENDING and refreshed.referred_by:
-                    try:
-                        await context.bot.send_message(
-                            chat_id=refreshed.referred_by,
-                            text=(
-                                "🟠 رفيقك ربط حساب iChancy.\n"
-                                "الإحالة قيد التحقق بانتظار النشاط المؤهل/مراجعة الإدارة."
-                            ),
-                        )
-                    except Exception:
-                        pass
-            except Exception:
-                logger.exception("فشل تقييم إحالة بعد إنشاء Ichancy")
-
-            context.user_data.clear()
-            try:
-                await wait_msg.delete()
-            except Exception:
-                pass
-
-            await update.message.reply_text(
-                "✅ تم إنشاء حسابك بنجاح\n"
-                "معلومات الحساب هي:\n\n"
-                f"اسم المستخدم: {tg_code(username)}\n"
-                f"كلمة السر: {tg_code(password)}\n\n"
-                "اضغط على اسم المستخدم وكلمة المرور للنسخ\n\n"
-                "⚠️ هذا حسابك الوحيد المرتبط بهذا البوت.\n"
-                "✅ تم فتح باقي خدمات البوت.",
-                parse_mode="HTML",
-                reply_markup=Keyboards.start_menu(),
-            )
-
-        except IchancyError as exc:
-            context.user_data.clear()
-            await update.message.reply_text(
-                f"❌ فشل إنشاء الحساب:\n{exc.message}\n\n"
-                "صحّح البيانات أو جرّب اسماً آخر، أو تواصل مع الدعم.",
-                reply_markup=Keyboards.ichancy_required_menu(),
-            )
-        except Exception as exc:
-            logger.exception("خطأ غير متوقع أثناء إنشاء حساب Ichancy")
-            context.user_data.clear()
-            await update.message.reply_text(
-                f"❌ تعذر إنشاء الحساب الآن.\n{user_facing_error_message(exc)}",
-                reply_markup=Keyboards.ichancy_required_menu(),
-            )
+        context.user_data.clear()
+        await update.message.reply_text(
+            "ابدأ إنشاء الحساب من زر 🎮 بدّي حساب iChancy",
+            reply_markup=Keyboards.start_menu(),
+        )
 
     @staticmethod
-    async def start_topup(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """شحن حساب ichancy من رصيد البوت"""
-        user = db.get_user(update.effective_user.id)
-        min_topup = Config.ICHANCY_CONFIG.get("min_topup", 200)
-
-        if not user.ichancy_player_id:
-            await safe_edit_callback_message(
-                update,
-                "❌ أنشئ حساب Ichancy أولاً من الزر أدناه.",
-                reply_markup=Keyboards.ichancy_required_menu(),
-                context=context,
-            )
-            return
-
+    async def start_topup_ask_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """بعد «بعرف الآيدي» — اطلب الـ ID أرقام فقط."""
         text = (
-            "🔄 شحن رصيد Ichancy\n\n"
-            "أرسل المبلغ الذي تريد إضافته إلى حسابك في ايشانسي.\n\n"
-            f"ملاحظة: أقل مبلغ للشحن هو {format_currency(min_topup)}\n\n"
-            f"💵 رصيد البوت المتاح: {format_currency(user.balance)}"
+            "🆔 ابعت الـ ID هون\n\n"
+            "أرقام فقط... بدون اسم ولا @\n\n"
+            "مثال:\n"
+            f"{tg_code('12345678')}"
         )
-        context.user_data["state"] = "waiting_for_amount"
+        context.user_data["state"] = "waiting_for_ichancy_player_id"
         context.user_data["operation"] = "ichancy_topup"
         context.user_data["method"] = "ichancy"
         await safe_edit_callback_message(
@@ -524,7 +558,67 @@ class IchancyHandler:
             text,
             reply_markup=Keyboards.cancel_operation(),
             context=context,
+            parse_mode="HTML",
         )
+
+    @staticmethod
+    async def process_topup_player_id(
+        update: Update, context: ContextTypes.DEFAULT_TYPE, player_ref: str
+    ):
+        """تحقق من الـ ID ثم اطلب مبلغ التعبئة."""
+        raw = (player_ref or "").strip()
+        if not raw.isdigit():
+            await update.message.reply_text(
+                "🤨 هاد مو ID يا معلم\n\n"
+                "أرقام فقط...\n"
+                "لا اسم، لا @، لا قصة حياة 😂",
+                reply_markup=Keyboards.cancel_operation(),
+            )
+            context.user_data["state"] = "waiting_for_ichancy_player_id"
+            context.user_data["operation"] = "ichancy_topup"
+            return
+
+        user = db.get_user(update.effective_user.id)
+        min_topup = Config.ICHANCY_CONFIG.get("min_topup", 200)
+        context.user_data["ichancy_topup_player_id"] = raw
+        context.user_data["state"] = "waiting_for_amount"
+        context.user_data["operation"] = "ichancy_topup"
+        context.user_data["method"] = "ichancy"
+
+        # ربط الـ ID إذا الحساب انخلق سابقًا بدون معرف
+        if user and user.ichancy_username and not user.ichancy_player_id:
+            owner = db.get_user_by_ichancy_player_id(raw)
+            if not owner or str(owner.telegram_id) == str(user.telegram_id):
+                session = db.get_session()
+                try:
+                    db_user = session.query(User).filter(User.id == user.id).first()
+                    if db_user and not db_user.ichancy_player_id:
+                        db_user.ichancy_player_id = raw
+                        session.commit()
+                finally:
+                    session.close()
+
+        balance_line = ""
+        if user:
+            balance_line = f"\n💵 رصيد البوت: {format_currency(user.balance)}"
+
+        await update.message.reply_text(
+            "✅ وصل الـ ID سالما\n\n"
+            "هلق ابعت مبلغ التعبئة أرقام فقط\n\n"
+            "مثال:\n"
+            f"{tg_code('25000')}\n\n"
+            "بلا فواصل\n"
+            "المحاسب ما ناقصه ألغاز اليوم 😂"
+            f"{balance_line}\n"
+            f"أقل مبلغ: {format_currency(min_topup)}",
+            reply_markup=Keyboards.cancel_operation(),
+            parse_mode="HTML",
+        )
+
+    @staticmethod
+    async def start_topup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """توافق خلفي — يمر عبر طلب الـ ID أولاً."""
+        await IchancyHandler.start_topup_ask_id(update, context)
 
     @staticmethod
     async def process_topup(
@@ -558,11 +652,15 @@ class IchancyHandler:
             context.user_data.clear()
             return
 
-        if not user.ichancy_player_id:
+        topup_player_id = (
+            context.user_data.get("ichancy_topup_player_id")
+            or (user.ichancy_player_id if user else None)
+        )
+        if not topup_player_id:
             context.user_data.clear()
             await update.message.reply_text(
-                "❌ لا يوجد حساب Ichancy مرتبط.",
-                reply_markup=Keyboards.main_menu(),
+                "❌ ابعت ID الحساب أولاً من بوابة التعبئة.",
+                reply_markup=Keyboards.ichancy_topup_gate(),
             )
             return
 
@@ -585,7 +683,7 @@ class IchancyHandler:
                 status="pending",
                 description=(
                     f"شحن حساب ichancy (depositToPlayer) — "
-                    f"playerId {user.ichancy_player_id}"
+                    f"playerId {topup_player_id}"
                 ),
             )
             session.add(transaction)
@@ -596,7 +694,7 @@ class IchancyHandler:
             try:
                 result = await asyncio.to_thread(
                     ichancy_client.deposit_to_player,
-                    user.ichancy_player_id,
+                    topup_player_id,
                     amount,
                     f"Bot topup {user.telegram_id} REF:{reference}",
                 )

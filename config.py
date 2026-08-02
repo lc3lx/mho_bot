@@ -243,6 +243,7 @@ class Config:
     
     # مقر نابليون — القائمة الرئيسية
     START_MENU_BUTTONS = [
+        [{"text": "🎮 بدّي حساب iChancy", "callback": "ichancy_create_start"}],
         [
             {"text": "💸 عبّي iChancy", "callback": "ichancy_topup_start"},
             {"text": "💰 اسحب من iChancy", "callback": "ichancy_withdraw_start"},
