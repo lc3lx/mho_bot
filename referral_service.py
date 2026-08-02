@@ -231,21 +231,30 @@ class ReferralArmyService:
         net_syp: float = 0.0,
         net_usd: float = 0.0,
         source: str = "manual",
-    ) -> Tuple[bool, str]:
-        """اعتماد إحالة نشطة بعد تحقق الشروط / المراجعة اليدوية."""
+    ) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+        """اعتماد إحالة نشطة بعد تحقق الشروط / المراجعة اليدوية.
+
+        يعيد (ok, msg, promotion) حيث promotion إن ترقّت رتبة المحيل.
+        """
         min_usd = get_min_activity_usd()
         session = db.get_session()
         try:
             invite = session.query(ReferralInvite).filter(ReferralInvite.id == invite_id).first()
             if not invite:
-                return False, "الإحالة غير موجودة"
+                return False, "الإحالة غير موجودة", None
             if invite.status == STATUS_REJECTED:
-                return False, "الإحالة مرفوضة"
+                return False, "الإحالة مرفوضة", None
             invitee = session.query(User).filter(User.id == invite.invitee_id).first()
             if not invitee or not invitee.ichancy_player_id:
-                return False, "لا يوجد حساب iChancy موثق"
+                return False, "لا يوجد حساب iChancy موثق", None
             if net_usd < min_usd and net_syp <= 0:
-                return False, f"النشاط أقل من الحد الأدنى ({min_usd:g}$)"
+                return False, f"النشاط أقل من الحد الأدنى ({min_usd:g}$)", None
+
+            referrer = session.query(User).filter(User.id == invite.referrer_id).first()
+            old_rank = None
+            if referrer:
+                old_counts = ReferralArmyService.counts_for(referrer.id)
+                old_rank = resolve_rank(old_counts["active"], referrer.referral_rank_override)
 
             invite.status = STATUS_ACTIVE
             invite.qualified_net_syp = float(net_syp or 0)
@@ -254,7 +263,19 @@ class ReferralArmyService:
             invite.activated_at = datetime.utcnow()
             invite.updated_at = datetime.utcnow()
             session.commit()
-            return True, "تم اعتماد الإحالة نشطة"
+
+            promotion = None
+            if referrer:
+                new_counts = ReferralArmyService.counts_for(referrer.id)
+                new_rank = resolve_rank(new_counts["active"], referrer.referral_rank_override)
+                if old_rank and new_rank and old_rank.get("code") != new_rank.get("code"):
+                    if new_rank.get("min_active", 0) > old_rank.get("min_active", 0):
+                        promotion = {
+                            "telegram_id": referrer.telegram_id,
+                            "rank_title": new_rank.get("title"),
+                            "rate": new_rank.get("rate"),
+                        }
+            return True, "تم اعتماد الإحالة نشطة", promotion
         finally:
             session.close()
 

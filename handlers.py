@@ -551,10 +551,10 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     query = update.callback_query
     data = query.data
 
-    # منع الضغط المتكرر (ثانيتان) — عدا الاشتراك/الموافقة
-    if data not in ("accept_side_effects", "check_subscription"):
+    # منع الضغط المتكرر (ثانيتان) — عدا الاشتراك/الموافقة/الزر الممنوع
+    if data not in ("accept_side_effects", "check_subscription", "forbidden_press"):
         if napoleon_ui.rate_limited(context, update.effective_user.id):
-            await interactive_answer(query, napoleon_ui.PRESS_SPAM_TEXT, alert=True)
+            await interactive_answer(query, napoleon_ui.pick_spam_toast(), alert=True)
             return
 
     if data == "accept_side_effects":
@@ -659,6 +659,9 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     # شاشات نابليون الجديدة
+    if data == "forbidden_press":
+        await interactive_answer(query, napoleon_ui.forbidden_press_text(), alert=True)
+        return
     if data == "extras_menu":
         await screens.show_extras(update, context)
         return

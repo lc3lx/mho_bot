@@ -15,8 +15,6 @@ import napoleon_ui
 from referral_service import (
     ReferralArmyService,
     STATUS_LABELS,
-    get_min_activity_usd,
-    get_hold_days,
     get_min_commission_withdraw,
     get_rank_defs,
 )
@@ -144,30 +142,26 @@ class ReferralHandler:
 
     @staticmethod
     async def show_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        min_usd = get_min_activity_usd()
-        hold = get_hold_days()
-        min_w = get_min_commission_withdraw()
         text = (
-            "📜 <b>الشروط بلا فلسفة</b>\n\n"
-            "الإحالة النشطة تتطلب:\n"
-            "1) مستخدم جديد (مو مسجّل سابقًا)\n"
-            "2) دخول أول مرة من رابطك\n"
-            "3) ربط حساب iChancy موثق\n"
-            "4) اجتياز فحص التكرار/الوهمي\n"
-            f"5) نشاط مؤهل ≥ {min_usd:g}$ صافي معتمد\n"
-            "6) ممنوع تحيل حالك\n\n"
-            "العمولة = صافي النشاط المؤهل × نسبة رتبتك\n"
-            "(من حرق/خسارة اللعب المعتمدة — مو من مبلغ التعبئة)\n\n"
-            f"مدة المراجعة قبل التوفر: {hold} يوم\n"
-            f"حد أدنى لسحب العمولة: {format_currency(min_w)}\n\n"
-            "حالات الإحالة:\n"
-            "🟡 مسجل جديد — دخل وما كمّل الشروط\n"
-            "🟠 قيد التحقق — مراجعة بيانات\n"
-            "🟢 نشط — يُحتسب ضمن العمولة\n"
-            "🔴 غير مؤهل — قديم/مكرر/ذاتي/ناقص شروط\n\n"
-            "🔞 للبالغين فقط — استخدم الخدمة بمسؤولية."
+            "🤡 <b>الشروط اللي محدا بيقراها</b>\n\n"
+            "بما إنك فتحتها...\n"
+            "شكلك من النوع النادر 😂\n\n"
+            "حتى تنحسب إحالتك:\n\n"
+            "✅ يكون جديد\n"
+            "🔗 يدخل من رابطك\n"
+            "🎮 يربط حساب iChancy موثّق\n"
+            "🛡️ ما يكون مكرر أو وهمي\n"
+            "💰 يستوفي شرط النشاط\n"
+            "🚫 وممنوع تجيب حالك من رابطك...\n"
+            "مو ناقصنا نابليونين بنفس البيت 😂\n\n"
+            "━━━━━━━━━━━━━━\n\n"
+            "💸 عمولتك = صافي النشاط × نسبة رتبتك\n\n"
+            "⏳ العمولة بتضل قيد المراجعة قبل السحب\n\n"
+            "🔞 للبالغين فقط والاستخدام بمسؤولية.\n\n"
+            "إذا قرأت لهون...\n"
+            "مبروك صرت أندر من موظف محاسبة يرد بسرعة 😂"
         )
-        await _edit(update, context, text, Keyboards.army_menu())
+        await _edit(update, context, text, Keyboards.army_rules_ack())
 
     @staticmethod
     async def share_referral_link(update: Update, context: ContextTypes.DEFAULT_TYPE):

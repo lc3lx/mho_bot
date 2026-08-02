@@ -917,33 +917,68 @@ PRIZE100 10000
                     import napoleon_ui
 
                     when = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-                    if action == "approve" and transaction.transaction_type == "withdraw":
-                        user_msg = napoleon_ui.withdraw_done_receipt(
+                    chat_id = user.telegram_id
+
+                    if action == "approve":
+                        progress_msg = await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=napoleon_ui.REVIEW_PROGRESS_FRAMES[0],
+                        )
+
+                        async def edit_progress(frame: str):
+                            try:
+                                await context.bot.edit_message_text(
+                                    chat_id=chat_id,
+                                    message_id=progress_msg.message_id,
+                                    text=frame,
+                                )
+                            except TelegramError:
+                                pass
+
+                        await napoleon_ui.animate_review_progress(edit_progress, finish=True)
+
+                        account = (
+                            transaction.withdraw_destination
+                            if transaction.transaction_type == "withdraw"
+                            else ""
+                        )
+                        user_msg = napoleon_ui.operation_done_receipt(
                             transaction.id,
                             transaction.amount,
-                            transaction.withdraw_destination or "—",
                             when,
+                            account=account or "",
                         )
-                        parse_mode = "HTML"
-                    elif action != "approve" and transaction.transaction_type == "withdraw":
+                        try:
+                            await context.bot.edit_message_text(
+                                chat_id=chat_id,
+                                message_id=progress_msg.message_id,
+                                text=user_msg,
+                                parse_mode="HTML",
+                            )
+                        except TelegramError:
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text=user_msg,
+                                parse_mode="HTML",
+                            )
+                    elif transaction.transaction_type == "withdraw":
                         user_msg = napoleon_ui.withdraw_failed_receipt(
                             transaction.id, when
                         )
-                        if True:
-                            user_msg += "\n💵 تم إرجاع المبلغ لرصيدك"
-                        parse_mode = "HTML"
-                    else:
-                        user_msg = (
-                            f"{emoji} {status_text} طلب {transaction.transaction_type} "
-                            f"بقيمة {format_currency(transaction.amount)}"
+                        user_msg += "\n💵 تم إرجاع المبلغ لرصيدك"
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=user_msg,
+                            parse_mode="HTML",
                         )
-                        parse_mode = None
-
-                    await context.bot.send_message(
-                        chat_id=user.telegram_id,
-                        text=user_msg,
-                        parse_mode=parse_mode,
-                    )
+                    else:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=(
+                                f"{emoji} {status_text} طلب {transaction.transaction_type} "
+                                f"بقيمة {format_currency(transaction.amount)}"
+                            ),
+                        )
                 except TelegramError:
                     logger.warning(f"لا يمكن إرسال إشعار للمستخدم {user.telegram_id}")
                 
@@ -1224,9 +1259,22 @@ PRIZE100 10000
                 invite_id = int(parts[0])
                 net_usd = float(parts[1]) if len(parts) > 1 else 0
                 net_syp = float(parts[2]) if len(parts) > 2 else 0
-                ok, msg = ReferralArmyService.activate_invite(
+                ok, msg, promotion = ReferralArmyService.activate_invite(
                     invite_id, net_syp=net_syp, net_usd=net_usd, source="manual"
                 )
+                if ok and promotion:
+                    try:
+                        import napoleon_ui
+                        await context.bot.send_message(
+                            chat_id=promotion["telegram_id"],
+                            text=napoleon_ui.rank_promotion_text(
+                                promotion["rank_title"],
+                                promotion["rate"],
+                            ),
+                            parse_mode="HTML",
+                        )
+                    except TelegramError:
+                        pass
                 await update.message.reply_text(
                     f"{'✅' if ok else '❌'} {msg}",
                     reply_markup=Keyboards.admin_army_menu(),
@@ -1273,16 +1321,49 @@ PRIZE100 10000
                         reply_markup=Keyboards.admin_army_menu(),
                     )
                     return True
+                from referral_service import resolve_rank, ReferralArmyService, get_rank_defs
+
+                old_counts = ReferralArmyService.counts_for(user.id)
+                old_rank = resolve_rank(old_counts["active"], user.referral_rank_override)
                 session = db.get_session()
                 try:
                     db_user = session.query(User).filter(User.id == user.id).first()
                     if code == "clear":
                         db_user.referral_rank_override = None
                     else:
+                        valid = {r["code"] for r in get_rank_defs()}
+                        if code not in valid:
+                            await update.message.reply_text(
+                                f"❌ رتبة غير معروفة: {code}",
+                                reply_markup=Keyboards.admin_army_menu(),
+                            )
+                            return True
                         db_user.referral_rank_override = code
                     session.commit()
+                    refreshed = db._detach(session, db_user)
                 finally:
                     session.close()
+                new_rank = resolve_rank(
+                    old_counts["active"], refreshed.referral_rank_override
+                )
+                if (
+                    code != "clear"
+                    and new_rank
+                    and old_rank
+                    and new_rank.get("code") != old_rank.get("code")
+                ):
+                    try:
+                        import napoleon_ui
+                        await context.bot.send_message(
+                            chat_id=user.telegram_id,
+                            text=napoleon_ui.rank_promotion_text(
+                                new_rank.get("title"),
+                                new_rank.get("rate"),
+                            ),
+                            parse_mode="HTML",
+                        )
+                    except TelegramError:
+                        pass
                 await update.message.reply_text(
                     f"✅ تم تحديث الرتبة اليدوية لـ {tg_id}",
                     reply_markup=Keyboards.admin_army_menu(),

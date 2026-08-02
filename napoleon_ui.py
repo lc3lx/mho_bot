@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import random
 import time
 from typing import Optional
@@ -25,6 +26,11 @@ BOT_MOODS = [
     "السيرفر شارب قهوته...\nوالبوت جاهز للضغط ⚡",
     "لا دراما اليوم...\nبس عمليات واضحة ومرتبة ✅",
     "المحاسب ابتسم...\nوهذا نادر، فاغتنم اللحظة 😂",
+    "المحاسب فات بكير اليوم...\nفتحنا تحقيق بالموضوع 😂",
+    "الأزرار شغالة\nالموظفين قيد البحث",
+    "القهوة وصلت... صار في أمل بالخدمة ☕",
+    "اليوم زر السحب صاحي عاليمين\nلا تستفزّه",
+    "قسم المحاسبة طالب إجازة...\nتم تجاهل الطلب😂",
 ]
 
 HOME_BACK_TEXT = (
@@ -32,7 +38,19 @@ HOME_BACK_TEXT = (
     "الحمد لله ما ضيّعنا حدا بالطريق 😂"
 )
 
-PRESS_SPAM_TEXT = "الزر وكّل محامي، ضغطة وحدة بتكفي 😂"
+PRESS_SPAM_TEXTS = [
+    "الزر وكّل محامي، ضغطة وحدة بتكفي 😂",
+    "😂 ضغطة وحدة يا زلمة...\n\nالزر بلّش يسأل عن حقوقه العمالية.",
+    "🚑 تحديث طبي:\n\nالزر بخير،\nبس طلب منعك من الاقتراب منه لمدة ثانيتين.",
+]
+
+
+def pick_spam_toast() -> str:
+    return random.choice(PRESS_SPAM_TEXTS)
+
+
+# توافق خلفي
+PRESS_SPAM_TEXT = PRESS_SPAM_TEXTS[0]
 
 SECRET_REPLIES = {
     "وينك؟": "هون، كنت عم راقب الأزرار لا يهربوا.",
@@ -100,18 +118,6 @@ def withdraw_pending_receipt(order_id, amount, account, when: str) -> str:
     )
 
 
-def withdraw_done_receipt(order_id, amount, account, when: str) -> str:
-    return (
-        "👑 <b>إيصال نابليون</b>\n\n"
-        "✅ تمت العملية بنجاح\n"
-        f"💰 المبلغ: <b>{format_currency(amount)}</b>\n"
-        f"🆔 الحساب: <code>{ui.esc(account)}</code>\n"
-        f"🧾 الرقم: <b>#{ui.esc(order_id)}</b>\n"
-        f"🕒 الوقت: {ui.esc(when)}\n\n"
-        "المحاسب ختمها ورجع يختفي بالغموض 😂"
-    )
-
-
 def withdraw_failed_receipt(order_id, when: str = "") -> str:
     return (
         f"🧾 العملية: <b>#{ui.esc(order_id)}</b>\n"
@@ -132,6 +138,96 @@ def share_referral_text(link: str) -> str:
         f"ادخل من رابطي:\n{link}\n\n"
         "🔞 للبالغين فقط، واستخدم الخدمة بمسؤولية."
     )
+
+
+
+ACCOUNTANT_COMMENTS = [
+    "والله خلصتها أنا... اسألوا البوت 😂",
+    "وقّعت عليها وأنا نص نايم... بس مضبوطة ✅",
+    "المرة دي بدون مسلسل تركي، اعتبرها إنجاز 😂",
+    "خلصت… والزر لسا عم يهدّد يشتكي للنقابة.",
+    "دقيقة مراجعة… ويا ريت كل الزبائن هيك مرتبين.",
+    "تم… المحاسب رجع يختفي بالغموض 👑",
+    "دفشتها بالإجر اليمين ومرّت… لا تعيدها مرتين 😂",
+    "الختم نزل، والقهوة لسا سخنة ☕",
+]
+
+
+def pick_accountant_comment() -> str:
+    return random.choice(ACCOUNTANT_COMMENTS)
+
+
+def operation_done_receipt(order_id, amount, when: str, account: str = "") -> str:
+    """إشعار إتمام العملية للزبون مع تعليق محاسب عشوائي."""
+    account_line = ""
+    if account and account != "—":
+        account_line = f"🆔 الحساب: <code>{ui.esc(account)}</code>\n"
+    return (
+        "👑 <b>NAPOLEON BOT</b>\n\n"
+        "✅ العملية تمت\n\n"
+        f"💰 المبلغ: <b>{format_currency(amount)}</b>\n"
+        f"{account_line}"
+        f"🧾 رقم العملية: <b>#{ui.esc(order_id)}</b>\n"
+        f"🕒 الوقت: {ui.esc(when)}\n\n"
+        f"{DIV}\n\n"
+        "📢 تعليق المحاسب:\n"
+        f"«{ui.esc(pick_accountant_comment())}»"
+    )
+
+
+def withdraw_done_receipt(order_id, amount, account, when: str) -> str:
+    return operation_done_receipt(order_id, amount, when, account=account)
+
+
+REVIEW_PROGRESS_FRAMES = [
+    (
+        "🟢 الطلب وصل\n"
+        "⚪ المحاسب عم يفتح عيونه\n"
+        "⚪ مراجعة البيانات\n"
+        "⚪ التنفيذ"
+    ),
+    (
+        "🟢 الطلب وصل\n"
+        "🟢 المحاسب فتح عيونه ✅\n"
+        "🟢 مراجعة البيانات\n"
+        "⚪ التنفيذ"
+    ),
+]
+
+REVIEW_DONE_FRAME = (
+    "🟢 المحاسب نجا\n"
+    "🟢 البيانات تمام\n"
+    "🟢 تمت العملية ✅\n\n"
+    "اليوم الأمور مشت بدون مسلسل تركي 😂"
+)
+
+
+async def animate_review_progress(edit_coro_factory, delay: float = 0.85, finish: bool = True):
+    """
+    مشهد مراجعة صغير على نفس الرسالة.
+    edit_coro_factory(text) -> awaitable يعدل/يرسل النص.
+    """
+    for frame in REVIEW_PROGRESS_FRAMES:
+        await edit_coro_factory(frame)
+        await asyncio.sleep(delay)
+    if finish:
+        await edit_coro_factory(REVIEW_DONE_FRAME)
+        await asyncio.sleep(delay * 0.6)
+
+
+def rank_promotion_text(rank_title: str, commission_rate) -> str:
+    return (
+        "🚨 <b>اجتماع طارئ في المقر</b>\n\n"
+        "تمت ترقيتك رسميًا إلى:\n\n"
+        f"🥇 <b>{ui.esc(rank_title)}</b>\n\n"
+        f"📈 نسبتك الجديدة: <b>{commission_rate:g}%</b>\n\n"
+        "المحاسب من هلق مجبور يناديك:\n"
+        "«معلمي» 😂"
+    )
+
+
+def forbidden_press_text() -> str:
+    return "شكلك صارف التوتل… وجاي هون تلهّي حالك 😂"
 
 
 def match_secret_reply(text: str) -> Optional[str]:

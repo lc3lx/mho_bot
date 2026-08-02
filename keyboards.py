@@ -298,10 +298,18 @@ class Keyboards:
                 InlineKeyboardButton("🏧 اسحب عمولتي", callback_data="army_withdraw"),
             ],
             [
-                InlineKeyboardButton("📜 الشروط بلا فلسفة", callback_data="army_rules"),
+                InlineKeyboardButton("🤡 القانون اللي محدا بيقراه", callback_data="army_rules"),
                 InlineKeyboardButton("🎖️ نظام الرتب", callback_data="army_ranks"),
             ],
             [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def army_rules_ack():
+        """أزرار بعد قراءة شروط الجيش"""
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("😂 قريتها والله", callback_data="referrals")],
+            [InlineKeyboardButton("🏠 خلص رجعني", callback_data="main_menu")],
         ])
 
     @staticmethod

@@ -1834,6 +1834,11 @@ class PaymentHandler:
             context.user_data.clear()
             context.user_data["pending_withdraw_id"] = transaction.id
 
+            async def edit_progress(frame: str):
+                await reply(frame)
+
+            await napoleon_ui.animate_review_progress(edit_progress, finish=False)
+
             receipt = napoleon_ui.withdraw_pending_receipt(
                 transaction.id, amount, destination, when
             )

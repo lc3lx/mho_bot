@@ -268,6 +268,7 @@ class Config:
             {"text": "📘 فهمني بسرعة", "callback": "guide_quick"},
             {"text": "🧰 شغلات زيادة", "callback": "extras_menu"},
         ],
+        [{"text": "🚫 ممنوع تكبس هون", "callback": "forbidden_press"}],
     ]
 
     # نفس القائمة الرئيسية (بدون تفرقة start/full)
