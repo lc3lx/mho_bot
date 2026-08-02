@@ -2,11 +2,16 @@
 لوحات المفاتيح للبوت
 """
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from config import Config
 
 class Keyboards:
     """فئة لوحات المفاتيح"""
+
+    @staticmethod
+    def remove_reply_keyboard():
+        """يشيل أي Reply Keyboard عالقة تحت الشات."""
+        return ReplyKeyboardRemove(selective=False)
     
     @staticmethod
     def main_menu():

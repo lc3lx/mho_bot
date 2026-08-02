@@ -559,49 +559,37 @@ class PaymentHandler:
 
     # ─── سيريتل كاش — تحويل يدوي + تحقق أوتو ─────────────────
 
+    SYRIATEL_DEPOSIT_SUSPENDED = (
+        "📱 سيريتل كاش\n\n"
+        "🛑 متوقف حالياً يا معلم.\n\n"
+        "المحاسب طفى الخط وقال:\n"
+        "«اليوم ما في سيريتل… نامت البطارية 😂»\n\n"
+        "جرّب شام كاش أو USDT هلق،\n"
+        "ولما الخط يرجع مننبّهك."
+    )
+
     @staticmethod
-    async def start_syriatel_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """قائمة شحن سيريتل — تحويل يدوي (AUTO) فقط"""
-        from pathlib import Path
-        from telegram import InputFile
-
-        chat_id = update.effective_chat.id
-        # مهم: امسح أي جلسة شام كاش معلّقة حتى لا يُفسَّر إدخال المستخدم كشام كاش
-        await reset_payment_session(context, bot=context.bot, chat_id=chat_id)
-
-        user = db.get_user(update.effective_user.id)
-        has_prev = bool(getattr(user, "last_syriatel_code", None))
-        caption = "شحن البوت - سيرياتيل كاش"
-        assets = Path(__file__).resolve().parent / "assets"
-        logo = assets / "syriatel_logo.png"
-
-        if logo.exists():
+    async def notify_syriatel_deposit_suspended(
+        update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        """إبلاغ الزبون إن شحن سيريتل متوقف — بنبرة فكاهية."""
+        text = PaymentHandler.SYRIATEL_DEPOSIT_SUSPENDED
+        markup = Keyboards.wallet_deposit_menu()
+        if update.callback_query:
             try:
-                if update.callback_query and update.callback_query.message:
-                    await update.callback_query.message.delete()
+                await update.callback_query.answer("سيريتل كاش متوقف حالياً 😅", show_alert=False)
             except TelegramError:
                 pass
-            with open(logo, "rb") as photo:
-                msg = await context.bot.send_photo(
-                    chat_id=chat_id,
-                    photo=InputFile(photo, filename="syriatel_logo.png"),
-                    caption=caption,
-                    reply_markup=Keyboards.syriatel_deposit_menu(has_prev),
-                )
-            track_payment_guide_message(context, msg)
-        elif update.callback_query:
             await safe_edit_callback_message(
-                update,
-                caption,
-                reply_markup=Keyboards.syriatel_deposit_menu(has_prev),
-                context=context,
+                update, text, reply_markup=markup, context=context
             )
-        else:
-            msg = await update.message.reply_text(
-                caption,
-                reply_markup=Keyboards.syriatel_deposit_menu(has_prev),
-            )
-            track_payment_guide_message(context, msg)
+        elif update.effective_message:
+            await update.effective_message.reply_text(text, reply_markup=markup)
+
+    @staticmethod
+    async def start_syriatel_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """شحن سيريتل — متوقف حالياً."""
+        await PaymentHandler.notify_syriatel_deposit_suspended(update, context)
 
     @staticmethod
     async def start_syriatel_manual_intro(

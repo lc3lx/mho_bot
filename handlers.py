@@ -259,8 +259,40 @@ def build_home_card(user) -> str:
     return napoleon_ui.build_hq_home(user)
 
 
+async def strip_sticky_reply_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """يشيل زر الـ Reply Keyboard العالق تحت الشات (مثل «iChancy عبي»)."""
+    chat = update.effective_chat
+    if not chat:
+        return
+    try:
+        msg = await context.bot.send_message(
+            chat_id=chat.id,
+            text=".",
+            reply_markup=Keyboards.remove_reply_keyboard(),
+            disable_notification=True,
+        )
+        try:
+            await msg.delete()
+        except TelegramError:
+            pass
+    except TelegramError:
+        pass
+
+
+def _is_legacy_topup_reply_button(text: str) -> bool:
+    """زر رد قديم عالق عند الزبائن — مو جزء من الواجهة الحالية."""
+    t = (text or "").strip().lower().replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+    if not t:
+        return False
+    # أمثلة: "iChancy عبي 👍🏻" / "عبي iChancy"
+    has_ichancy = "ichancy" in t
+    has_topup = ("عبي" in t) or ("عبّي" in (text or ""))
+    return has_ichancy and has_topup
+
+
 async def show_funded_home(update: Update, context: ContextTypes.DEFAULT_TYPE, user):
     """القائمة الرئيسية."""
+    await strip_sticky_reply_keyboard(update, context)
     welcome_message = build_home_card(user)
     markup = Keyboards.start_menu()
     context.user_data.pop("state", None)
@@ -301,6 +333,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """موافقة → اشتراك → القائمة الرئيسية (الشحن وحساب Ichancy اختياريان)."""
     user_id = update.effective_user.id
     logger.info("استلام /start من user_id=%s", user_id)
+    await strip_sticky_reply_keyboard(update, context)
 
     referral_code = None
     if context.args and len(context.args) > 0:
@@ -1063,16 +1096,15 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         user = db.get_user(update.effective_user.id)
         await show_user_home(update, context, user)
 
-    # سيريتل كاش — تحويل يدوي (AUTO)
+    # سيريتل كاش — شحن متوقف حالياً
     elif data == "syriatel_manual_auto":
-        await PaymentHandler.start_syriatel_manual_intro(update, context)
+        await PaymentHandler.notify_syriatel_deposit_suspended(update, context)
     elif data == "syriatel_continue":
-        await PaymentHandler.start_syriatel_amount(update, context, use_previous=False)
+        await PaymentHandler.notify_syriatel_deposit_suspended(update, context)
     elif data == "syriatel_prev_code":
-        await PaymentHandler.start_syriatel_amount(update, context, use_previous=True)
+        await PaymentHandler.notify_syriatel_deposit_suspended(update, context)
     elif data.startswith("syriatel_pick_"):
-        code = data.replace("syriatel_pick_", "", 1)
-        await PaymentHandler.pick_syriatel_code(update, context, code)
+        await PaymentHandler.notify_syriatel_deposit_suspended(update, context)
     
     # معالجة طرق الدفع
     elif data.startswith("deposit_") or data.startswith("withdraw_"):
@@ -1186,8 +1218,17 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             update, context, update.message.text.strip()
         )
     else:
+        # زر رد قديم عالق («iChancy عبي») — نشيله ونرجّع للمقر
+        raw_text = update.message.text or ""
+        if _is_legacy_topup_reply_button(raw_text):
+            await strip_sticky_reply_keyboard(update, context)
+            if user:
+                await show_user_home(update, context, user)
+            else:
+                await start_handler(update, context)
+            return
         # ردود سرّية على كلمات معيّنة
-        secret = napoleon_ui.match_secret_reply(update.message.text or "")
+        secret = napoleon_ui.match_secret_reply(raw_text)
         if secret:
             await update.message.reply_text(secret)
             return
