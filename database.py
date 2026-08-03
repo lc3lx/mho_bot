@@ -532,6 +532,32 @@ class DatabaseManager:
         finally:
             session.close()
 
+    def sync_user_profile(self, telegram_id, username=None, first_name=None, last_name=None):
+        """تحديث اسم/يوزر تيليغرام حتى ما يضل Unknown أو فاضي."""
+        session = self.get_session()
+        try:
+            user = session.query(User).filter(User.telegram_id == str(telegram_id)).first()
+            if not user:
+                return None
+            changed = False
+            if username is not None and user.username != username:
+                user.username = username
+                changed = True
+            if first_name is not None and first_name and user.first_name != first_name:
+                user.first_name = first_name
+                changed = True
+            if last_name is not None and user.last_name != last_name:
+                user.last_name = last_name
+                changed = True
+            user.last_activity = datetime.utcnow()
+            if changed:
+                session.commit()
+            else:
+                session.commit()
+            return self._detach(session, user)
+        finally:
+            session.close()
+
     def get_user_by_db_id(self, user_id):
         """الحصول على مستخدم بواسطة id الداخلي"""
         session = self.get_session()

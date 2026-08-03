@@ -114,9 +114,8 @@ class PaymentHandler:
         "المحاسب ما بيعرف يحل الغاز 😂"
     )
     SHAMCASH_TIMEOUT = (
-        "⌛ انتهت مهلة التحويل\n\n"
-        "رجع افتح طلب جديد وكمل من الاول\n\n"
-        "المحاسب سكر الملف وراح يشرب قهوة 😂"
+        "⏰ عملية شام كاش خارج المهلة المسموحة (15 دقيقة).\n\n"
+        "افتح طلب شحن جديد وحوّل فوراً، وبعدين ابعت رقم العملية."
     )
     SHAMCASH_VERIFYING = (
         "✅ وصل رقم العملية\n\n"
@@ -391,11 +390,13 @@ class PaymentHandler:
             return
 
         timeout = Config.APISYRIA_CONFIG.get("deposit_timeout_minutes", 15)
+        # مهلة جلسة العميل أوسع — المهلة الحقيقية على عمر التحويل من الـ API
+        session_limit = max(int(timeout) * 4, 60)
         started = context.user_data.get("deposit_started_at")
         if started:
             try:
                 started_dt = datetime.fromisoformat(started)
-                if datetime.utcnow() - started_dt > timedelta(minutes=timeout):
+                if datetime.utcnow() - started_dt > timedelta(minutes=session_limit):
                     context.user_data.clear()
                     await update.message.reply_text(
                         PaymentHandler.SHAMCASH_TIMEOUT,
@@ -405,8 +406,27 @@ class PaymentHandler:
             except ValueError:
                 pass
 
+        # إذا كتب مبلغ بدل رقم عملية — نبّهه وما نعتبرها عملية
         amount = context.user_data.get("amount")
         credit_syp = context.user_data.get("credit_amount_syp")
+        try:
+            as_num = float(tx_number)
+            looks_like_amount = False
+            if amount is not None and abs(as_num - float(amount)) < 0.01:
+                looks_like_amount = True
+            if credit_syp is not None and abs(as_num - float(credit_syp)) < 0.01:
+                looks_like_amount = True
+            if looks_like_amount:
+                await update.message.reply_text(
+                    "هلق بدنا رقم العملية من شام كاش، مو المبلغ.\n\n"
+                    "انسخ رقم العملية من سجل التحويلات وابعتو هون.",
+                    reply_markup=Keyboards.shamcash_pay_menu(),
+                )
+                context.user_data["state"] = "waiting_for_shamcash_tx"
+                return
+        except (TypeError, ValueError):
+            pass
+
         currency = context.user_data.get("shamcash_currency", "syp")
         if not amount or not credit_syp:
             context.user_data.clear()
@@ -495,7 +515,8 @@ class PaymentHandler:
         if started:
             try:
                 started_dt = datetime.fromisoformat(started)
-                if datetime.utcnow() - started_dt > timedelta(minutes=timeout):
+                session_limit = max(int(timeout) * 4, 60)
+                if datetime.utcnow() - started_dt > timedelta(minutes=session_limit):
                     context.user_data.clear()
                     await edit_status(
                         PaymentHandler.SHAMCASH_TIMEOUT,

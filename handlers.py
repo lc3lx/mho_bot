@@ -358,14 +358,22 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "❌ تعذر إنشاء الحساب. أرسل /start وحاول مرة أخرى."
             )
             return
-    elif referral_code:
-        # مستخدم قديم فتح رابط إحالة
-        if update.effective_message:
-            await update.effective_message.reply_text(
-                "🔴 الإحالة ما انحسبت.\n\n"
-                "الحساب كان مسجل سابقًا،\n"
-                "يعني رفيقك وصل قبل الدعوة وسبقك عالباب 😌"
-            )
+    else:
+        # حدّث الاسم/اليوزر من تيليغرام حتى ما يبين Unknown
+        user = db.sync_user_profile(
+            user_id,
+            username=update.effective_user.username,
+            first_name=update.effective_user.first_name,
+            last_name=update.effective_user.last_name,
+        ) or user
+        if referral_code:
+            # مستخدم قديم فتح رابط إحالة
+            if update.effective_message:
+                await update.effective_message.reply_text(
+                    "🔴 الإحالة ما انحسبت.\n\n"
+                    "الحساب كان مسجل سابقًا،\n"
+                    "يعني رفيقك وصل قبل الدعوة وسبقك عالباب 😌"
+                )
 
     if user_is_banned(user) and user_id not in Config.ADMIN_IDS:
         text = "🚫 حسابك محظور من استخدام البوت.\nتواصل مع الدعم إن كنت تظن أن هذا خطأ."
@@ -1276,6 +1284,17 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if user_state == "waiting_for_withdraw_amount":
+        from withdraw_flow import WithdrawFlow
+        await WithdrawFlow.handle_amount_text(
+            update, context, update.message.text or ""
+        )
+        return
+
+    # مسار سحب قديم عالق (operation=withdraw + waiting_for_amount)
+    if (
+        user_state == WAITING_FOR_AMOUNT
+        and context.user_data.get("operation") in ("withdraw", "wallet_withdraw")
+    ):
         from withdraw_flow import WithdrawFlow
         await WithdrawFlow.handle_amount_text(
             update, context, update.message.text or ""

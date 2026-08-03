@@ -20,6 +20,7 @@ from keyboards import Keyboards
 from utils import (
     calculate_withdrawal_fee,
     format_currency,
+    get_user_display_name,
     safe_edit_callback_message,
     tg_code,
 )
@@ -128,6 +129,9 @@ class WithdrawFlow:
             context.user_data["wd_msg_id"] = prev_msg
 
         if balance < min_w:
+            # نخلي الحالة فعّالة حتى لو الرصيد فاضي — أي رقم يطلعله خطأ واضح
+            context.user_data["operation"] = "wallet_withdraw"
+            context.user_data["state"] = "waiting_for_withdraw_amount"
             text = (
                 "🏧 المحفظة ما فيها شي ينسحب\n\n"
                 f"💎 رصيدك الحالي {format_currency(balance)}\n"
@@ -203,14 +207,25 @@ class WithdrawFlow:
         if amount < min_w:
             context.user_data["state"] = "waiting_for_withdraw_amount"
             context.user_data["operation"] = "wallet_withdraw"
-            await WithdrawFlow._show(
-                update,
-                context,
-                "🤨 المبلغ صغير شوي\n\n"
-                f"اقل مبلغ للسحب هو {format_currency(min_w)}\n\n"
-                "كبره شوي",
-                Keyboards.withdraw_amount_menu(),
-            )
+            if balance < min_w:
+                await WithdrawFlow._show(
+                    update,
+                    context,
+                    "🏧 المحفظة ما فيها شي ينسحب\n\n"
+                    f"💎 رصيدك الحالي {format_currency(balance)}\n"
+                    f"📌 اقل مبلغ للسحب {format_currency(min_w)}\n\n"
+                    "عبّي المحفظة أول شي",
+                    Keyboards.withdraw_empty_menu(),
+                )
+            else:
+                await WithdrawFlow._show(
+                    update,
+                    context,
+                    "🤨 المبلغ صغير شوي\n\n"
+                    f"اقل مبلغ للسحب هو {format_currency(min_w)}\n\n"
+                    "كبره شوي",
+                    Keyboards.withdraw_amount_menu(),
+                )
             return
 
         if amount > balance:
@@ -223,7 +238,9 @@ class WithdrawFlow:
                 f"طلبت {format_currency(amount)}\n"
                 f"ورصيدك كله {format_currency(balance)}\n\n"
                 "المحفظة ما بتستدين 😂",
-                Keyboards.withdraw_amount_menu(),
+                Keyboards.withdraw_empty_menu()
+                if balance < min_w
+                else Keyboards.withdraw_amount_menu(),
             )
             return
 
@@ -1061,8 +1078,9 @@ class WithdrawFlow:
             f"🏧 طلب سحب جديد\n"
             f"🧾 رقم الطلب {order_id}\n\n"
             f"الحالة: {status_label(tx.status)}\n"
-            f"المستخدم: {getattr(user, 'first_name', '')}\n"
+            f"المستخدم: {get_user_display_name(user)}\n"
             f"آيدي تليغرام: {getattr(user, 'telegram_id', '')}\n"
+            f"يوزر: @{getattr(user, 'username', None) or '—'}\n"
             f"المبلغ: {format_currency(tx.amount)}\n"
             f"الربح: {format_currency(profit)}\n"
             f"العمولة (متوقعة): {format_currency(fee)}\n"
@@ -1098,8 +1116,9 @@ class WithdrawFlow:
         text = (
             f"↩️ طلب إلغاء سحب\n"
             f"🧾 رقم الطلب {order_id}\n\n"
-            f"المستخدم: {getattr(user, 'first_name', '')}\n"
+            f"المستخدم: {get_user_display_name(user)}\n"
             f"آيدي تليغرام: {getattr(user, 'telegram_id', '')}\n"
+            f"يوزر: @{getattr(user, 'username', None) or '—'}\n"
             f"مبلغ السحب: {format_currency(tx.amount)}\n"
             f"الربح المحتسب: {format_currency(profit)}\n"
             f"العمولة: {format_currency(fee)}\n"

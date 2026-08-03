@@ -226,21 +226,30 @@ class ApiSyriaClient:
         timeout_minutes: int = None,
     ) -> bool:
         """
-        يقبل العملية فقط إذا:
-        - الطلب نفسه لم يتجاوز المهلة (افتراضياً 15 دقيقة)
-        - وقت العملية ضمن آخر ربع ساعة (توقيت UTC أو المحلي — API قد يعيد محلياً)
+        يقبل العملية إذا:
+        - الطلب نفسه لم يتجاوز مهلة الجلسة الطويلة (إن وُجدت)
+        - ووقت التحويل ضمن نافذة المهلة (افتراضياً 15 دقيقة)
+        - إذا API ما رجّع تاريخ واضح: نقبل طالما الطلب لسا ضمن المهلة
         """
         from datetime import datetime, timedelta
 
         minutes = timeout_minutes or self.deposit_timeout_minutes
         now_utc = datetime.utcnow()
 
-        if request_created_at and now_utc - request_created_at > timedelta(minutes=minutes):
+        # مهلة الجلسة من فتح الطلب — أوسع قليلاً من نافذة التحويل نفسها
+        session_limit = max(minutes * 4, 60)
+        if request_created_at and now_utc - request_created_at > timedelta(
+            minutes=session_limit
+        ):
             return False
 
         tx_time = self.parse_tx_datetime(transaction)
         if not tx_time:
-            return False
+            # تاريخ العملية غير معروف — لا نرفض كـ «خارج المهلة»
+            # طالما الطلب نفسه لسا ضمن نافذة التحويل
+            if request_created_at:
+                return now_utc - request_created_at <= timedelta(minutes=minutes)
+            return True
 
         # تواريخ API قد تكون بتوقيت سوريا المحلي؛ نقبل إذا طابقت UTC أو المحلي
         for now in (now_utc, datetime.now()):

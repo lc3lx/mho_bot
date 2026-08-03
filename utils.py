@@ -239,15 +239,22 @@ def validate_amount(amount_str: str, min_amount: float = 0, max_amount: float = 
         return False, 0, "❌ يرجى إدخال مبلغ صحيح"
 
 def get_user_display_name(user: User) -> str:
-    """الحصول على اسم المستخدم للعرض"""
-    if user.first_name and user.last_name:
-        return f"{user.first_name} {user.last_name}"
-    elif user.first_name:
-        return user.first_name
-    elif user.username:
-        return f"@{user.username}"
-    else:
-        return f"المستخدم {user.telegram_id}"
+    """الحصول على اسم المستخدم للعرض — بدون Unknown فارغ."""
+    if not user:
+        return "مستخدم غير معروف"
+    first = (getattr(user, "first_name", None) or "").strip()
+    last = (getattr(user, "last_name", None) or "").strip()
+    username = (getattr(user, "username", None) or "").strip()
+    tg_id = getattr(user, "telegram_id", None)
+    if first and last:
+        return f"{first} {last}"
+    if first:
+        return first
+    if username:
+        return f"@{username}"
+    if tg_id:
+        return f"مستخدم {tg_id}"
+    return "مستخدم غير معروف"
 
 def format_transaction_type(transaction_type: str) -> str:
     """تنسيق نوع المعاملة"""
