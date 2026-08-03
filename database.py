@@ -80,6 +80,7 @@ class User(Base):
     ichancy_password = Column(String(100))
     last_syriatel_code = Column(String(50))
     terms_accepted_at = Column(DateTime)
+    reserved_balance = Column(Float, default=0.0)  # مبالغ سحب محجوزة
     created_at = Column(DateTime, default=datetime.utcnow)
     last_activity = Column(DateTime, default=datetime.utcnow)
     
@@ -107,6 +108,16 @@ class Transaction(Base):
     external_transaction_id = Column(String(100))  # معرف المعاملة الخارجية
     expected_usdt_amount = Column(Float)  # مبلغ USDT الفريد للإيداع
     withdraw_destination = Column(String(200))  # وجهة السحب (رقم/محفظة)
+    fee_amount = Column(Float)  # عمولة السحب
+    net_amount = Column(Float)  # الصافي للمستلم
+    profit_amount = Column(Float)  # ربح محتسب ضمن المبلغ
+    cancel_requested_at = Column(DateTime)
+    cancel_rejection_reason = Column(Text)
+    crypto_currency = Column(String(20))
+    crypto_network = Column(String(20))
+    decided_by_name = Column(String(120))  # اسم الأدمن عند القرار
+    decided_by_telegram_id = Column(Integer)  # آيدي تليغرام للأدمن
+    decided_at = Column(DateTime)  # وقت قرار الإدارة
     created_at = Column(DateTime, default=datetime.utcnow)
     processed_at = Column(DateTime)
     
@@ -390,6 +401,26 @@ class DatabaseManager:
                 conn.execute(text("ALTER TABLE transactions ADD COLUMN expected_usdt_amount FLOAT"))
             if "withdraw_destination" not in columns:
                 conn.execute(text("ALTER TABLE transactions ADD COLUMN withdraw_destination VARCHAR(200)"))
+            if "fee_amount" not in columns:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN fee_amount FLOAT"))
+            if "net_amount" not in columns:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN net_amount FLOAT"))
+            if "profit_amount" not in columns:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN profit_amount FLOAT"))
+            if "cancel_requested_at" not in columns:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN cancel_requested_at TIMESTAMP"))
+            if "cancel_rejection_reason" not in columns:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN cancel_rejection_reason TEXT"))
+            if "crypto_currency" not in columns:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN crypto_currency VARCHAR(20)"))
+            if "crypto_network" not in columns:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN crypto_network VARCHAR(20)"))
+            if "decided_by_name" not in columns:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN decided_by_name VARCHAR(120)"))
+            if "decided_by_telegram_id" not in columns:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN decided_by_telegram_id INTEGER"))
+            if "decided_at" not in columns:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN decided_at TIMESTAMP"))
 
         if "users" in inspector.get_table_names():
             user_columns = {col["name"] for col in inspector.get_columns("users")}
@@ -412,6 +443,8 @@ class DatabaseManager:
                     conn.execute(text("ALTER TABLE users ADD COLUMN commission_withdrawn FLOAT DEFAULT 0"))
                 if "referral_rank_override" not in user_columns:
                     conn.execute(text("ALTER TABLE users ADD COLUMN referral_rank_override VARCHAR(40)"))
+                if "reserved_balance" not in user_columns:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN reserved_balance FLOAT DEFAULT 0"))
 
             # حساب Ichancy واحد فقط لكل مستخدم — فهرس فريد على player_id
             with self.engine.begin() as conn:

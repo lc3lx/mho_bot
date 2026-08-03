@@ -105,147 +105,313 @@ class PaymentHandler:
             return tron_client.is_configured
         return False
 
-    # ─── شام كاش — تدفق مثل الصور ───────────────────────────
+    # ─── شام كاش — مبلغ أولاً ثم عملة ثم رقم العملية ─────────
+
+    SHAMCASH_TX_BAD = (
+        "🤨 رقم العملية مو واضح\n\n"
+        "ابعت الرقم مثل ما هو موجود بسجل التحويلات\n\n"
+        "ارقام فقط بلا صور وبلا شرح\n\n"
+        "المحاسب ما بيعرف يحل الغاز 😂"
+    )
+    SHAMCASH_TIMEOUT = (
+        "⌛ انتهت مهلة التحويل\n\n"
+        "رجع افتح طلب جديد وكمل من الاول\n\n"
+        "المحاسب سكر الملف وراح يشرب قهوة 😂"
+    )
+    SHAMCASH_VERIFYING = (
+        "✅ وصل رقم العملية\n\n"
+        "هلق عم نتحقق من التحويل\n\n"
+        "اذا كلشي تمام بتنعبى المحفظة مباشرة\n\n"
+        "المحاسب فتح عيونه رسمي 😂"
+    )
+
+    @staticmethod
+    def _shamcash_account(currency: str) -> str:
+        cfg = Config.SHAMCASH_DEPOSIT
+        if currency == "usd":
+            return (
+                cfg.get("account_usd")
+                or Config.APISYRIA_CONFIG.get("shamcash_account")
+                or "غير مُعدّ"
+            )
+        return (
+            cfg.get("account_syp")
+            or Config.APISYRIA_CONFIG.get("shamcash_account")
+            or "غير مُعدّ"
+        )
+
+    @staticmethod
+    def _shamcash_currency_text() -> str:
+        return (
+            "💠 شام كاش\n\n"
+            "اختار العملة اللي بدك تشحن فيها محفظة البوت\n\n"
+            "💵 دولار\n"
+            "🇸🇾 ليرة سورية\n\n"
+            "اختار الصح من اول مرة\n"
+            "المحاسب ما ناقصه مفاجآت اليوم 😂"
+        )
+
+    @staticmethod
+    def _shamcash_pay_text(currency: str, amount: float) -> str:
+        timeout = Config.APISYRIA_CONFIG.get("deposit_timeout_minutes", 15)
+        account = PaymentHandler._shamcash_account(currency)
+        cfg = Config.SHAMCASH_DEPOSIT
+        if currency == "usd":
+            min_amount = cfg["min_usd"]
+            min_label = f"{min_amount:.2f} $"
+            amount_label = f"{float(amount):.2f} $"
+        else:
+            min_amount = cfg["min_syp"]
+            min_label = format_currency(min_amount)
+            amount_label = format_currency(amount)
+        return (
+            "💠 شحن المحفظة عن طريق شام كاش\n\n"
+            "حوّل المبلغ على العنوان الموجود تحت\n\n"
+            f"{tg_code(account)}\n\n"
+            f"💰 المبلغ: {amount_label}\n"
+            f"بعد ما تحول ابعت رقم العملية فقط\n\n"
+            f"⏰ المهلة {timeout} دقيقة\n\n"
+            f"📌 اقل مبلغ للشحن {min_label}\n\n"
+            "لا تبعت صورة ولا شرح طويل\n"
+            "رقم العملية لحاله بكفي\n\n"
+            "واذا تأخرت المحاسب رح يطلع عليك نظرة ما بتطمن 😂"
+        )
 
     @staticmethod
     async def start_shamcash_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """قائمة شام كاش: اختيار العملة + شعار"""
-        from pathlib import Path
-        from telegram import InputFile
+        """اختيار العملة — بدون شعار."""
+        amount = context.user_data.get("amount")
+        if not amount:
+            await PaymentHandler.start_deposit_ask_amount(update, context)
+            return
+        # حافظ على المبلغ وامسح بقايا جلسات قديمة غير ضرورية
+        kept_amount = float(amount)
+        guide_ids = list(context.user_data.get("payment_guide_message_ids") or [])
+        chat_id = update.effective_chat.id if update.effective_chat else None
+        if context.bot and chat_id and guide_ids:
+            for mid in guide_ids:
+                try:
+                    await context.bot.delete_message(chat_id=chat_id, message_id=mid)
+                except TelegramError:
+                    pass
+        context.user_data["amount"] = kept_amount
+        context.user_data["operation"] = "wallet_deposit"
+        context.user_data["method"] = "shamcash"
+        context.user_data.pop("state", None)
+        context.user_data["payment_guide_message_ids"] = []
 
-        chat_id = update.effective_chat.id
-        await reset_payment_session(context, bot=context.bot, chat_id=chat_id)
-
-        assets = Path(__file__).resolve().parent / "assets"
-        caption = (
-            "❝ شحن SHAM CASH\n\n"
-            "يرجى اختيار العملة التي تريد شحن محفظة البوت بها"
+        await safe_edit_callback_message(
+            update,
+            PaymentHandler._shamcash_currency_text(),
+            reply_markup=Keyboards.shamcash_currency_menu(),
+            context=context,
         )
-        logo = assets / "shamcash_logo.png"
 
-        if logo.exists():
-            try:
-                if update.callback_query and update.callback_query.message:
-                    await update.callback_query.message.delete()
-            except TelegramError:
-                pass
-            with open(logo, "rb") as photo:
-                msg = await context.bot.send_photo(
-                    chat_id=chat_id,
-                    photo=InputFile(photo, filename="shamcash_logo.png"),
-                    caption=caption,
-                    reply_markup=Keyboards.shamcash_currency_menu(),
-                )
-            track_payment_guide_message(context, msg)
-        elif update.callback_query:
-            await safe_edit_callback_message(
-                update,
-                caption,
-                reply_markup=Keyboards.shamcash_currency_menu(),
-                context=context,
+    @staticmethod
+    async def show_shamcash_pay_screen(
+        update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        """شاشة العنوان + انتظار رقم العملية."""
+        currency = context.user_data.get("shamcash_currency", "syp")
+        amount = context.user_data.get("amount")
+        if not amount:
+            await PaymentHandler.start_deposit_ask_amount(update, context)
+            return
+        context.user_data["state"] = "waiting_for_shamcash_tx"
+        text = PaymentHandler._shamcash_pay_text(currency, float(amount))
+        await safe_edit_callback_message(
+            update,
+            text,
+            reply_markup=Keyboards.shamcash_pay_menu(),
+            context=context,
+            parse_mode="HTML",
+        )
+
+    @staticmethod
+    async def start_deposit_ask_amount(
+        update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        min_dep = Config.MIN_DEPOSIT
+        text = (
+            "💳 تعبئة محفظة البوت\n\n"
+            "ابعت المبلغ أرقام فقط 👇\n\n"
+            f"أقل مبلغ: {format_currency(min_dep)}\n\n"
+            "المحاسب جاهز… بس خلّي الرقم واضح من أول مرة 😂"
+        )
+        context.user_data.clear()
+        context.user_data["state"] = "waiting_for_amount"
+        context.user_data["operation"] = "wallet_deposit"
+        await safe_edit_callback_message(
+            update, text, reply_markup=Keyboards.cancel_operation(), context=context
+        )
+
+    @staticmethod
+    async def show_wallet_deposit_methods(
+        update: Update, context: ContextTypes.DEFAULT_TYPE, amount: float
+    ):
+        text = (
+            "💳 تعبئة محفظة البوت\n\n"
+            f"المبلغ {format_currency(amount)}\n\n"
+            "هلق اختار طريقة الدفع المناسبة 👇\n\n"
+            "المحاسب جاهز\n"
+            "بس لا تغير رأيك كل شوي 😂"
+        )
+        context.user_data["amount"] = float(amount)
+        context.user_data["operation"] = "wallet_deposit"
+        context.user_data.pop("state", None)
+        if update.message:
+            await update.message.reply_text(
+                text, reply_markup=Keyboards.wallet_deposit_menu()
             )
-            if update.callback_query.message:
-                track_payment_guide_message(context, update.callback_query.message)
         else:
-            msg = await update.message.reply_text(
-                caption,
-                reply_markup=Keyboards.shamcash_currency_menu(),
+            await safe_edit_callback_message(
+                update, text, reply_markup=Keyboards.wallet_deposit_menu(), context=context
             )
-            track_payment_guide_message(context, msg)
 
     @staticmethod
     async def start_shamcash_currency(
         update: Update, context: ContextTypes.DEFAULT_TYPE, currency: str
     ):
-        """تعليمات الشحن حسب العملة + صورة رقم العملية"""
+        """تعليمات الشحن حسب العملة — نص فقط، بدون شعار/دليل."""
+        amount = context.user_data.get("amount")
+        if not amount:
+            await PaymentHandler.start_deposit_ask_amount(update, context)
+            return
+
+        currency = (currency or "syp").lower()
+        cfg = Config.SHAMCASH_DEPOSIT
+        amount = float(amount)
+        if currency == "usd":
+            min_a = float(cfg["min_usd"])
+            if amount < min_a:
+                await safe_edit_callback_message(
+                    update,
+                    f"❌ الحد الأدنى لشام كاش بالدولار هو {min_a:.2f} $\n"
+                    "رجع واكتب مبلغ مناسب.",
+                    reply_markup=Keyboards.shamcash_currency_menu(),
+                    context=context,
+                )
+                return
+            credit_syp = Config.usd_to_syp(amount, source="shamcash")
+        else:
+            min_a = float(cfg["min_syp"])
+            if amount < min_a:
+                await safe_edit_callback_message(
+                    update,
+                    f"❌ الحد الأدنى لشام كاش بالليرة هو {format_currency(min_a)}\n"
+                    "رجع واكتب مبلغ مناسب.",
+                    reply_markup=Keyboards.shamcash_currency_menu(),
+                    context=context,
+                )
+                return
+            credit_syp = amount
+
+        context.user_data["shamcash_currency"] = currency
+        context.user_data["credit_amount_syp"] = credit_syp
+        context.user_data["amount"] = amount
+        context.user_data["method"] = "shamcash"
+        context.user_data["operation"] = "shamcash_deposit"
+        context.user_data["state"] = "waiting_for_shamcash_tx"
+        context.user_data["deposit_started_at"] = datetime.utcnow().isoformat()
+        context.user_data.pop("shamcash_tx", None)
+        context.user_data.pop("shamcash_confirm_lock", None)
+
+        await PaymentHandler.show_shamcash_pay_screen(update, context)
+
+    @staticmethod
+    async def copy_shamcash_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        currency = context.user_data.get("shamcash_currency", "syp")
+        account = PaymentHandler._shamcash_account(currency)
+        query = update.callback_query
+        try:
+            await query.answer("اضغط على العنوان تحت للنسخ ✅", show_alert=False)
+        except TelegramError:
+            pass
+        # رسالة قصيرة قابلة للنسخ فقط
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=tg_code(account),
+            parse_mode="HTML",
+        )
+
+    @staticmethod
+    async def show_shamcash_where_tx(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """صورة واحدة فقط توضّح مكان رقم العملية."""
         from pathlib import Path
         from telegram import InputFile
 
+        text = (
+            "🧾 مكان رقم العملية\n\n"
+            "رقم العملية بتلاقيه بسجل التحويلات\n\n"
+            "هو الرقم المحدد بالصورة\n\n"
+            "انسخه وابعتلي ياه لحاله\n\n"
+            "لا تبعتلي قصة حياة الحوالة 😂"
+        )
         assets = Path(__file__).resolve().parent / "assets"
-        cfg = Config.SHAMCASH_DEPOSIT
-        timeout = Config.APISYRIA_CONFIG.get("deposit_timeout_minutes", 15)
-        currency = currency.lower()
-
-        if currency == "usd":
-            account = (
-                cfg.get("account_usd")
-                or Config.APISYRIA_CONFIG.get("shamcash_account")
-                or "غير مُعدّ"
-            )
-            min_amount = cfg["min_usd"]
-            text = (
-                f"❝ شحن SHAM CASH - USD\n\n"
-                f"اشحن البوت عن طريق شام كاش بالدولار الأمريكي.\n"
-                f"الحد الأدنى لشحن شام كاش بالدولار هو {min_amount:.2f} $.\n"
-                f"بعد التحقق يُضاف الرصيد لمحفظتك بالليرة حسب سعر الأدمن "
-                f"({format_currency(Config.get_shamcash_usd_rate())} ل.س = 1 $).\n\n"
-                f"قم بالتحويل إلى العنوان المرفق (انقر على العنوان للنسخ):\n"
-                f"{tg_code(account)}\n\n"
-                f"⏰ المهلة: {timeout} دقيقة فقط\n"
-                f"ثم ادخل رقم عملية التحويل كما هو موضح بالصورة المرفقة"
-            )
-        else:
-            account = (
-                cfg.get("account_syp")
-                or Config.APISYRIA_CONFIG.get("shamcash_account")
-                or "غير مُعدّ"
-            )
-            min_amount = cfg["min_syp"]
-            text = (
-                f"❝ شحن SHAM CASH - SYP\n\n"
-                f"اشحن البوت عن طريق شام كاش بالليرة السورية.\n"
-                f"الحد الأدنى لشحن شام كاش بالليرة السورية هو {format_currency(min_amount)}.\n\n"
-                f"قم بالتحويل إلى العنوان المرفق (انقر على العنوان للنسخ):\n"
-                f"{tg_code(account)}\n\n"
-                f"⏰ المهلة: {timeout} دقيقة فقط\n"
-                f"ثم ادخل رقم عملية التحويل كما هو موضح بالصورة المرفقة"
-            )
-
-        context.user_data.clear()
-        context.user_data["state"] = "waiting_for_shamcash_tx"
-        context.user_data["operation"] = "shamcash_deposit"
-        context.user_data["method"] = "shamcash"
-        context.user_data["shamcash_currency"] = currency
-        context.user_data["deposit_started_at"] = datetime.utcnow().isoformat()
-        # لا تخلط مع رسائل قديمة من طريقة دفع أخرى
-        context.user_data["payment_guide_message_ids"] = []
-
-        chat_id = update.effective_chat.id
         guide = assets / "shamcash_tx_guide.png"
+        markup = Keyboards.shamcash_tx_help_menu()
+        chat_id = update.effective_chat.id
 
-        try:
-            if update.callback_query and update.callback_query.message:
-                await update.callback_query.message.delete()
-        except TelegramError:
-            pass
+        # احفظ حالة الانتظار
+        context.user_data["state"] = "waiting_for_shamcash_tx"
 
         if guide.exists():
+            try:
+                if update.callback_query and update.callback_query.message:
+                    await update.callback_query.message.delete()
+            except TelegramError:
+                pass
             with open(guide, "rb") as photo:
                 msg = await context.bot.send_photo(
                     chat_id=chat_id,
                     photo=InputFile(photo, filename="shamcash_tx_guide.png"),
                     caption=text,
-                    parse_mode="HTML",
-                    reply_markup=Keyboards.cancel_operation(),
+                    reply_markup=markup,
                 )
+            track_payment_guide_message(context, msg)
         else:
-            msg = await context.bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                parse_mode="HTML",
-                reply_markup=Keyboards.cancel_operation(),
+            await safe_edit_callback_message(
+                update, text, reply_markup=markup, context=context
             )
-        track_payment_guide_message(context, msg)
 
     @staticmethod
     async def handle_shamcash_tx_input(
         update: Update, context: ContextTypes.DEFAULT_TYPE, tx_number: str
     ):
-        """بعد رقم العملية — طلب المبلغ"""
+        """بعد رقم العملية — تحقق فوري (المبلغ معروف مسبقاً)."""
+        from datetime import timedelta
+
         tx_number = ApiSyriaClient.normalize_tx_id(tx_number)
-        if len(tx_number) < 3:
+        if len(tx_number) < 3 or not tx_number.isdigit():
             await update.message.reply_text(
-                "❌ رقم العملية غير صحيح. أرسل الرقم كما في الصورة (مثال: 6278231).",
+                PaymentHandler.SHAMCASH_TX_BAD,
+                reply_markup=Keyboards.shamcash_pay_menu(),
+            )
+            context.user_data["state"] = "waiting_for_shamcash_tx"
+            return
+
+        timeout = Config.APISYRIA_CONFIG.get("deposit_timeout_minutes", 15)
+        started = context.user_data.get("deposit_started_at")
+        if started:
+            try:
+                started_dt = datetime.fromisoformat(started)
+                if datetime.utcnow() - started_dt > timedelta(minutes=timeout):
+                    context.user_data.clear()
+                    await update.message.reply_text(
+                        PaymentHandler.SHAMCASH_TIMEOUT,
+                        reply_markup=Keyboards.wallet_deposit_menu(),
+                    )
+                    return
+            except ValueError:
+                pass
+
+        amount = context.user_data.get("amount")
+        credit_syp = context.user_data.get("credit_amount_syp")
+        currency = context.user_data.get("shamcash_currency", "syp")
+        if not amount or not credit_syp:
+            context.user_data.clear()
+            await update.message.reply_text(
+                "❌ انتهت الجلسة. ابدأ تعبئة المحفظة من جديد.",
                 reply_markup=Keyboards.cancel_operation(),
             )
             return
@@ -253,110 +419,63 @@ class PaymentHandler:
         if db.is_external_transaction_used(tx_number, "shamcash"):
             await update.message.reply_text(
                 "❌ رقم العملية مستخدم مسبقاً.",
-                reply_markup=Keyboards.main_menu(),
+                reply_markup=Keyboards.wallet_deposit_menu(),
             )
-            context.user_data.clear()
+            context.user_data["state"] = "waiting_for_shamcash_tx"
             return
 
         context.user_data["shamcash_tx"] = tx_number
-        context.user_data["state"] = "waiting_for_shamcash_amount"
+        wait_msg = await update.message.reply_text(PaymentHandler.SHAMCASH_VERIFYING)
 
-        currency = context.user_data.get("shamcash_currency", "syp")
-        unit = "$" if currency == "usd" else "ل.س"
-        await update.message.reply_text(
-            f"💵 يرجى إدخال المبلغ الذي قمت بتحويله ({unit}):",
-            reply_markup=Keyboards.cancel_operation(),
+        # نفّذ التحقق مباشرة
+        await PaymentHandler._verify_and_complete_shamcash(
+            update, context, wait_msg=wait_msg
         )
 
     @staticmethod
     async def handle_shamcash_amount_input(
         update: Update, context: ContextTypes.DEFAULT_TYPE, amount_text: str
     ):
-        """عرض ملخص التأكيد قبل الإرسال"""
-        currency = context.user_data.get("shamcash_currency", "syp")
-        tx_number = context.user_data.get("shamcash_tx")
-        cfg = Config.SHAMCASH_DEPOSIT
-
-        if not tx_number:
-            context.user_data.clear()
-            await update.message.reply_text(
-                "❌ انتهت الجلسة. ابدأ من جديد.",
-                reply_markup=Keyboards.main_menu(),
-            )
-            return
-
-        try:
-            amount = float(str(amount_text).replace(",", "").strip())
-        except ValueError:
-            await update.message.reply_text(
-                "❌ المبلغ غير صحيح. أرسل رقماً فقط.",
-                reply_markup=Keyboards.cancel_operation(),
-            )
-            return
-
-        if currency == "usd":
-            min_a = cfg["min_usd"]
-            if amount < min_a:
-                await update.message.reply_text(
-                    f"❌ الحد الأدنى للشحن بالدولار هو {min_a:.2f} $",
-                    reply_markup=Keyboards.cancel_operation(),
-                )
-                return
-            rate = Config.get_shamcash_usd_rate()
-            syp_amount = Config.usd_to_syp(amount, source="shamcash")
-            summary = (
-                f"❝ طلب شحن - شام كاش USD\n\n"
-                f"معلومات الطلب:\n"
-                f"• العملة: الدولار الأمريكي\n"
-                f"• سعر الصرف الحالي: {format_currency(rate)} ل.س = 1 $\n"
-                f"• المبلغ بالدولار: {amount:.2f} $\n"
-                f"• يُضاف للمحفظة بالليرة: {format_currency(syp_amount)}\n"
-                f"• رقم العملية: {tg_code(tx_number)}\n\n"
-                f"يرجى التأكد من صحة المعلومات قبل الضغط على إرسال"
-            )
-            context.user_data["amount"] = amount
-            context.user_data["credit_amount_syp"] = syp_amount
-        else:
-            min_a = cfg["min_syp"]
-            if amount < min_a:
-                await update.message.reply_text(
-                    f"❌ الحد الأدنى للشحن بالليرة هو {format_currency(min_a)}",
-                    reply_markup=Keyboards.cancel_operation(),
-                )
-                return
-            summary = (
-                f"❝ طلب شحن - شام كاش SYP\n\n"
-                f"معلومات الطلب:\n"
-                f"• العملة: الليرة السورية\n"
-                f"• المبلغ: {format_currency(amount)}\n"
-                f"• رقم العملية: {tg_code(tx_number)}\n\n"
-                f"يرجى التأكد من صحة المعلومات قبل الضغط على إرسال"
-            )
-            context.user_data["amount"] = amount
-            context.user_data["credit_amount_syp"] = amount
-
-        context.user_data["state"] = "waiting_for_shamcash_confirm"
+        """توافق خلفي — المبلغ صار يُطلب في البداية."""
         await update.message.reply_text(
-            summary,
-            parse_mode="HTML",
-            reply_markup=Keyboards.shamcash_confirm_keyboard(),
+            "المبلغ مكتوب أصلاً.\nابعت رقم العملية فقط.",
+            reply_markup=Keyboards.shamcash_pay_menu(),
         )
+        context.user_data["state"] = "waiting_for_shamcash_tx"
 
     @staticmethod
     async def confirm_shamcash_deposit(
         update: Update, context: ContextTypes.DEFAULT_TYPE
     ):
-        """إرسال الطلب والتحقق التلقائي عبر API SYRIA"""
+        """توافق خلفي — التحقق يتم تلقائياً بعد رقم العملية."""
+        await PaymentHandler._verify_and_complete_shamcash(update, context, wait_msg=None)
+
+    @staticmethod
+    async def _verify_and_complete_shamcash(
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        wait_msg=None,
+    ):
+        """تحقق فعلي من التحويل ثم إضافة الرصيد — بدون إعلان نجاح مبكر."""
         from datetime import timedelta
 
-        query = update.callback_query
         if context.user_data.get("shamcash_confirm_lock"):
-            try:
-                await query.answer("جاري معالجة الطلب...", show_alert=False)
-            except TelegramError:
-                pass
             return
         context.user_data["shamcash_confirm_lock"] = True
+
+        async def edit_status(text: str, markup=None):
+            if wait_msg:
+                try:
+                    await wait_msg.edit_text(text, reply_markup=markup)
+                    return
+                except TelegramError:
+                    pass
+            if update.callback_query:
+                await safe_edit_callback_message(
+                    update, text, reply_markup=markup, context=context
+                )
+            elif update.effective_message:
+                await update.effective_message.reply_text(text, reply_markup=markup)
 
         tx_number = context.user_data.get("shamcash_tx")
         amount = context.user_data.get("amount")
@@ -364,43 +483,23 @@ class PaymentHandler:
         currency = context.user_data.get("shamcash_currency", "syp")
         timeout = Config.APISYRIA_CONFIG.get("deposit_timeout_minutes", 15)
 
-        # احذف رسالة حساب شام كاش حتى لا تبقى «معها» بعد إرسال الطلب
-        guide_ids = list(context.user_data.get("payment_guide_message_ids") or [])
-        for mid in guide_ids:
-            try:
-                await context.bot.delete_message(
-                    chat_id=update.effective_chat.id, message_id=mid
-                )
-            except TelegramError:
-                pass
-        context.user_data["payment_guide_message_ids"] = []
-
         if not tx_number or not amount or not credit_syp:
             context.user_data.clear()
-            await safe_edit_callback_message(
-                update,
+            await edit_status(
                 "❌ انتهت الجلسة. ابدأ طلب شحن شام كاش من جديد.",
-                reply_markup=Keyboards.payment_methods("deposit"),
-                context=context,
+                Keyboards.wallet_deposit_menu(),
             )
             return
 
-        await safe_edit_callback_message(
-            update, "⏳ لحظات من فضلك... جاري التحقق من شام كاش", context=context
-        )
-
-        user = db.get_user(update.effective_user.id)
         started = context.user_data.get("deposit_started_at")
         if started:
             try:
                 started_dt = datetime.fromisoformat(started)
                 if datetime.utcnow() - started_dt > timedelta(minutes=timeout):
                     context.user_data.clear()
-                    await safe_edit_callback_message(
-                        update,
-                        f"⏰ انتهى الوقت! كان لديك {timeout} دقيقة.\nأنشئ طلباً جديداً من شام كاش فقط.",
-                        reply_markup=Keyboards.payment_methods("deposit"),
-                        context=context,
+                    await edit_status(
+                        PaymentHandler.SHAMCASH_TIMEOUT,
+                        Keyboards.wallet_deposit_menu(),
                     )
                     return
             except ValueError:
@@ -408,14 +507,13 @@ class PaymentHandler:
 
         if db.is_external_transaction_used(tx_number, "shamcash"):
             context.user_data.clear()
-            await safe_edit_callback_message(
-                update,
+            await edit_status(
                 "❌ رقم العملية مستخدم مسبقاً.",
-                reply_markup=Keyboards.payment_methods("deposit"),
-                context=context,
+                Keyboards.wallet_deposit_menu(),
             )
             return
 
+        user = db.get_user(update.effective_user.id)
         session = db.get_session()
         try:
             transaction = Transaction(
@@ -447,12 +545,12 @@ class PaymentHandler:
                 PaymentHandler._fail_pending_deposit(
                     transaction_id, "رقم عملية غير موجود"
                 )
-                context.user_data.clear()
-                await safe_edit_callback_message(
-                    update,
-                    "❌ تم رفض طلب شحن شام كاش.\nالسبب: رقم عملية غير موجود.",
-                    reply_markup=Keyboards.payment_methods("deposit"),
-                    context=context,
+                context.user_data.pop("shamcash_confirm_lock", None)
+                context.user_data.pop("shamcash_tx", None)
+                context.user_data["state"] = "waiting_for_shamcash_tx"
+                await edit_status(
+                    PaymentHandler.SHAMCASH_TX_BAD,
+                    Keyboards.shamcash_pay_menu(),
                 )
                 return
 
@@ -467,11 +565,9 @@ class PaymentHandler:
                     transaction_id, f"خارج مهلة {timeout} دقيقة"
                 )
                 context.user_data.clear()
-                await safe_edit_callback_message(
-                    update,
-                    f"⏰ عملية شام كاش خارج المهلة المسموحة ({timeout} دقيقة).",
-                    reply_markup=Keyboards.payment_methods("deposit"),
-                    context=context,
+                await edit_status(
+                    PaymentHandler.SHAMCASH_TIMEOUT,
+                    Keyboards.wallet_deposit_menu(),
                 )
                 return
 
@@ -481,24 +577,21 @@ class PaymentHandler:
                     f"مبلغ غير مطابق: مطلوب {amount} / فعلي {actual_amount}",
                 )
                 context.user_data.clear()
-                await safe_edit_callback_message(
-                    update,
-                    f"❌ تم رفض طلب شحن شام كاش.\nالسبب: المبلغ غير مطابق.\n"
-                    f"المدخل: {amount}\n"
-                    f"في العملية: {actual_amount}",
-                    reply_markup=Keyboards.payment_methods("deposit"),
-                    context=context,
+                await edit_status(
+                    "❌ المبلغ بالتحويل ما طابق المبلغ اللي كتبته.\n"
+                    f"المطلوب: {amount}\n"
+                    f"بالعملية: {actual_amount}\n\n"
+                    "افتح طلب جديد بالمبلغ الصحيح.",
+                    Keyboards.wallet_deposit_menu(),
                 )
                 return
 
             if db.is_external_transaction_used(external_id, "shamcash"):
                 PaymentHandler._fail_pending_deposit(transaction_id, "عملية مكررة")
                 context.user_data.clear()
-                await safe_edit_callback_message(
-                    update,
+                await edit_status(
                     "❌ هذه العملية مُسجّلة مسبقاً.",
-                    reply_markup=Keyboards.payment_methods("deposit"),
-                    context=context,
+                    Keyboards.wallet_deposit_menu(),
                 )
                 return
 
@@ -514,32 +607,29 @@ class PaymentHandler:
             finally:
                 session.close()
 
+            # نجاح فقط بعد التحقق الفعلي
             context.user_data.clear()
-            await safe_edit_callback_message(
+            await PaymentHandler.complete_deposit(
+                transaction_id,
                 update,
-                "✅ تم التحقق من تحويل شام كاش. جاري إضافة الرصيد...",
-                context=context,
+                context,
+                status_message=wait_msg,
             )
-            await PaymentHandler.complete_deposit(transaction_id, update, context)
 
         except ApiSyriaError as exc:
             PaymentHandler._fail_pending_deposit(transaction_id, exc.message)
             context.user_data.clear()
-            await safe_edit_callback_message(
-                update,
-                f"❌ تم رفض طلب شحن شام كاش.\n{user_facing_error_message(exc)}",
-                reply_markup=Keyboards.payment_methods("deposit"),
-                context=context,
+            await edit_status(
+                f"❌ ما قدرنا نتحقق من التحويل.\n{user_facing_error_message(exc)}",
+                Keyboards.wallet_deposit_menu(),
             )
         except Exception as exc:
-            logger.exception("ShamCash confirm failed")
+            logger.exception("ShamCash verify failed")
             PaymentHandler._fail_pending_deposit(transaction_id, str(exc))
             context.user_data.clear()
-            await safe_edit_callback_message(
-                update,
+            await edit_status(
                 f"❌ حدث خطأ أثناء التحقق من شام كاش.\n{user_facing_error_message(exc)}",
-                reply_markup=Keyboards.payment_methods("deposit"),
-                context=context,
+                Keyboards.wallet_deposit_menu(),
             )
 
     @staticmethod
@@ -2059,8 +2149,13 @@ class PaymentHandler:
         return False
 
     @staticmethod
-    async def complete_deposit(transaction_id: int, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """إتمام عملية الإيداع"""
+    async def complete_deposit(
+        transaction_id: int,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        status_message=None,
+    ):
+        """إتمام عملية الإيداع — بعد تحقق فعلي فقط."""
         session = db.get_session()
         try:
             transaction = session.query(Transaction).filter(Transaction.id == transaction_id).first()
@@ -2078,35 +2173,64 @@ class PaymentHandler:
             user.balance += transaction.amount
             transaction.status = "completed"
             transaction.processed_at = datetime.utcnow()
-            # مكافأة الإحالة القديمة على التعبئة ملغاة — العمولة من جيش نابليون فقط
             session.commit()
 
             has_ichancy = bool(user.ichancy_player_id or user.ichancy_username)
             telegram_id = user.telegram_id
             credited = transaction.amount
             new_balance = user.balance
+            order_id = transaction.external_transaction_id or transaction.id
+            method = transaction.method
+
+            success_text = (
+                "✅ تمت تعبئة المحفظة بنجاح\n\n"
+                f"💰 المبلغ {format_currency(credited)}\n\n"
+                f"🧾 رقم العملية {tg_code(order_id)}\n\n"
+                "المحاسب انبسط شوي\n"
+                "لا تعودوه عالدلال 😂"
+            )
+            # توافق مع الطرق الأخرى
+            if method not in ("shamcash",):
+                success_text = (
+                    f"✅ تم التأكد من العملية\n"
+                    f"تم قبول طلب الشحن بنجاح.\n"
+                    f"تم إضافة {format_currency(credited)} إلى رصيدك في البوت.\n"
+                    f"💵 رصيدك الآن: {format_currency(new_balance)}"
+                )
 
             try:
-                await context.bot.send_message(
-                    chat_id=telegram_id,
-                    text=(
-                        f"✅ تم التأكد من العملية\n"
-                        f"تم قبول طلب الشحن بنجاح.\n"
-                        f"تم إضافة {format_currency(credited)} إلى رصيدك في البوت.\n"
-                        f"💵 رصيدك الآن: {format_currency(new_balance)}"
-                    ),
-                )
-                if not has_ichancy:
+                if status_message is not None:
+                    try:
+                        await status_message.edit_text(
+                            success_text,
+                            parse_mode="HTML",
+                            reply_markup=Keyboards.start_menu()
+                            if has_ichancy
+                            else Keyboards.ichancy_required_menu(),
+                        )
+                    except TelegramError:
+                        await context.bot.send_message(
+                            chat_id=telegram_id,
+                            text=success_text,
+                            parse_mode="HTML",
+                            reply_markup=Keyboards.start_menu()
+                            if has_ichancy
+                            else Keyboards.ichancy_required_menu(),
+                        )
+                else:
+                    await context.bot.send_message(
+                        chat_id=telegram_id,
+                        text=success_text,
+                        parse_mode="HTML",
+                        reply_markup=Keyboards.start_menu()
+                        if has_ichancy
+                        else Keyboards.ichancy_required_menu(),
+                    )
+                if not has_ichancy and status_message is None:
                     await context.bot.send_message(
                         chat_id=telegram_id,
                         text=Config.MESSAGES["ichancy_required"],
                         reply_markup=Keyboards.ichancy_required_menu(),
-                    )
-                else:
-                    await context.bot.send_message(
-                        chat_id=telegram_id,
-                        text="تم فتح خدمات البوت لك.",
-                        reply_markup=Keyboards.start_menu(),
                     )
             except TelegramError:
                 logger.warning(f"لا يمكن إرسال إشعار للمستخدم {telegram_id}")

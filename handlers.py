@@ -495,12 +495,13 @@ async def deposit_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def withdraw_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """فضّي محفظتي"""
+    """فضّي محفظتي — المسار الجديد"""
+    from withdraw_flow import WithdrawFlow
     user = db.get_user(update.effective_user.id)
     if not user:
         await start_handler(update, context)
         return
-    await screens.show_withdraw_hub(update, context, user)
+    await WithdrawFlow.start(update, context)
 
 
 async def referral_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -732,34 +733,115 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     if data == "deposit_other":
         await safe_edit_callback_message(
             update,
-            "💵 طرق ثانية\n\nحاليًا المتاح: سيرياتيل / شام كاش / عملات رقمية.\nإذا عندك طريقة خاصة تواصل مع الدعم.",
+            "🧩 طرق تانية\n\n"
+            "حالياً المتاح: شام كاش وعملات رقمية.\n"
+            "سيرياتيل كاش متوقف مؤقتاً.\n\n"
+            "المحاسب قال: اختار الموجود وخلاص 😂",
             reply_markup=Keyboards.wallet_deposit_menu(),
             context=context,
         )
         return
     if data == "withdraw_enter_amount":
-        context.user_data["state"] = WAITING_FOR_AMOUNT
-        context.user_data["operation"] = "withdraw"
-        context.user_data.pop("method", None)
+        from withdraw_flow import WithdrawFlow
+        await WithdrawFlow.start(update, context)
+        return
+    if data == "withdraw_all_balance":
+        from withdraw_flow import WithdrawFlow
+        await WithdrawFlow.withdraw_all(update, context)
+        return
+    if data == "withdraw_rules":
+        await withdraw_handler(update, context)
+        return
+    if data.startswith("wd_method_"):
+        from withdraw_flow import WithdrawFlow
+        method = data.replace("wd_method_", "", 1)
+        await WithdrawFlow.choose_method(update, context, method)
+        return
+    if data == "wallet_withdraw_methods":
+        from withdraw_flow import WithdrawFlow
+        await WithdrawFlow.show_methods(update, context)
+        return
+    if data.startswith("wd_crypto_"):
+        from withdraw_flow import WithdrawFlow
+        parts = data.replace("wd_crypto_", "", 1).split("_", 1)
+        currency = parts[0] if parts else "USDT"
+        network = parts[1] if len(parts) > 1 else "TRC20"
+        await WithdrawFlow.choose_crypto(update, context, currency, network)
+        return
+    if data.startswith("wd_cancel_ask_"):
+        from withdraw_flow import WithdrawFlow
+        order_id = int(data.replace("wd_cancel_ask_", "", 1))
+        await WithdrawFlow.ask_cancel(update, context, order_id)
+        return
+    if data.startswith("wd_cancel_send_"):
+        from withdraw_flow import WithdrawFlow
+        order_id = int(data.replace("wd_cancel_send_", "", 1))
+        await WithdrawFlow.confirm_cancel_request(update, context, order_id)
+        return
+    if data.startswith("wd_cancel_keep_"):
+        from withdraw_flow import WithdrawFlow
+        order_id = int(data.replace("wd_cancel_keep_", "", 1))
+        await WithdrawFlow.keep_withdraw(update, context, order_id)
+        return
+    if data.startswith("wd_track_"):
+        from withdraw_flow import WithdrawFlow
+        order_id = int(data.replace("wd_track_", "", 1))
+        await WithdrawFlow.track_order(update, context, order_id)
+        return
+    if data.startswith("admin_wd_paid_"):
+        if update.effective_user.id not in Config.ADMIN_IDS:
+            return
+        from withdraw_flow import WithdrawFlow
+        order_id = int(data.replace("admin_wd_paid_", "", 1))
+        ok, msg = await WithdrawFlow.admin_mark_paid(
+            context, order_id, admin_user=update.effective_user
+        )
+        await interactive_answer(query, msg, alert=True)
+        return
+    if data.startswith("admin_wd_processing_"):
+        if update.effective_user.id not in Config.ADMIN_IDS:
+            return
+        from withdraw_flow import WithdrawFlow
+        order_id = int(data.replace("admin_wd_processing_", "", 1))
+        ok, msg = await WithdrawFlow.admin_mark_processing(
+            context, order_id, admin_user=update.effective_user
+        )
+        await interactive_answer(query, msg, alert=True)
+        return
+    if data.startswith("admin_wd_reject_"):
+        if update.effective_user.id not in Config.ADMIN_IDS:
+            return
+        from withdraw_flow import WithdrawFlow
+        order_id = int(data.replace("admin_wd_reject_", "", 1))
+        context.user_data["admin_state"] = "waiting_wd_reject_reason"
+        context.user_data["admin_wd_reject_id"] = order_id
         await safe_edit_callback_message(
             update,
-            "💰 اكتب المبلغ رقمًا فقط\n\n"
-            f"الحد الأدنى: {format_currency(Config.MIN_WITHDRAWAL)}\n"
-            f"الحد الأقصى: {format_currency(Config.MAX_WITHDRAWAL)}",
-            reply_markup=Keyboards.cancel_operation(),
+            f"❌ ارفض السحب #{order_id}\n\nأرسل سبب الرفض:",
+            reply_markup=Keyboards.cancel_admin_operation(),
             context=context,
         )
         return
-    if data == "withdraw_rules":
+    if data.startswith("admin_wd_cancel_ok_"):
+        if update.effective_user.id not in Config.ADMIN_IDS:
+            return
+        from withdraw_flow import WithdrawFlow
+        order_id = int(data.replace("admin_wd_cancel_ok_", "", 1))
+        ok, msg = await WithdrawFlow.admin_approve_cancel(
+            context, order_id, admin_user=update.effective_user
+        )
+        await interactive_answer(query, msg, alert=True)
+        return
+    if data.startswith("admin_wd_cancel_no_"):
+        if update.effective_user.id not in Config.ADMIN_IDS:
+            return
+        order_id = int(data.replace("admin_wd_cancel_no_", "", 1))
+        context.user_data["admin_state"] = "waiting_wd_cancel_reject_reason"
+        context.user_data["admin_wd_cancel_reject_id"] = order_id
         await safe_edit_callback_message(
             update,
-            "📋 شروط السحب\n\n"
-            f"• الحد الأدنى: {format_currency(Config.MIN_WITHDRAWAL)}\n"
-            f"• الرسوم: {Config.WITHDRAWAL_FEE_PERCENTAGE:g}%\n"
-            "• الطلب يمر بمراجعة يدوية\n"
-            "• لا تضغط مرتين على نفس الطلب\n"
-            "• استخدم الخدمة بمسؤولية 🔞",
-            reply_markup=Keyboards.wallet_withdraw_gate(),
+            f"❌ ارفض إلغاء السحب #{order_id}\n\nأرسل السبب:",
+            reply_markup=Keyboards.cancel_admin_operation(),
             context=context,
         )
         return
@@ -880,22 +962,29 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         await ReferralHandler.start_withdraw_commission(update, context)
         return
     if data == "withdraw_confirm_submit":
-        await PaymentHandler.confirm_withdraw_review(update, context)
+        from withdraw_flow import WithdrawFlow
+        await WithdrawFlow.confirm(update, context)
         return
     if data == "withdraw_edit_data":
-        await withdraw_handler(update, context)
+        from withdraw_flow import WithdrawFlow
+        await WithdrawFlow.show_methods(update, context)
         return
     if data == "withdraw_abort":
         context.user_data.clear()
         await safe_edit_callback_message(
             update,
-            "🗑️ انسفنا العملية.\nما صار شي بالحساب.",
+            "❌ تم إلغاء العملية.\nما صار شي بالحساب.",
             reply_markup=Keyboards.back_to_main(),
             context=context,
         )
         return
     if data == "withdraw_cancel_pending":
-        await PaymentHandler.cancel_pending_withdraw(update, context)
+        pending_id = context.user_data.get("pending_withdraw_id")
+        if pending_id:
+            from withdraw_flow import WithdrawFlow
+            await WithdrawFlow.ask_cancel(update, context, int(pending_id))
+        else:
+            await interactive_answer(query, "ما في طلب معلق", alert=True)
         return
     if data == "withdraw_locked":
         await interactive_answer(query, "🔒 فات الطلب عالتنفيذ", alert=True)
@@ -1082,11 +1171,27 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             parse_mode="HTML",
         )
 
-    # شام كاش — شحن مثل الصور
+    # شام كاش — شحن مبسّط
+    elif data == "wallet_deposit_methods":
+        amount = context.user_data.get("amount")
+        if amount:
+            await PaymentHandler.show_wallet_deposit_methods(
+                update, context, float(amount)
+            )
+        else:
+            await PaymentHandler.start_deposit_ask_amount(update, context)
     elif data == "shamcash_cur_syp":
         await PaymentHandler.start_shamcash_currency(update, context, "syp")
     elif data == "shamcash_cur_usd":
         await PaymentHandler.start_shamcash_currency(update, context, "usd")
+    elif data == "shamcash_copy_address":
+        await PaymentHandler.copy_shamcash_address(update, context)
+    elif data == "shamcash_where_tx":
+        await PaymentHandler.show_shamcash_where_tx(update, context)
+    elif data == "shamcash_tx_help_ok":
+        await PaymentHandler.show_shamcash_pay_screen(update, context)
+    elif data == "shamcash_tx_help_back":
+        await PaymentHandler.show_shamcash_pay_screen(update, context)
     elif data == "shamcash_confirm_send":
         await PaymentHandler.confirm_shamcash_deposit(update, context)
     elif data == "shamcash_confirm_cancel":
@@ -1142,9 +1247,39 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_state = context.user_data.get('state')
+    admin_state = context.user_data.get("admin_state")
+
+    # ردود أدمن لرفض سحب / رفض إلغاء
+    if is_admin and admin_state == "waiting_wd_reject_reason":
+        from withdraw_flow import WithdrawFlow
+        order_id = int(context.user_data.pop("admin_wd_reject_id", 0) or 0)
+        context.user_data.pop("admin_state", None)
+        reason = update.message.text.strip()
+        ok, msg = await WithdrawFlow.admin_reject_withdraw(
+            context, order_id, reason, admin_user=update.effective_user
+        )
+        await update.message.reply_text(msg, reply_markup=Keyboards.admin_panel())
+        return
+    if is_admin and admin_state == "waiting_wd_cancel_reject_reason":
+        from withdraw_flow import WithdrawFlow
+        order_id = int(context.user_data.pop("admin_wd_cancel_reject_id", 0) or 0)
+        context.user_data.pop("admin_state", None)
+        reason = update.message.text.strip()
+        ok, msg = await WithdrawFlow.admin_reject_cancel(
+            context, order_id, reason=reason, admin_user=update.effective_user
+        )
+        await update.message.reply_text(msg, reply_markup=Keyboards.admin_panel())
+        return
 
     if user and not user_accepted_terms(user) and not is_admin:
         await send_consent_gate(update, context)
+        return
+
+    if user_state == "waiting_for_withdraw_amount":
+        from withdraw_flow import WithdrawFlow
+        await WithdrawFlow.handle_amount_text(
+            update, context, update.message.text or ""
+        )
         return
 
     if user_state == WAITING_FOR_AMOUNT:
@@ -1158,7 +1293,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif user_state == WAITING_FOR_TX_NUMBER:
         await handle_tx_number_input(update, context)
     elif user_state == WAITING_FOR_WITHDRAW_DESTINATION:
-        await handle_withdraw_destination_input(update, context)
+        from withdraw_flow import WithdrawFlow
+        if context.user_data.get("operation") == "wallet_withdraw":
+            await WithdrawFlow.handle_destination(
+                update, context, update.message.text or ""
+            )
+        else:
+            await handle_withdraw_destination_input(update, context)
     elif user_state == WAITING_FOR_ICHANCY_PLAYER_ID:
         await handle_ichancy_player_input(update, context)
     elif user_state == WAITING_FOR_ICHANCY_USERNAME:
@@ -1378,6 +1519,19 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
                 reply_markup=Keyboards.cancel_operation()
             )
         
+        elif operation == 'wallet_deposit':
+            is_valid, validated_amount, error_msg = validate_amount(
+                str(amount), Config.MIN_DEPOSIT, Config.MAX_DEPOSIT
+            )
+            if not is_valid:
+                await update.message.reply_text(
+                    error_msg, reply_markup=Keyboards.cancel_operation()
+                )
+                return
+            await PaymentHandler.show_wallet_deposit_methods(
+                update, context, validated_amount
+            )
+
         elif operation == 'deposit':
             method_config = Config.PAYMENT_METHODS.get(method, {})
             if method_config.get("auto_deposit", method_config.get("auto_enabled")):
@@ -1680,14 +1834,39 @@ async def handle_payment_method(update: Update, context: ContextTypes.DEFAULT_TY
         await update.callback_query.answer("❌ طريقة دفع غير صحيحة")
         return
 
-    # شام كاش إيداع — واجهة مثل الصور (اختيار العملة أولاً)
+    # شام كاش إيداع — واجهة مبسّطة (المبلغ محفوظ مسبقاً)
     if operation == "deposit" and method == "shamcash":
         await PaymentHandler.start_shamcash_menu(update, context)
         return
 
-    # سيريتل — تحويل يدوي + تحقق أوتو
+    # سيريتل — شحن متوقف
     if operation == "deposit" and method == "syriatel_cash":
         await PaymentHandler.start_syriatel_menu(update, context)
+        return
+
+    # USDT — إذا المبلغ محدد مسبقاً من «عبّي محفظتي»
+    if (
+        operation == "deposit"
+        and method == "usdt"
+        and context.user_data.get("amount")
+    ):
+        amount = float(context.user_data["amount"])
+        context.user_data["method"] = method
+        context.user_data["operation"] = "deposit"
+        await PaymentHandler.process_deposit_request(update, context, amount, method)
+        return
+
+    # طرق تانية
+    if operation == "deposit" and method == "other":
+        await safe_edit_callback_message(
+            update,
+            "🧩 طرق تانية\n\n"
+            "حالياً المتاح: شام كاش وعملات رقمية.\n"
+            "سيرياتيل كاش متوقف مؤقتاً.\n\n"
+            "المحاسب قال: اختار الموجود وخلاص 😂",
+            reply_markup=Keyboards.wallet_deposit_menu(),
+            context=context,
+        )
         return
 
     chat_id = update.effective_chat.id if update.effective_chat else None
@@ -1702,7 +1881,11 @@ async def handle_payment_method(update: Update, context: ContextTypes.DEFAULT_TY
         )
         return
 
+    # لا تمسح المبلغ إذا رجعنا لطريقة ثانية ضمن نفس الطلب
+    kept_amount = context.user_data.get("amount")
     await reset_payment_session(context, bot=context.bot, chat_id=chat_id)
+    if kept_amount is not None and operation == "deposit":
+        context.user_data["amount"] = kept_amount
     
     if operation == "deposit":
         auto_note = ""

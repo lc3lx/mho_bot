@@ -318,34 +318,55 @@ PRIZE100 10000
     
     @staticmethod
     async def pending_transactions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """عرض المعاملات المعلقة"""
+        """عرض المعاملات المعلقة + طلبات إلغاء السحب"""
+        from withdraw_flow import status_label, ST_CANCEL_REQUESTED
+        from utils import format_transaction_status
+
         session = db.get_session()
         try:
-            pending = session.query(Transaction).filter(
-                Transaction.status == 'pending'
-            ).order_by(Transaction.created_at.desc()).limit(10).all()
-            
+            pending = (
+                session.query(Transaction)
+                .filter(
+                    Transaction.status.in_(
+                        [
+                            "pending",
+                            "pending_review",
+                            "awaiting_payout",
+                            "cancel_requested",
+                            "processing",
+                        ]
+                    )
+                )
+                .order_by(Transaction.created_at.desc())
+                .limit(15)
+                .all()
+            )
+
             if not pending:
                 message = "✅ لا توجد معاملات معلقة حالياً"
             else:
                 message = "⏳ المعاملات المعلقة:\n\n"
                 for i, transaction in enumerate(pending, 1):
                     user = session.query(User).filter(User.id == transaction.user_id).first()
-                    message += f"{i}. {transaction.transaction_type.upper()}\n"
-                    message += f"👤 {get_user_display_name(user)}\n"
+                    message += f"{i}. {transaction.transaction_type.upper()} — {format_transaction_status(transaction.status)}\n"
+                    message += f"👤 {get_user_display_name(user)} | TG: {getattr(user, 'telegram_id', '')}\n"
                     message += f"💰 {format_currency(transaction.amount)}\n"
                     if transaction.transaction_type == "withdraw":
-                        fee, net_amount = calculate_withdrawal_fee(transaction.amount)
+                        fee = transaction.fee_amount
+                        net_amount = transaction.net_amount
+                        if fee is None or net_amount is None:
+                            fee, net_amount = calculate_withdrawal_fee(transaction.amount)
                         message += (
-                            f"📉 رسوم ({Config.WITHDRAWAL_FEE_PERCENTAGE:g}%): "
-                            f"{format_currency(fee)}\n"
-                            f"💵 حوّل: {format_currency(net_amount)}\n"
+                            f"📉 عمولة: {format_currency(fee)}\n"
+                            f"💵 صافي: {format_currency(net_amount)}\n"
                         )
+                        if transaction.status == ST_CANCEL_REQUESTED:
+                            message += "↩️ يوجد طلب إلغاء — أزرار الموافقة تصل بالإشعار\n"
                     if transaction.withdraw_destination:
                         message += f"📍 الوجهة: {transaction.withdraw_destination}\n"
                     message += f"📅 {transaction.created_at.strftime('%Y-%m-%d %H:%M')}\n"
                     message += f"🆔 ID: {transaction.id}\n\n"
-            
+
             await _admin_edit(
                 update,
                 message,
@@ -880,7 +901,33 @@ PRIZE100 10000
                     )
                     return
                 
-                if transaction.status != 'pending':
+                # سحب المحفظة — استخدم المسار الجديد
+                if transaction.transaction_type == "withdraw":
+                    from withdraw_flow import WithdrawFlow
+                    admin_user = update.effective_user
+                    if action == "approve":
+                        ok, msg = await WithdrawFlow.admin_mark_paid(
+                            context, transaction_id, admin_user=admin_user
+                        )
+                    else:
+                        ok, msg = await WithdrawFlow.admin_reject_withdraw(
+                            context,
+                            transaction_id,
+                            reason="رفض إداري",
+                            admin_user=admin_user,
+                        )
+                    await update.message.reply_text(
+                        msg, reply_markup=Keyboards.admin_panel()
+                    )
+                    return
+
+                if transaction.status not in (
+                    "pending",
+                    "pending_review",
+                    "awaiting_payout",
+                    "cancel_requested",
+                    "processing",
+                ):
                     await update.message.reply_text(
                         f"❌ المعاملة {transaction.status} بالفعل",
                         reply_markup=Keyboards.admin_panel()
@@ -899,12 +946,6 @@ PRIZE100 10000
                     status_text = "تمت الموافقة على"
                     emoji = "✅"
                 else:
-                    if (
-                        transaction.transaction_type == 'withdraw'
-                        and transaction.status == 'pending'
-                    ):
-                        user.balance += transaction.amount
-
                     transaction.status = 'failed'
                     transaction.processed_at = datetime.utcnow()
                     status_text = "تم رفض"

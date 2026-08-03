@@ -193,27 +193,206 @@ class Keyboards:
 
     @staticmethod
     def wallet_deposit_menu():
-        """عبّي محفظتي — طرق الدفع"""
-        keyboard = []
-        methods = Config.get_payment_methods_buttons()
-        order = ["syriatel_cash", "shamcash", "usdt"]
-        by_id = {m["method_id"]: m for m in methods}
-        for method_id in order:
-            method = by_id.get(method_id)
-            if method:
-                keyboard.append([InlineKeyboardButton(
-                    text=method["text"],
-                    callback_data=f"deposit_{method_id}",
-                )])
-        keyboard.append([InlineKeyboardButton("💵 طرق ثانية", callback_data="deposit_other")])
-        keyboard.append([Keyboards.home_btn()])
-        return InlineKeyboardMarkup(keyboard)
+        """عبّي محفظتي — طرق الدفع بعد إدخال المبلغ"""
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("📱 سيرياتيل كاش", callback_data="deposit_syriatel_cash")],
+            [InlineKeyboardButton("💠 شام كاش", callback_data="deposit_shamcash")],
+            [InlineKeyboardButton("🌐 عملات رقمية", callback_data="deposit_usdt")],
+            [InlineKeyboardButton("🧩 طرق تانية", callback_data="deposit_other")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def shamcash_currency_menu():
+        """اختيار عملة شام كاش"""
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("💵 دولار", callback_data="shamcash_cur_usd")],
+            [InlineKeyboardButton("🇸🇾 ليرة سورية", callback_data="shamcash_cur_syp")],
+            [InlineKeyboardButton("🔙 رجوع", callback_data="wallet_deposit_methods")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def shamcash_pay_menu():
+        """شاشة التحويل — عنوان + مساعدة رقم العملية"""
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("📋 نسخ العنوان", callback_data="shamcash_copy_address")],
+            [InlineKeyboardButton("🧾 وين بلاقي رقم العملية", callback_data="shamcash_where_tx")],
+            [InlineKeyboardButton("❌ إلغاء العملية", callback_data="cancel_operation")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def shamcash_tx_help_menu():
+        """مساعدة مكان رقم العملية"""
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ فهمت", callback_data="shamcash_tx_help_ok")],
+            [InlineKeyboardButton("🔙 رجوع", callback_data="shamcash_tx_help_back")],
+        ])
+
+    @staticmethod
+    def shamcash_confirm_keyboard():
+        """توافق خلفي — التأكيد صار تلقائي بعد رقم العملية"""
+        return Keyboards.shamcash_pay_menu()
 
     @staticmethod
     def wallet_withdraw_gate():
+        """توافق — المسار الجديد يبدأ مباشرة من فحص الرصيد."""
         return InlineKeyboardMarkup([
             [InlineKeyboardButton("💰 اكتب المبلغ", callback_data="withdraw_enter_amount")],
-            [InlineKeyboardButton("📋 شروط السحب", callback_data="withdraw_rules")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def withdraw_empty_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚡ عبّي محفظتي", callback_data="deposit")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def withdraw_amount_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("💰 اسحب كل الرصيد", callback_data="withdraw_all_balance")],
+            [InlineKeyboardButton("❌ إلغاء العملية", callback_data="cancel_operation")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def withdraw_methods_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("📱 سيرياتيل كاش", callback_data="wd_method_syriatel_cash")],
+            [InlineKeyboardButton("💠 شام كاش", callback_data="wd_method_shamcash")],
+            [InlineKeyboardButton("🌐 عملات رقمية", callback_data="wd_method_usdt")],
+            [InlineKeyboardButton("🧩 طرق ثانية", callback_data="wd_method_other")],
+            [InlineKeyboardButton("🔙 رجوع", callback_data="withdraw")],
+        ])
+
+    @staticmethod
+    def withdraw_crypto_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("USDT · TRC20", callback_data="wd_crypto_USDT_TRC20")],
+            [InlineKeyboardButton("USDT · BEP20", callback_data="wd_crypto_USDT_BEP20")],
+            [InlineKeyboardButton("🔙 رجوع", callback_data="wallet_withdraw_methods")],
+        ])
+
+    @staticmethod
+    def withdraw_dest_back_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 رجوع", callback_data="wallet_withdraw_methods")],
+        ])
+
+    @staticmethod
+    def withdraw_review_menu(locked: bool = False):
+        if locked:
+            return InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔒 فات الطلب عالتنفيذ", callback_data="withdraw_locked")],
+                [Keyboards.home_btn()],
+            ])
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ أكد السحب", callback_data="withdraw_confirm_submit")],
+            [InlineKeyboardButton("✏️ عدل البيانات", callback_data="withdraw_edit_data")],
+            [InlineKeyboardButton("❌ إلغاء العملية", callback_data="withdraw_abort")],
+        ])
+
+    @staticmethod
+    def withdraw_submitted_menu(order_id: int, can_cancel: bool = True):
+        rows = []
+        if can_cancel:
+            rows.append([
+                InlineKeyboardButton(
+                    "↩️ اطلب إلغاء السحب",
+                    callback_data=f"wd_cancel_ask_{order_id}",
+                )
+            ])
+        rows.append([
+            InlineKeyboardButton("📋 تابع الطلب", callback_data=f"wd_track_{order_id}")
+        ])
+        rows.append([Keyboards.home_btn()])
+        return InlineKeyboardMarkup(rows)
+
+    @staticmethod
+    def withdraw_cancel_confirm_menu(order_id: int):
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                "✅ ابعت طلب الإلغاء",
+                callback_data=f"wd_cancel_send_{order_id}",
+            )],
+            [InlineKeyboardButton(
+                "❌ لا كمل السحب",
+                callback_data=f"wd_cancel_keep_{order_id}",
+            )],
+        ])
+
+    @staticmethod
+    def withdraw_locked_menu(order_id: int):
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("📋 تابع الطلب", callback_data=f"wd_track_{order_id}")],
+            [InlineKeyboardButton("🚑 الحقني يا دعم", callback_data="contact")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def withdraw_cancelled_done_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎮 رجعت المصاري للمحفظة", callback_data="main_menu")],
+        ])
+
+    @staticmethod
+    def withdraw_paid_menu(order_id: int):
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("📋 عرض الإيصال", callback_data=f"wd_track_{order_id}")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def withdraw_rejected_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 جرّب من جديد", callback_data="withdraw")],
+            [InlineKeyboardButton("🚑 الحقني يا دعم", callback_data="contact")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def admin_withdraw_order_menu(order_id: int):
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                "✅ تم التقبيض",
+                callback_data=f"admin_wd_paid_{order_id}",
+            )],
+            [InlineKeyboardButton(
+                "⚙️ قيد التنفيذ",
+                callback_data=f"admin_wd_processing_{order_id}",
+            )],
+            [InlineKeyboardButton(
+                "❌ ارفض السحب",
+                callback_data=f"admin_wd_reject_{order_id}",
+            )],
+        ])
+
+    @staticmethod
+    def admin_withdraw_cancel_menu(order_id: int):
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                "✅ وافق على الإلغاء",
+                callback_data=f"admin_wd_cancel_ok_{order_id}",
+            )],
+            [InlineKeyboardButton(
+                "❌ ارفض الإلغاء",
+                callback_data=f"admin_wd_cancel_no_{order_id}",
+            )],
+        ])
+
+    @staticmethod
+    def withdraw_pending_menu(can_cancel: bool = True):
+        """توافق خلفي"""
+        if can_cancel:
+            return InlineKeyboardMarkup([
+                [InlineKeyboardButton("🗑️ انسف الطلب", callback_data="withdraw_cancel_pending")],
+                [Keyboards.home_btn()],
+            ])
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔒 فات الطلب عالتنفيذ", callback_data="withdraw_locked")],
             [Keyboards.home_btn()],
         ])
 
@@ -328,30 +507,6 @@ class Keyboards:
             [InlineKeyboardButton("👤 رتبة يدوية لمستخدم", callback_data="admin_army_rank_override")],
             [InlineKeyboardButton("🔙 لوحة الإدمن", callback_data="admin_panel")],
         ])
-
-    @staticmethod
-    def withdraw_review_menu(locked: bool = False):
-        if locked:
-            return InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔒 فات الطلب عالتنفيذ", callback_data="withdraw_locked")],
-                [Keyboards.home_btn()],
-            ])
-        return InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ ثبّت الطلب", callback_data="withdraw_confirm_submit")],
-            [InlineKeyboardButton("✏️ عدّل البيانات", callback_data="withdraw_edit_data")],
-            [InlineKeyboardButton("🗑️ انسف العملية", callback_data="withdraw_abort")],
-            [Keyboards.home_btn()],
-        ])
-
-    @staticmethod
-    def withdraw_pending_menu(can_cancel: bool = True):
-        rows = []
-        if can_cancel:
-            rows.append([InlineKeyboardButton("🗑️ انسف الطلب", callback_data="withdraw_cancel_pending")])
-        else:
-            rows.append([InlineKeyboardButton("🔒 فات الطلب عالتنفيذ", callback_data="withdraw_locked")])
-        rows.append([Keyboards.home_btn()])
-        return InlineKeyboardMarkup(rows)
 
     @staticmethod
     def payment_methods(operation_type="deposit"):
@@ -653,29 +808,6 @@ class Keyboards:
         keyboard = [
             [InlineKeyboardButton("❌ إلغاء العملية", callback_data="cancel_admin_operation")],
             [InlineKeyboardButton("🔙 العودة للوحة الإدمن", callback_data="admin_panel")]
-        ]
-        return InlineKeyboardMarkup(keyboard)
-
-    @staticmethod
-    def shamcash_currency_menu():
-        """اختيار عملة شام كاش مثل الصورة"""
-        keyboard = [
-            [
-                InlineKeyboardButton("سوري (AUTO)", callback_data="shamcash_cur_syp"),
-                InlineKeyboardButton("دولار (AUTO)", callback_data="shamcash_cur_usd"),
-            ],
-            [InlineKeyboardButton("رجوع 🔄", callback_data="deposit")],
-        ]
-        return InlineKeyboardMarkup(keyboard)
-
-    @staticmethod
-    def shamcash_confirm_keyboard():
-        """تأكيد طلب شحن شام كاش"""
-        keyboard = [
-            [
-                InlineKeyboardButton("❌ إلغاء", callback_data="shamcash_confirm_cancel"),
-                InlineKeyboardButton("✅ إرسال", callback_data="shamcash_confirm_send"),
-            ]
         ]
         return InlineKeyboardMarkup(keyboard)
 

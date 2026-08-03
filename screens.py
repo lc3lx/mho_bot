@@ -57,28 +57,35 @@ async def show_ichancy_withdraw_gate(update, context):
 
 
 async def show_deposit_hub(update, context, user):
+    """بداية التعبئة — اطلب المبلغ أولاً."""
+    min_dep = Config.MIN_DEPOSIT
     text = (
-        "⚡ بدك تنعش المحفظة؟\n\n"
-        "اختار طريقة الدفع تحت\n"
-        "والمحاسب رح يتظاهر إنه كان ناطرك من الصبح 😂"
+        "💳 تعبئة محفظة البوت\n\n"
+        "ابعت المبلغ أرقام فقط 👇\n\n"
+        f"أقل مبلغ: {format_currency(min_dep)}\n\n"
+        "المحاسب جاهز… بس خلّي الرقم واضح من أول مرة 😂"
+    )
+    context.user_data["state"] = "waiting_for_amount"
+    context.user_data["operation"] = "wallet_deposit"
+    await show_screen(update, context, text, Keyboards.cancel_operation())
+
+
+async def show_wallet_deposit_methods(update, context, amount: float):
+    """بعد المبلغ — اختيار طريقة الدفع."""
+    text = (
+        "💳 تعبئة محفظة البوت\n\n"
+        f"المبلغ {format_currency(amount)}\n\n"
+        "هلق اختار طريقة الدفع المناسبة 👇\n\n"
+        "المحاسب جاهز\n"
+        "بس لا تغير رأيك كل شوي 😂"
     )
     await show_screen(update, context, text, Keyboards.wallet_deposit_menu())
 
 
 async def show_withdraw_hub(update, context, user):
-    if (user.balance or 0) < Config.MIN_WITHDRAWAL:
-        text = (
-            f"❌ الحد الأدنى للسحب هو {format_currency(Config.MIN_WITHDRAWAL)}\n"
-            f"💵 رصيدك الحالي: {format_currency(user.balance or 0)}"
-        )
-        await show_screen(update, context, text, Keyboards.back_to_main())
-        return
-    text = (
-        "🏧 أهلاً بقسم إخراج المصاري رسميًا\n\n"
-        "اكتب المبلغ اللي بدك تسحبه\n"
-        "أرقام فقط... بلا فواصل ولا ذكريات مؤلمة 😂"
-    )
-    await show_screen(update, context, text, Keyboards.wallet_withdraw_gate())
+    """توافق — يوجّه للمسار الجديد."""
+    from withdraw_flow import WithdrawFlow
+    await WithdrawFlow.start(update, context)
 
 
 def _pending_sums(user_id: int):

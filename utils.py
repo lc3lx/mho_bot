@@ -265,9 +265,15 @@ def format_transaction_status(status: str) -> str:
     """تنسيق حالة المعاملة"""
     statuses = {
         "pending": "⏳ قيد المراجعة",
-        "completed": "✅ مكتملة",
-        "failed": "❌ فاشلة",
-        "cancelled": "🚫 ملغية"
+        "pending_review": "⏳ قيد المراجعة",
+        "awaiting_payout": "💸 بانتظار التقبيض",
+        "cancel_requested": "↩️ طلب إلغاء قيد المراجعة",
+        "processing": "⚙️ قيد التنفيذ",
+        "paid": "✅ تم التقبيض",
+        "completed": "✅ تم التقبيض",
+        "failed": "❌ مرفوض",
+        "rejected": "❌ مرفوض",
+        "cancelled": "🚫 ملغي",
     }
     return statuses.get(status, status)
 
