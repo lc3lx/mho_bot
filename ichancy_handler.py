@@ -555,7 +555,11 @@ class IchancyHandler:
             logger.exception("فشل جلب playerId بعد الإنشاء لـ %s", username)
 
         try:
-            from referral_service import ReferralArmyService, STATUS_PENDING
+            from referral_service import (
+                ReferralArmyService,
+                STATUS_PENDING,
+                STATUS_REJECTED,
+            )
             refreshed = db.get_user(update.effective_user.id)
             status = ReferralArmyService.evaluate_after_ichancy_link(refreshed)
             if status == STATUS_PENDING and refreshed.referred_by:
@@ -563,12 +567,52 @@ class IchancyHandler:
                     await context.bot.send_message(
                         chat_id=refreshed.referred_by,
                         text=(
-                            "🟠 رفيقك ربط حساب iChancy.\n"
-                            "الإحالة قيد التحقق بانتظار النشاط المؤهل/مراجعة الإدارة."
+                            "🟠 قيد التحقق\n\n"
+                            "رفيقك عمل حساب iChancy\n"
+                            "بانتظار النشاط المؤهل ومراجعة الإدارة"
                         ),
                     )
                 except Exception:
                     pass
+            elif status == STATUS_REJECTED:
+                # جلب سبب الرفض
+                reason = "حساب مكرر أو غير مؤهل"
+                try:
+                    session = db.get_session()
+                    try:
+                        from database import ReferralInvite
+                        inv = (
+                            session.query(ReferralInvite)
+                            .filter(ReferralInvite.invitee_id == refreshed.id)
+                            .first()
+                        )
+                        if inv and inv.reject_reason:
+                            reason = inv.reject_reason
+                    finally:
+                        session.close()
+                except Exception:
+                    pass
+                try:
+                    await context.bot.send_message(
+                        chat_id=update.effective_user.id,
+                        text=(
+                            "🔴 إحالتك غير مؤهلة ضمن جيش نابليون\n\n"
+                            f"السبب\n{reason}"
+                        ),
+                    )
+                except Exception:
+                    pass
+                if refreshed.referred_by:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=refreshed.referred_by,
+                            text=(
+                                "🔴 إحالة بجيشك صارت غير مؤهلة\n\n"
+                                f"السبب\n{reason}"
+                            ),
+                        )
+                    except Exception:
+                        pass
         except Exception:
             logger.exception("فشل تقييم إحالة بعد إنشاء Ichancy")
 

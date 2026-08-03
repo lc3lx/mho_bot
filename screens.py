@@ -28,9 +28,10 @@ async def show_screen(update, context, text: str, markup, parse_mode="HTML"):
 
 async def show_extras(update, context):
     text = (
-        "🧰 وصلت للمستودع الخلفي.\n\n"
-        "حطّينا هون الأشياء الإضافية\n"
-        "حتى القائمة الرئيسية ما تتحول لسوق الجمعة 😂"
+        "🧰 شغلات زيادة:\n\n"
+        "هون حطينا الأشياء اللي ما بدنا نزحم فيها القائمة الرئيسية\n\n"
+        "اختار شو بدك\n\n"
+        "وإذا ضعت هون لا تلوم البوت 😂"
     )
     await show_screen(update, context, text, Keyboards.extras_menu())
 
@@ -164,12 +165,8 @@ async def show_support(update, context):
 
 
 async def show_gift_code(update, context):
-    text = (
-        "🎟️ عندك كود؟\n\n"
-        "اكتبه هون مثل ما هو\n"
-        "ولا تزخرفه... الكود حساس وبيزعل بسرعة 😂"
-    )
-    await show_screen(update, context, text, Keyboards.gift_code_menu())
+    from gift_code_flow import GiftCodeFlow
+    await GiftCodeFlow.start(update, context)
 
 
 async def show_guide(update, context):

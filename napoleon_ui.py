@@ -217,12 +217,11 @@ async def animate_review_progress(edit_coro_factory, delay: float = 0.85, finish
 
 def rank_promotion_text(rank_title: str, commission_rate) -> str:
     return (
-        "🚨 <b>اجتماع طارئ في المقر</b>\n\n"
-        "تمت ترقيتك رسميًا إلى:\n\n"
-        f"🥇 <b>{ui.esc(rank_title)}</b>\n\n"
-        f"📈 نسبتك الجديدة: <b>{commission_rate:g}%</b>\n\n"
-        "المحاسب من هلق مجبور يناديك:\n"
-        "«معلمي» 😂"
+        "🚨 اجتماع طارئ بالمقر\n\n"
+        "تمت ترقيتك رسميا الى\n\n"
+        f"{ui.esc(rank_title)}\n\n"
+        f"📈 نسبتك الجديدة {commission_rate:g}%\n\n"
+        "المحاسب من هلق مجبور يناديك حضرتك 😂"
     )
 
 

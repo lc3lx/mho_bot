@@ -148,18 +148,27 @@ class GiftCode(Base):
     amount = Column(Float, nullable=False)
     max_uses = Column(Integer, default=1)
     current_uses = Column(Integer, default=0)
-    is_active = Column(Boolean, default=True)
+    is_active = Column(Boolean, default=True)  # False = ملغي
+    # مخصص لمستخدم معيّن (telegram_id) أو NULL للجميع
+    assigned_telegram_id = Column(String(50), nullable=True, index=True)
     created_by = Column(Integer, ForeignKey('users.id'))
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime)
+    cancelled_at = Column(DateTime)
+    cancel_reason = Column(Text)
 
 class GiftCodeUsage(Base):
-    """جدول استخدام أكواد الهدايا"""
+    """سجل استخدام / رفض أكواد الهدايا"""
     __tablename__ = 'gift_code_usage'
     
     id = Column(Integer, primary_key=True)
-    code_id = Column(Integer, ForeignKey('gift_codes.id'), nullable=False)
-    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    code_id = Column(Integer, ForeignKey('gift_codes.id'), nullable=True, index=True)
+    code_text = Column(String(50), index=True)  # النص كما أدخله المستخدم
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    amount = Column(Float, default=0.0)
+    # success | rejected
+    status = Column(String(20), default="success", index=True)
+    reject_reason = Column(Text)
     used_at = Column(DateTime, default=datetime.utcnow)
 
 class Bet(Base):
@@ -335,19 +344,40 @@ class CommissionEntry(Base):
 
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    # accrual | release | withdraw | adjustment
+    # accrual | release | withdraw | withdraw_request | adjustment
     entry_type = Column(String(30), nullable=False)
-    # pending_review | available | withdrawn | cancelled
+    # pending_review | available | awaiting_payout | withdrawn | cancelled | adjusted
     status = Column(String(30), default="pending_review", index=True)
     amount = Column(Float, nullable=False, default=0.0)
     rank_code = Column(String(40))
     rate_percent = Column(Float, default=0.0)
     net_activity_syp = Column(Float, default=0.0)
+    invite_id = Column(Integer, ForeignKey("referral_invites.id"), nullable=True)
+    payout_method = Column(String(50))
+    payout_destination = Column(String(200))
+    crypto_currency = Column(String(20))
+    crypto_network = Column(String(20))
     description = Column(Text)
     admin_notes = Column(Text)
     available_at = Column(DateTime)  # بعد انتهاء مدة المراجعة
     created_at = Column(DateTime, default=datetime.utcnow)
     processed_at = Column(DateTime)
+
+
+class ArmyAuditLog(Base):
+    """سجل تعديلات إدارة جيش نابليون"""
+    __tablename__ = "army_audit_logs"
+
+    id = Column(Integer, primary_key=True)
+    admin_telegram_id = Column(Integer, index=True)
+    admin_name = Column(String(120))
+    action = Column(String(80), nullable=False, index=True)
+    target_type = Column(String(40))  # invite | commission | setting | user
+    target_id = Column(String(80))
+    before_value = Column(Text)
+    after_value = Column(Text)
+    reason = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class SavedPaymentAccount(Base):
@@ -475,6 +505,44 @@ class DatabaseManager:
                         )
                 except Exception:
                     pass
+
+        # أعمدة سحب العمولة على commission_entries
+        if "commission_entries" in inspector.get_table_names():
+            ce_cols = {col["name"] for col in inspector.get_columns("commission_entries")}
+            with self.engine.begin() as conn:
+                if "invite_id" not in ce_cols:
+                    conn.execute(text("ALTER TABLE commission_entries ADD COLUMN invite_id INTEGER"))
+                if "payout_method" not in ce_cols:
+                    conn.execute(text("ALTER TABLE commission_entries ADD COLUMN payout_method VARCHAR(50)"))
+                if "payout_destination" not in ce_cols:
+                    conn.execute(text("ALTER TABLE commission_entries ADD COLUMN payout_destination VARCHAR(200)"))
+                if "crypto_currency" not in ce_cols:
+                    conn.execute(text("ALTER TABLE commission_entries ADD COLUMN crypto_currency VARCHAR(20)"))
+                if "crypto_network" not in ce_cols:
+                    conn.execute(text("ALTER TABLE commission_entries ADD COLUMN crypto_network VARCHAR(20)"))
+
+        # أكواد الهدايا — تخصيص + سجل رفض
+        if "gift_codes" in inspector.get_table_names():
+            gc_cols = {col["name"] for col in inspector.get_columns("gift_codes")}
+            with self.engine.begin() as conn:
+                if "assigned_telegram_id" not in gc_cols:
+                    conn.execute(text("ALTER TABLE gift_codes ADD COLUMN assigned_telegram_id VARCHAR(50)"))
+                if "cancelled_at" not in gc_cols:
+                    conn.execute(text("ALTER TABLE gift_codes ADD COLUMN cancelled_at TIMESTAMP"))
+                if "cancel_reason" not in gc_cols:
+                    conn.execute(text("ALTER TABLE gift_codes ADD COLUMN cancel_reason TEXT"))
+
+        if "gift_code_usage" in inspector.get_table_names():
+            gu_cols = {col["name"] for col in inspector.get_columns("gift_code_usage")}
+            with self.engine.begin() as conn:
+                if "code_text" not in gu_cols:
+                    conn.execute(text("ALTER TABLE gift_code_usage ADD COLUMN code_text VARCHAR(50)"))
+                if "amount" not in gu_cols:
+                    conn.execute(text("ALTER TABLE gift_code_usage ADD COLUMN amount FLOAT DEFAULT 0"))
+                if "status" not in gu_cols:
+                    conn.execute(text("ALTER TABLE gift_code_usage ADD COLUMN status VARCHAR(20) DEFAULT 'success'"))
+                if "reject_reason" not in gu_cols:
+                    conn.execute(text("ALTER TABLE gift_code_usage ADD COLUMN reject_reason TEXT"))
     def get_session(self):
         """الحصول على جلسة قاعدة البيانات"""
         return self.SessionLocal()

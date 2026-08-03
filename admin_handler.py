@@ -233,21 +233,21 @@ class AdminHandler:
     
     @staticmethod
     async def create_gift_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """إنشاء كود جائزة (استخدام مرة واحدة فقط)"""
-        message = """
-🏆 مود أكواد الجوائز — إنشاء كود
-
-الكود يُستخدم **مرة واحدة فقط**.
-
-أرسل:
-الكود المبلغ
-
-مثال:
-PRIZE100 10000
-        """
-
+        """إنشاء كود جائزة — استخدام مرة/متعدد + تخصيص اختياري"""
+        message = (
+            "🏆 إنشاء كود جائزة\n\n"
+            "أرسل:\n"
+            "الكود المبلغ [استخدامات] [آيدي|-] [أيام]\n\n"
+            "أمثلة:\n"
+            "PRIZE100 10000\n"
+            "MULTI50 5000 10\n"
+            "VIP200 20000 1 7807583230\n"
+            "DAY7 1000 5 - 7\n\n"
+            "• بدون آيدي أو - = للكل\n"
+            "• استخدامات افتراضي 1\n"
+            "• أيام 0 أو فراغ = بلا انتهاء"
+        )
         context.user_data['admin_operation'] = 'create_gift_code'
-
         await update.callback_query.edit_message_text(
             message,
             reply_markup=Keyboards.cancel_admin_operation()
@@ -832,20 +832,34 @@ PRIZE100 10000
     
     @staticmethod
     async def _handle_create_gift_code(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
-        """معالجة إنشاء كود جائزة — استخدام مرة واحدة فقط"""
+        """معالجة إنشاء كود جائزة
+        الصيغة: الكود المبلغ [استخدامات] [آيدي_أو_-] [أيام]
+        """
+        from datetime import timedelta
         try:
             parts = text.split()
             if len(parts) < 2:
                 await update.message.reply_text(
-                    "❌ تنسيق خاطئ. استخدم: الكود المبلغ\nمثال: PRIZE100 10000",
-                    reply_markup=Keyboards.admin_panel()
+                    "❌ تنسيق خاطئ.\n"
+                    "الكود المبلغ [استخدامات] [آيدي|-] [أيام]",
+                    reply_markup=Keyboards.admin_panel(),
                 )
                 return
 
             code = parts[0].upper()
             amount = float(parts[1])
-            # الكود لمرة واحدة فقط دائماً
-            max_uses = 1
+            max_uses = int(float(parts[2])) if len(parts) > 2 else 1
+            assigned = None
+            if len(parts) > 3 and parts[3] not in ("-", "0", "all", "*"):
+                assigned = str(parts[3])
+            expires_at = None
+            if len(parts) > 4:
+                days = int(float(parts[4]))
+                if days > 0:
+                    expires_at = datetime.utcnow() + timedelta(days=days)
+
+            if max_uses < 1:
+                max_uses = 1
 
             session = db.get_session()
             try:
@@ -853,7 +867,7 @@ PRIZE100 10000
                 if existing:
                     await update.message.reply_text(
                         "❌ هذا الكود موجود بالفعل",
-                        reply_markup=Keyboards.admin_panel()
+                        reply_markup=Keyboards.admin_panel(),
                     )
                     return
 
@@ -863,26 +877,34 @@ PRIZE100 10000
                     max_uses=max_uses,
                     current_uses=0,
                     is_active=True,
-                    created_by=update.effective_user.id
+                    assigned_telegram_id=assigned,
+                    expires_at=expires_at,
+                    created_by=update.effective_user.id,
                 )
                 session.add(gift_code)
                 session.commit()
 
+                who = f"مخصص لـ {assigned}" if assigned else "للجميع"
+                exp = expires_at.strftime("%Y-%m-%d") if expires_at else "بلا انتهاء"
                 await update.message.reply_text(
-                    f"✅ تم إنشاء كود الجائزة\n"
-                    f"🏆 الكود: `{code}`\n"
-                    f"💰 المبلغ: {format_currency(amount)}\n"
-                    f"🔢 الاستخدام: مرة واحدة فقط",
+                    f"✅ تم إنشاء الكود\n"
+                    f"🎟️ {code}\n"
+                    f"🎁 {format_currency(amount)}\n"
+                    f"🔢 استخدامات: {max_uses}\n"
+                    f"👤 {who}\n"
+                    f"⌛ {exp}\n"
+                    f"📌 الحالة: فعال",
                     reply_markup=Keyboards.admin_panel(),
-                    parse_mode="Markdown",
                 )
             finally:
                 session.close()
 
         except (ValueError, IndexError):
             await update.message.reply_text(
-                "❌ تنسيق خاطئ. استخدم: الكود المبلغ\nمثال: PRIZE100 10000",
-                reply_markup=Keyboards.admin_panel()
+                "❌ تنسيق خاطئ.\n"
+                "الكود المبلغ [استخدامات] [آيدي|-] [أيام]\n"
+                "مثال: PRIZE100 10000 1",
+                reply_markup=Keyboards.admin_panel(),
             )
     
     @staticmethod
@@ -1131,7 +1153,7 @@ PRIZE100 10000
             get_min_activity_usd,
         )
 
-        lines = ["👑 <b>إدارة جيش نابليون</b>\n"]
+        lines = ["👑 إدارة جيش نابليون\n"]
         for r in get_rank_defs():
             lines.append(
                 f"{r['title']}: {r['min_active']} نشطة → {r['rate']:g}%"
@@ -1145,7 +1167,6 @@ PRIZE100 10000
             update,
             "\n".join(lines),
             reply_markup=Keyboards.admin_army_menu(),
-            parse_mode="HTML",
             context=context,
         )
 
@@ -1156,14 +1177,13 @@ PRIZE100 10000
             update,
             "🎖️ تعديل الرتب\n\n"
             "أرسل سطر لكل رتبة بالشكل:\n"
-            "<code>code min rate</code>\n\n"
+            "code min rate\n\n"
             "مثال:\n"
-            "<code>soldier 5 12</code>\n"
-            "<code>captain 10 14</code>\n"
-            "<code>general 25 16</code>\n"
-            "<code>emperor 50 18</code>",
+            "soldier 5 10\n"
+            "captain 20 12\n"
+            "general 75 16\n"
+            "emperor 150 18",
             reply_markup=Keyboards.cancel_admin_operation(),
-            parse_mode="HTML",
             context=context,
         )
 
@@ -1192,9 +1212,8 @@ PRIZE100 10000
         context.user_data["admin_operation"] = op
         await safe_edit_callback_message(
             update,
-            f"✏️ {label}\n\nالقيمة الحالية: <b>{current}</b>\nأرسل الرقم الجديد:",
+            f"✏️ {label}\n\nالقيمة الحالية: {current}\nأرسل الرقم الجديد:",
             reply_markup=Keyboards.cancel_admin_operation(),
-            parse_mode="HTML",
             context=context,
         )
 
@@ -1205,10 +1224,80 @@ PRIZE100 10000
             update,
             "✅ اعتماد إحالة نشطة\n\n"
             "أرسل:\n"
-            "<code>invite_id net_usd net_syp</code>\n\n"
-            "مثال: <code>12 15 200000</code>",
+            "invite_id net_usd net_syp\n\n"
+            "مثال: 12 15 200000",
             reply_markup=Keyboards.cancel_admin_operation(),
-            parse_mode="HTML",
+            context=context,
+        )
+
+    @staticmethod
+    async def army_reject_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        context.user_data["admin_operation"] = "army_reject"
+        await safe_edit_callback_message(
+            update,
+            "🔴 رفض إحالة\n\n"
+            "أرسل:\n"
+            "invite_id السبب\n\n"
+            "مثال: 12 حساب مكرر",
+            reply_markup=Keyboards.cancel_admin_operation(),
+            context=context,
+        )
+
+    @staticmethod
+    async def army_search_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        context.user_data["admin_operation"] = "army_search"
+        await safe_edit_callback_message(
+            update,
+            "🔎 بحث إحالات\n\nأرسل جزء من آيدي تليغرام أو يوزر أو رقم الإحالة:",
+            reply_markup=Keyboards.cancel_admin_operation(),
+            context=context,
+        )
+
+    @staticmethod
+    async def army_invites_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        from referral_service import ReferralArmyService, STATUS_LABELS
+
+        rows = ReferralArmyService.search_invites("", limit=12)
+        if not rows:
+            text = "لا توجد إحالات."
+        else:
+            lines = ["📋 آخر الإحالات\n"]
+            for r in rows:
+                lines.append(
+                    f"#{r['id']} | {r['status_label']}\n"
+                    f"محيل: {r['referrer_tg']} → مدعو: {r['invitee_tg']}\n"
+                )
+            text = "\n".join(lines)
+        await safe_edit_callback_message(
+            update, text, reply_markup=Keyboards.admin_army_menu(), context=context
+        )
+
+    @staticmethod
+    async def army_pending_commissions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        from referral_service import ReferralArmyService, COMMISSION_STATUS_LABELS
+
+        rows = ReferralArmyService.pending_commissions(15)
+        if not rows:
+            text = "✅ لا عمولات معلقة."
+        else:
+            lines = ["⏳ عمولات معلقة / سحوبات\n"]
+            for e in rows:
+                lines.append(
+                    f"#{e.id} | {e.entry_type} | "
+                    f"{COMMISSION_STATUS_LABELS.get(e.status, e.status)}\n"
+                    f"مبلغ: {format_currency(e.amount)} | user_id={e.user_id}\n"
+                )
+            lines.append(
+                "\nاعتماد: اكتب approve ID\n"
+                "رفض عمولة: reject ID السبب\n"
+                "أو من الأزرار على إشعار السحب"
+            )
+            text = "\n".join(lines)
+        context.user_data["admin_operation"] = "army_comm_action"
+        await safe_edit_callback_message(
+            update,
+            text,
+            reply_markup=Keyboards.cancel_admin_operation(),
             context=context,
         )
 
@@ -1219,11 +1308,22 @@ PRIZE100 10000
             update,
             "➕ تسجيل عمولة يدوية\n\n"
             "أرسل:\n"
-            "<code>telegram_id net_activity_syp</code>\n\n"
-            "تُحسب العمولة = النشاط × نسبة رتبة صاحب الرابط\n"
-            "وتبقى قيد المراجعة حسب المدة المضبوطة.",
+            "telegram_id net_activity_syp\n\n"
+            "تُحسب العمولة = النشاط × نسبة رتبة صاحب الرابط",
             reply_markup=Keyboards.cancel_admin_operation(),
-            parse_mode="HTML",
+            context=context,
+        )
+
+    @staticmethod
+    async def army_adjust_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        context.user_data["admin_operation"] = "army_adjust"
+        await safe_edit_callback_message(
+            update,
+            "✏️ تعديل عمولة\n\n"
+            "أرسل:\n"
+            "entry_id new_amount السبب\n\n"
+            "مثال: 44 150000 تصحيح نشاط",
+            reply_markup=Keyboards.cancel_admin_operation(),
             context=context,
         )
 
@@ -1234,12 +1334,42 @@ PRIZE100 10000
             update,
             "👤 رتبة يدوية لمستخدم\n\n"
             "أرسل:\n"
-            "<code>telegram_id rank_code</code>\n\n"
+            "telegram_id rank_code\n\n"
             "الرتب: soldier / captain / general / emperor\n"
-            "أو <code>clear</code> لإلغاء التثبيت اليدوي.",
+            "أو clear لإلغاء التثبيت اليدوي.",
             reply_markup=Keyboards.cancel_admin_operation(),
-            parse_mode="HTML",
             context=context,
+        )
+
+    @staticmethod
+    async def army_audit_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        from database import ArmyAuditLog
+
+        session = db.get_session()
+        try:
+            rows = (
+                session.query(ArmyAuditLog)
+                .order_by(ArmyAuditLog.created_at.desc())
+                .limit(15)
+                .all()
+            )
+            if not rows:
+                text = "📜 سجل التعديلات فاضي."
+            else:
+                lines = ["📜 سجل تعديلات جيش نابليون\n"]
+                for r in rows:
+                    lines.append(
+                        f"• {r.created_at} | {r.admin_name}\n"
+                        f"  {r.action} [{r.target_type}:{r.target_id}]\n"
+                        f"  قبل: {r.before_value or '—'}\n"
+                        f"  بعد: {r.after_value or '—'}\n"
+                        f"  سبب: {r.reason or '—'}\n"
+                    )
+                text = "\n".join(lines)
+        finally:
+            session.close()
+        await safe_edit_callback_message(
+            update, text[:3900], reply_markup=Keyboards.admin_army_menu(), context=context
         )
 
     @staticmethod
@@ -1247,10 +1377,14 @@ PRIZE100 10000
         from referral_service import (
             ReferralArmyService,
             DEFAULT_RANKS,
+            audit_log,
+            STATUS_LABELS,
         )
 
+        admin_user = update.effective_user
         try:
             if operation == "army_set_ranks":
+                before = "ranks"
                 for line in text.splitlines():
                     parts = line.strip().split()
                     if len(parts) != 3:
@@ -1260,6 +1394,7 @@ PRIZE100 10000
                         continue
                     db.set_setting(f"army_rank_{code}_min", str(mn))
                     db.set_setting(f"army_rank_{code}_rate", str(rate))
+                audit_log(admin_user, "set_ranks", "setting", "ranks", before, text[:500])
                 await update.message.reply_text(
                     "✅ تم تحديث رتب الجيش.",
                     reply_markup=Keyboards.admin_army_menu(),
@@ -1270,7 +1405,9 @@ PRIZE100 10000
                 days = int(float(text))
                 if days < 0:
                     raise ValueError("سالب")
+                old = db.get_setting("army_commission_hold_days", "7")
                 db.set_setting("army_commission_hold_days", str(days))
+                audit_log(admin_user, "set_hold_days", "setting", "hold", old, str(days))
                 await update.message.reply_text(
                     f"✅ مدة المراجعة: {days} يوم",
                     reply_markup=Keyboards.admin_army_menu(),
@@ -1279,7 +1416,9 @@ PRIZE100 10000
 
             if operation == "army_set_min_withdraw":
                 val = float(text)
+                old = db.get_setting("army_min_commission_withdraw", "200000")
                 db.set_setting("army_min_commission_withdraw", str(val))
+                audit_log(admin_user, "set_min_withdraw", "setting", "min_withdraw", old, str(val))
                 await update.message.reply_text(
                     f"✅ حد سحب العمولة: {format_currency(val)}",
                     reply_markup=Keyboards.admin_army_menu(),
@@ -1288,7 +1427,9 @@ PRIZE100 10000
 
             if operation == "army_set_min_activity":
                 val = float(text)
+                old = db.get_setting("army_min_activity_usd", "10")
                 db.set_setting("army_min_activity_usd", str(val))
+                audit_log(admin_user, "set_min_activity", "setting", "min_activity", old, str(val))
                 await update.message.reply_text(
                     f"✅ حد النشاط المؤهل: {val:g}$",
                     reply_markup=Keyboards.admin_army_menu(),
@@ -1301,7 +1442,11 @@ PRIZE100 10000
                 net_usd = float(parts[1]) if len(parts) > 1 else 0
                 net_syp = float(parts[2]) if len(parts) > 2 else 0
                 ok, msg, promotion = ReferralArmyService.activate_invite(
-                    invite_id, net_syp=net_syp, net_usd=net_usd, source="manual"
+                    invite_id,
+                    net_syp=net_syp,
+                    net_usd=net_usd,
+                    source="manual",
+                    admin_user=admin_user,
                 )
                 if ok and promotion:
                     try:
@@ -1312,10 +1457,91 @@ PRIZE100 10000
                                 promotion["rank_title"],
                                 promotion["rate"],
                             ),
-                            parse_mode="HTML",
                         )
                     except TelegramError:
                         pass
+                await update.message.reply_text(
+                    f"{'✅' if ok else '❌'} {msg}",
+                    reply_markup=Keyboards.admin_army_menu(),
+                )
+                return True
+
+            if operation == "army_reject":
+                parts = text.split(maxsplit=1)
+                invite_id = int(parts[0])
+                reason = parts[1] if len(parts) > 1 else "رفض إداري"
+                ok, msg, tg = ReferralArmyService.reject_invite(
+                    invite_id, reason, admin_user=admin_user
+                )
+                if ok and tg:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=tg,
+                            text=(
+                                "🔴 إحالتك غير مؤهلة ضمن جيش نابليون\n\n"
+                                f"السبب\n{reason}"
+                            ),
+                        )
+                    except TelegramError:
+                        pass
+                await update.message.reply_text(
+                    f"{'✅' if ok else '❌'} {msg}",
+                    reply_markup=Keyboards.admin_army_menu(),
+                )
+                return True
+
+            if operation == "army_search":
+                rows = ReferralArmyService.search_invites(text, limit=15)
+                if not rows:
+                    body = "ما لقيت نتائج."
+                else:
+                    lines = [f"نتائج البحث عن: {text}\n"]
+                    for r in rows:
+                        lines.append(
+                            f"#{r['id']} | {r['status_label']}\n"
+                            f"{r['referrer_tg']} → {r['invitee_tg']}\n"
+                            f"سبب: {r['reject_reason'] or '—'}\n"
+                        )
+                    body = "\n".join(lines)
+                await update.message.reply_text(
+                    body[:3900],
+                    reply_markup=Keyboards.admin_army_menu(),
+                )
+                return True
+
+            if operation == "army_comm_action":
+                parts = text.split(maxsplit=2)
+                cmd = parts[0].lower()
+                entry_id = int(parts[1])
+                reason = parts[2] if len(parts) > 2 else ""
+                if cmd == "approve":
+                    ok, msg = ReferralArmyService.admin_approve_commission(
+                        entry_id, admin_user=admin_user
+                    )
+                elif cmd == "reject":
+                    ok, msg = ReferralArmyService.admin_reject_commission(
+                        entry_id, reason=reason, admin_user=admin_user
+                    )
+                else:
+                    await update.message.reply_text(
+                        "الصيغة: approve ID   أو   reject ID السبب",
+                        reply_markup=Keyboards.cancel_admin_operation(),
+                    )
+                    return True
+                await update.message.reply_text(
+                    f"{'✅' if ok else '❌'} {msg}",
+                    reply_markup=Keyboards.admin_army_menu(),
+                )
+                return True
+
+            if operation == "army_adjust":
+                parts = text.split(maxsplit=2)
+                entry_id = int(parts[0])
+                new_amount = float(parts[1])
+                reason = parts[2] if len(parts) > 2 else "تعديل إداري"
+                ok, msg = ReferralArmyService.admin_adjust_commission(
+                    entry_id, new_amount, reason=reason, admin_user=admin_user
+                )
                 await update.message.reply_text(
                     f"{'✅' if ok else '❌'} {msg}",
                     reply_markup=Keyboards.admin_army_menu(),
@@ -1333,7 +1559,10 @@ PRIZE100 10000
                     )
                     return True
                 ok, msg = ReferralArmyService.accrue_commission_from_net(
-                    user.id, net_syp, note=f"عمولة يدوية من الأدمن — نشاط {net_syp}"
+                    user.id,
+                    net_syp,
+                    note=f"عمولة يدوية من الأدمن — نشاط {net_syp}",
+                    admin_user=admin_user,
                 )
                 if ok:
                     try:
@@ -1362,7 +1591,7 @@ PRIZE100 10000
                         reply_markup=Keyboards.admin_army_menu(),
                     )
                     return True
-                from referral_service import resolve_rank, ReferralArmyService, get_rank_defs
+                from referral_service import resolve_rank, get_rank_defs
 
                 old_counts = ReferralArmyService.counts_for(user.id)
                 old_rank = resolve_rank(old_counts["active"], user.referral_rank_override)
@@ -1384,6 +1613,14 @@ PRIZE100 10000
                     refreshed = db._detach(session, db_user)
                 finally:
                     session.close()
+                audit_log(
+                    admin_user,
+                    "rank_override",
+                    "user",
+                    str(tg_id),
+                    old_rank.get("code") if old_rank else "",
+                    code,
+                )
                 new_rank = resolve_rank(
                     old_counts["active"], refreshed.referral_rank_override
                 )
@@ -1401,7 +1638,6 @@ PRIZE100 10000
                                 new_rank.get("title"),
                                 new_rank.get("rate"),
                             ),
-                            parse_mode="HTML",
                         )
                     except TelegramError:
                         pass

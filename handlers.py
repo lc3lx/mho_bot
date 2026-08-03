@@ -880,21 +880,12 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         )
         return
     if data == "gift_code_enter":
-        context.user_data["state"] = WAITING_FOR_GIFT_CODE
-        await safe_edit_callback_message(
-            update,
-            "⌨️ اكتب الكود هون مثل ما هو\nولا تزخرفه... الكود حساس وبيزعل بسرعة 😂",
-            reply_markup=Keyboards.cancel_operation(),
-            context=context,
-        )
+        from gift_code_flow import GiftCodeFlow
+        await GiftCodeFlow.start(update, context)
         return
     if data == "gift_code_history":
-        await safe_edit_callback_message(
-            update,
-            "📋 أكوادك السابقة\n\nالسجل التفصيلي قريبًا.\nإذا استخدمت كود ناجح، الرصيد بينضاف مباشرة.",
-            reply_markup=Keyboards.gift_code_menu(),
-            context=context,
-        )
+        from gift_code_flow import GiftCodeFlow
+        await GiftCodeFlow.show_history(update, context)
         return
     if data.startswith("guide_"):
         tips = {
@@ -951,23 +942,75 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     if data == "referral_recruits" or data == "army_recruits":
         await ReferralHandler.show_recruits(update, context)
         return
+    if data.startswith("army_recruits_p_"):
+        page = int(data.replace("army_recruits_p_", "", 1))
+        await ReferralHandler.show_recruits(update, context, page=page)
+        return
     if data == "referral_rewards" or data == "army_commission":
         await ReferralHandler.show_rewards(update, context)
         return
     if data == "referral_rules" or data == "army_rules":
         await ReferralHandler.show_rules(update, context)
         return
-    if data == "army_ranks":
-        await ReferralHandler.show_ranks(update, context)
+    if data == "army_ranks" or data == "army_my_rank":
+        await ReferralHandler.show_my_rank(update, context)
         return
     if data == "army_ledger":
         await ReferralHandler.show_ledger(update, context)
         return
-    if data == "army_my_rank":
-        await ReferralHandler.show_my_rank(update, context)
+    if data.startswith("army_ledger_p_"):
+        page = int(data.replace("army_ledger_p_", "", 1))
+        await ReferralHandler.show_ledger(update, context, page=page)
         return
     if data == "army_withdraw":
         await ReferralHandler.start_withdraw_commission(update, context)
+        return
+    if data == "army_wd_all":
+        await ReferralHandler.withdraw_all_available(update, context)
+        return
+    if data.startswith("army_wd_method_"):
+        method = data.replace("army_wd_method_", "", 1)
+        await ReferralHandler.choose_wd_method(update, context, method)
+        return
+    if data.startswith("army_wd_crypto_"):
+        parts = data.replace("army_wd_crypto_", "", 1).split("_", 1)
+        await ReferralHandler.choose_wd_crypto(
+            update, context, parts[0] if parts else "USDT", parts[1] if len(parts) > 1 else "TRC20"
+        )
+        return
+    if data == "army_wd_confirm":
+        await ReferralHandler.confirm_wd(update, context)
+        return
+    if data.startswith("admin_army_wd_pay_"):
+        if update.effective_user.id not in Config.ADMIN_IDS:
+            return
+        from referral_service import ReferralArmyService
+        order_id = int(data.replace("admin_army_wd_pay_", "", 1))
+        ok, msg, tg = ReferralArmyService.admin_pay_withdraw(
+            order_id, admin_user=update.effective_user
+        )
+        if ok and tg:
+            try:
+                await context.bot.send_message(
+                    chat_id=tg,
+                    text=f"✅ تم تقبيض سحب العمولة\n🧾 رقم الطلب {order_id}",
+                )
+            except Exception:
+                pass
+        await interactive_answer(query, msg, alert=True)
+        return
+    if data.startswith("admin_army_wd_no_"):
+        if update.effective_user.id not in Config.ADMIN_IDS:
+            return
+        order_id = int(data.replace("admin_army_wd_no_", "", 1))
+        context.user_data["admin_state"] = "waiting_army_wd_reject"
+        context.user_data["admin_army_wd_reject_id"] = order_id
+        await safe_edit_callback_message(
+            update,
+            f"❌ ارفض سحب العمولة #{order_id}\n\nأرسل السبب:",
+            reply_markup=Keyboards.cancel_admin_operation(),
+            context=context,
+        )
         return
     if data == "withdraw_confirm_submit":
         from withdraw_flow import WithdrawFlow
@@ -1093,12 +1136,25 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             await AdminHandler.army_set_number(update, context, "min_activity")
         elif data == "admin_army_activate":
             await AdminHandler.army_activate_prompt(update, context)
+        elif data == "admin_army_reject":
+            await AdminHandler.army_reject_prompt(update, context)
+        elif data == "admin_army_search":
+            await AdminHandler.army_search_prompt(update, context)
+        elif data == "admin_army_invites":
+            await AdminHandler.army_invites_list(update, context)
+        elif data == "admin_army_pending_comm":
+            await AdminHandler.army_pending_commissions(update, context)
         elif data == "admin_army_accrue":
             await AdminHandler.army_accrue_prompt(update, context)
+        elif data == "admin_army_adjust":
+            await AdminHandler.army_adjust_prompt(update, context)
         elif data == "admin_army_rank_override":
             await AdminHandler.army_rank_override_prompt(update, context)
+        elif data == "admin_army_audit":
+            await AdminHandler.army_audit_list(update, context)
         elif data == "cancel_admin_operation":
             context.user_data.pop("admin_operation", None)
+            context.user_data.pop("admin_state", None)
             await AdminHandler.admin_panel(update, context)
         else:
             await update.callback_query.answer("⚠️ زر غير معروف", show_alert=True)
@@ -1258,6 +1314,29 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin_state = context.user_data.get("admin_state")
 
     # ردود أدمن لرفض سحب / رفض إلغاء
+    if is_admin and admin_state == "waiting_army_wd_reject":
+        from referral_service import ReferralArmyService
+        order_id = int(context.user_data.pop("admin_army_wd_reject_id", 0) or 0)
+        context.user_data.pop("admin_state", None)
+        reason = update.message.text.strip()
+        ok, msg, tg = ReferralArmyService.admin_reject_withdraw(
+            order_id, reason=reason, admin_user=update.effective_user
+        )
+        if ok and tg:
+            try:
+                await context.bot.send_message(
+                    chat_id=tg,
+                    text=(
+                        "❌ تم رفض سحب العمولة\n\n"
+                        f"السبب\n{reason}\n\n"
+                        "رجعت العمولة للمتاح"
+                    ),
+                )
+            except Exception:
+                pass
+        await update.message.reply_text(msg, reply_markup=Keyboards.admin_army_menu())
+        return
+
     if is_admin and admin_state == "waiting_wd_reject_reason":
         from withdraw_flow import WithdrawFlow
         order_id = int(context.user_data.pop("admin_wd_reject_id", 0) or 0)
@@ -1286,6 +1365,18 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_state == "waiting_for_withdraw_amount":
         from withdraw_flow import WithdrawFlow
         await WithdrawFlow.handle_amount_text(
+            update, context, update.message.text or ""
+        )
+        return
+
+    if user_state == "waiting_army_wd_amount":
+        await ReferralHandler.handle_wd_amount(
+            update, context, update.message.text or ""
+        )
+        return
+
+    if user_state == "waiting_army_wd_dest":
+        await ReferralHandler.handle_wd_dest(
             update, context, update.message.text or ""
         )
         return
@@ -1496,9 +1587,9 @@ async def handle_referral(user, referral_ref, context=None):
             await context.bot.send_message(
                 chat_id=referrer_detached.telegram_id,
                 text=(
-                    "🟡 رفيقك وصل للمقر،\n"
-                    "بس لسا عم يتفرّج عالأزرار.\n"
-                    "الإحالة تُحتسب نشطة بعد ربط iChancy والنشاط المؤهل."
+                    "🟡 مسجل جديد بجيشك\n\n"
+                    "رفيقك وصل من رابطك\n"
+                    "لسا ما كمل الشروط — بنحسبه نشط بعد الحساب والنشاط المؤهل"
                 ),
             )
         except Exception:
@@ -1693,64 +1784,14 @@ async def handle_recipient_input(update: Update, context: ContextTypes.DEFAULT_T
 
 async def handle_gift_code_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """كودك يا بطل"""
-    await screens.show_gift_code(update, context)
+    from gift_code_flow import GiftCodeFlow
+    await GiftCodeFlow.start(update, context)
 
 
 async def handle_gift_code_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """التحقق من كود الجائزة"""
-    code = update.message.text.strip().upper()
-
-    session = db.get_session()
-    try:
-        from database import GiftCode, GiftCodeUsage, Transaction
-
-        gift_code = session.query(GiftCode).filter(
-            GiftCode.code == code,
-            GiftCode.is_active == True,
-        ).first()
-
-        # كود خاطئ أو غير موجود — نفس رسالة الصورة
-        if not gift_code or gift_code.current_uses >= gift_code.max_uses:
-            await update.message.reply_text("🤨 هالكود دخل متنكّر.\n\nتأكد من الأحرف والأرقام،\nوجرّب مرة ثانية بلا بهارات 😂", reply_markup=Keyboards.gift_code_menu())
-            # يبقى في المود حتى يحاول مرة أخرى أو يلغي
-            return
-
-        user = db.get_user(update.effective_user.id)
-        existing_usage = session.query(GiftCodeUsage).filter(
-            GiftCodeUsage.code_id == gift_code.id,
-            GiftCodeUsage.user_id == user.id,
-        ).first()
-
-        if existing_usage:
-            await update.message.reply_text("🤨 هالكود دخل متنكّر.\n\nتأكد من الأحرف والأرقام،\nوجرّب مرة ثانية بلا بهارات 😂", reply_markup=Keyboards.gift_code_menu())
-            return
-
-        # تطبيق الكود بنجاح — مرة واحدة فقط ثم تعطيله
-        db_user = session.query(User).filter(User.id == user.id).first()
-        db_user.balance += gift_code.amount
-        gift_code.current_uses += 1
-        gift_code.is_active = False  # تعطيل نهائي بعد الاستخدام
-
-        session.add(GiftCodeUsage(code_id=gift_code.id, user_id=user.id))
-        session.add(Transaction(
-            user_id=user.id,
-            transaction_type="gift_code",
-            amount=gift_code.amount,
-            status="completed",
-            description=f"كود جائزة (مرة واحدة): {code}",
-        ))
-        session.commit()
-
-        context.user_data.clear()
-        await update.message.reply_text(
-            f"✅ تم قبول الكود!\n"
-            f"🏆 الجائزة: {format_currency(gift_code.amount)}\n"
-            f"💰 رصيدك الآن: {format_currency(db_user.balance)}",
-            reply_markup=Keyboards.back_to_main(),
-        )
-
-    finally:
-        session.close()
+    """التحقق من كود الجائزة — تحقق حقيقي قبل إضافة الرصيد"""
+    from gift_code_flow import GiftCodeFlow
+    await GiftCodeFlow.handle_input(update, context, update.message.text or "")
 
 async def handle_message_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالجة إرسال رسالة للإدمن"""

@@ -165,21 +165,12 @@ class Keyboards:
     def extras_menu():
         """🧰 شغلات زيادة"""
         return InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("🔁 رجّعلي حوالتي", callback_data="refund_request"),
-                InlineKeyboardButton("🌐 لفّة عالفيس", url=Config.FACEBOOK_URL),
-            ],
-            [
-                InlineKeyboardButton("📘 الدليل الكامل", callback_data="terms"),
-                InlineKeyboardButton("🎁 مفاجآت المعلم", callback_data="extras_surprises"),
-            ],
-            [
-                InlineKeyboardButton("📢 آخر الأخبار", callback_data="extras_news"),
-                InlineKeyboardButton("⚙️ الإعدادات", callback_data="extras_settings"),
-            ],
-            [
-                InlineKeyboardButton("📋 المزيد من الخدمات", callback_data="full_menu"),
-            ],
+            [InlineKeyboardButton("🌐 لفة عالفيس", url=Config.FACEBOOK_URL)],
+            [InlineKeyboardButton("↩️ رجعلي حوالتي", callback_data="refund_request")],
+            [InlineKeyboardButton("🎁 مفاجآت المعلم", callback_data="extras_surprises")],
+            [InlineKeyboardButton("📘 الدليل الكامل", callback_data="terms")],
+            [InlineKeyboardButton("⚙️ الإعدادات", callback_data="extras_settings")],
+            [InlineKeyboardButton("📢 آخر الأخبار", callback_data="extras_news")],
             [Keyboards.home_btn()],
         ])
 
@@ -443,8 +434,28 @@ class Keyboards:
     @staticmethod
     def gift_code_menu():
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("⌨️ اكتب الكود", callback_data="gift_code_enter")],
             [InlineKeyboardButton("📋 أكوادي السابقة", callback_data="gift_code_history")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def gift_code_retry_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 جرب كود تاني", callback_data="gift_code")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def gift_code_success_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("👛 روح عجيبتي", callback_data="gift_balance")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def gift_code_back_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 رجوع", callback_data="gift_code")],
             [Keyboards.home_btn()],
         ])
 
@@ -468,43 +479,118 @@ class Keyboards:
     def army_menu():
         """👑 جيش نابليون"""
         return InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("📤 جنّد رفيقًا", callback_data="share_referral"),
-                InlineKeyboardButton("👥 أفراد جيشي", callback_data="army_recruits"),
-            ],
-            [
-                InlineKeyboardButton("💰 عمولتي", callback_data="army_commission"),
-                InlineKeyboardButton("📊 كشف العمولات", callback_data="army_ledger"),
-            ],
-            [
-                InlineKeyboardButton("🎖️ رتبتي", callback_data="army_my_rank"),
-                InlineKeyboardButton("🏧 اسحب عمولتي", callback_data="army_withdraw"),
-            ],
-            [
-                InlineKeyboardButton("🤡 القانون اللي محدا بيقراه", callback_data="army_rules"),
-                InlineKeyboardButton("🎖️ نظام الرتب", callback_data="army_ranks"),
-            ],
+            [InlineKeyboardButton("📤 جنّد رفيق", callback_data="share_referral")],
+            [InlineKeyboardButton("👥 أفراد جيشي", callback_data="army_recruits")],
+            [InlineKeyboardButton("💰 عمولتي", callback_data="army_commission")],
+            [InlineKeyboardButton("📊 كشف العمولات", callback_data="army_ledger")],
+            [InlineKeyboardButton("🎖️ رتبتي", callback_data="army_my_rank")],
+            [InlineKeyboardButton("🏧 اسحب عمولتي", callback_data="army_withdraw")],
+            [InlineKeyboardButton("📜 الشروط بلا فلسفة", callback_data="army_rules")],
             [Keyboards.home_btn()],
         ])
 
     @staticmethod
-    def army_rules_ack():
-        """أزرار بعد قراءة شروط الجيش"""
+    def army_back_menu():
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("😂 قريتها والله", callback_data="referrals")],
-            [InlineKeyboardButton("🏠 خلص رجعني", callback_data="main_menu")],
+            [InlineKeyboardButton("🔙 رجوع", callback_data="referrals")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def army_recruits_nav(page: int, has_prev: bool, has_next: bool):
+        rows = []
+        nav = []
+        if has_prev:
+            nav.append(InlineKeyboardButton("⬅️ السابق", callback_data=f"army_recruits_p_{page - 1}"))
+        if has_next:
+            nav.append(InlineKeyboardButton("التالي ➡️", callback_data=f"army_recruits_p_{page + 1}"))
+        if nav:
+            rows.append(nav)
+        rows.append([InlineKeyboardButton("🔙 رجوع", callback_data="referrals")])
+        return InlineKeyboardMarkup(rows)
+
+    @staticmethod
+    def army_ledger_nav(page: int, has_prev: bool, has_next: bool):
+        rows = []
+        nav = []
+        if has_prev:
+            nav.append(InlineKeyboardButton("⬅️ السابق", callback_data=f"army_ledger_p_{page - 1}"))
+        if has_next:
+            nav.append(InlineKeyboardButton("التالي ➡️", callback_data=f"army_ledger_p_{page + 1}"))
+        if nav:
+            rows.append(nav)
+        rows.append([InlineKeyboardButton("🔙 رجوع", callback_data="referrals")])
+        return InlineKeyboardMarkup(rows)
+
+    @staticmethod
+    def army_rules_ack():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 رجوع للجيش", callback_data="referrals")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def army_wd_amount_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("💰 اسحب كل المتاح", callback_data="army_wd_all")],
+            [InlineKeyboardButton("❌ إلغاء", callback_data="referrals")],
+        ])
+
+    @staticmethod
+    def army_wd_methods_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("📱 سيرياتيل كاش", callback_data="army_wd_method_syriatel_cash")],
+            [InlineKeyboardButton("💠 شام كاش", callback_data="army_wd_method_shamcash")],
+            [InlineKeyboardButton("🌐 عملات رقمية", callback_data="army_wd_method_usdt")],
+            [InlineKeyboardButton("🧩 طرق ثانية", callback_data="army_wd_method_other")],
+            [InlineKeyboardButton("🔙 رجوع", callback_data="army_withdraw")],
+        ])
+
+    @staticmethod
+    def army_wd_crypto_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("USDT · TRC20", callback_data="army_wd_crypto_USDT_TRC20")],
+            [InlineKeyboardButton("USDT · BEP20", callback_data="army_wd_crypto_USDT_BEP20")],
+            [InlineKeyboardButton("🔙 رجوع", callback_data="army_withdraw")],
+        ])
+
+    @staticmethod
+    def army_wd_dest_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 رجوع", callback_data="army_withdraw")],
+        ])
+
+    @staticmethod
+    def army_wd_review_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ أكد السحب", callback_data="army_wd_confirm")],
+            [InlineKeyboardButton("✏️ عدل البيانات", callback_data="army_withdraw")],
+            [InlineKeyboardButton("❌ إلغاء", callback_data="referrals")],
+        ])
+
+    @staticmethod
+    def admin_army_wd_menu(order_id: int):
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ تم التقبيض", callback_data=f"admin_army_wd_pay_{order_id}")],
+            [InlineKeyboardButton("❌ ارفض السحب", callback_data=f"admin_army_wd_no_{order_id}")],
         ])
 
     @staticmethod
     def admin_army_menu():
         return InlineKeyboardMarkup([
+            [InlineKeyboardButton("📋 كل الإحالات", callback_data="admin_army_invites")],
+            [InlineKeyboardButton("🔎 بحث إحالة", callback_data="admin_army_search")],
+            [InlineKeyboardButton("⏳ عمولات معلقة", callback_data="admin_army_pending_comm")],
             [InlineKeyboardButton("🎖️ تعديل رتب/نسب", callback_data="admin_army_ranks")],
             [InlineKeyboardButton("⏱ مدة المراجعة (أيام)", callback_data="admin_army_hold")],
             [InlineKeyboardButton("💵 حد أدنى سحب عمولة", callback_data="admin_army_min_withdraw")],
             [InlineKeyboardButton("📈 حد نشاط مؤهل ($)", callback_data="admin_army_min_activity")],
             [InlineKeyboardButton("✅ اعتماد إحالة نشطة", callback_data="admin_army_activate")],
+            [InlineKeyboardButton("🔴 رفض إحالة", callback_data="admin_army_reject")],
             [InlineKeyboardButton("➕ تسجيل عمولة يدوية", callback_data="admin_army_accrue")],
+            [InlineKeyboardButton("✏️ تعديل عمولة", callback_data="admin_army_adjust")],
             [InlineKeyboardButton("👤 رتبة يدوية لمستخدم", callback_data="admin_army_rank_override")],
+            [InlineKeyboardButton("📜 سجل التعديلات", callback_data="admin_army_audit")],
             [InlineKeyboardButton("🔙 لوحة الإدمن", callback_data="admin_panel")],
         ])
 
