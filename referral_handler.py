@@ -242,7 +242,7 @@ class ReferralHandler:
             await _edit(
                 update,
                 context,
-                "🤨 هاد مو مبلغ\nاكتب أرقام فقط مثل\n200000",
+                "🤨 هاد مو مبلغ\nاكتب أرقام فقط مثل\n2000",
                 Keyboards.army_wd_amount_menu(),
             )
             return

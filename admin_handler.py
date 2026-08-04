@@ -1432,7 +1432,7 @@ class AdminHandler:
 
             if operation == "army_set_min_withdraw":
                 val = float(text)
-                old = db.get_setting("army_min_commission_withdraw", "200000")
+                old = db.get_setting("army_min_commission_withdraw", "2000")
                 db.set_setting("army_min_commission_withdraw", str(val))
                 audit_log(admin_user, "set_min_withdraw", "setting", "min_withdraw", old, str(val))
                 await update.message.reply_text(

@@ -113,7 +113,7 @@ def get_hold_days() -> int:
 
 
 def get_min_commission_withdraw() -> float:
-    return _get_float("army_min_commission_withdraw", 200000.0)
+    return _get_float("army_min_commission_withdraw", 2000.0)
 
 
 def resolve_rank(active_count: int, override: Optional[str] = None) -> Dict[str, Any]:
