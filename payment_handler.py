@@ -2200,23 +2200,31 @@ class PaymentHandler:
             telegram_id = user.telegram_id
             credited = transaction.amount
             new_balance = user.balance
-            order_id = transaction.external_transaction_id or transaction.id
+            order_id = transaction.id
             method = transaction.method
+            when = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
 
-            success_text = (
-                "✅ تمت تعبئة المحفظة بنجاح\n\n"
-                f"💰 المبلغ {format_currency(credited)}\n\n"
-                f"🧾 رقم العملية {tg_code(order_id)}\n\n"
-                "المحاسب انبسط شوي\n"
-                "لا تعودوه عالدلال 😂"
-            )
-            # توافق مع الطرق الأخرى
-            if method not in ("shamcash",):
+            try:
+                import fun_service
+                fun_service.track_order_success(user.id)
+                fun_service.track_correct_tx(user.id)
+                success_text = fun_service.build_success_receipt(
+                    order_id, credited, method or "", when
+                )
+                success_text += f"\n\n💵 رصيدك الآن: {format_currency(new_balance)}"
+                success_kb = Keyboards.fun_receipt_photo_menu(order_id)
+            except Exception:
                 success_text = (
-                    f"✅ تم التأكد من العملية\n"
-                    f"تم قبول طلب الشحن بنجاح.\n"
-                    f"تم إضافة {format_currency(credited)} إلى رصيدك في البوت.\n"
-                    f"💵 رصيدك الآن: {format_currency(new_balance)}"
+                    "✅ تمت تعبئة المحفظة بنجاح\n\n"
+                    f"💰 المبلغ {format_currency(credited)}\n\n"
+                    f"🧾 رقم العملية {tg_code(order_id)}\n\n"
+                    "المحاسب انبسط شوي\n"
+                    "لا تعودوه عالدلال 😂"
+                )
+                success_kb = (
+                    Keyboards.start_menu()
+                    if has_ichancy
+                    else Keyboards.ichancy_required_menu()
                 )
 
             try:
@@ -2225,28 +2233,29 @@ class PaymentHandler:
                         await status_message.edit_text(
                             success_text,
                             parse_mode="HTML",
-                            reply_markup=Keyboards.start_menu()
-                            if has_ichancy
-                            else Keyboards.ichancy_required_menu(),
+                            reply_markup=success_kb,
                         )
                     except TelegramError:
                         await context.bot.send_message(
                             chat_id=telegram_id,
                             text=success_text,
                             parse_mode="HTML",
-                            reply_markup=Keyboards.start_menu()
-                            if has_ichancy
-                            else Keyboards.ichancy_required_menu(),
+                            reply_markup=success_kb,
                         )
                 else:
                     await context.bot.send_message(
                         chat_id=telegram_id,
                         text=success_text,
                         parse_mode="HTML",
-                        reply_markup=Keyboards.start_menu()
-                        if has_ichancy
-                        else Keyboards.ichancy_required_menu(),
+                        reply_markup=success_kb,
                     )
+                try:
+                    import fun_service
+                    rare = fun_service.maybe_rare(user.id)
+                    if rare:
+                        await context.bot.send_message(chat_id=telegram_id, text=rare)
+                except Exception:
+                    pass
                 if not has_ichancy and status_message is None:
                     await context.bot.send_message(
                         chat_id=telegram_id,

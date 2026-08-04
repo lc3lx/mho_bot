@@ -29,10 +29,53 @@ async def show_screen(update, context, text: str, markup, parse_mode="HTML"):
 async def show_extras(update, context):
     text = (
         "🧰 شغلات زيادة:\n\n"
-        "هون حطينا الأشياء اللي ما بدنا نزحم فيها القائمة الرئيسية\n\n"
-        "اختار شو بدك\n\n"
+        "🌐 لفّة عالفيس — يفتح صفحتك الرسمية\n"
+        "↩️ رجعلي حوالتي — للاسترداد ومتابعة الحوالة\n"
+        "🎁 مفاجآت المعلم — أكواد عروض ومفاجآت البوت\n"
+        "📘 فهمني من الآخر — الدليل الكامل بس بشكل مختصر\n"
+        "⚙️ دبّرلي الإعدادات — الحساب والتنبيهات والخصوصية\n"
+        "📢 شو صاير بالمقر — آخر الأخبار والتحديثات\n"
+        "📸 ورجيني وضعي — بطاقة قابلة للتصوير\n"
+        "🏆 إنجازاتي — المفتوح والمقفول\n"
+        "📊 تقريري الأسبوعي — ملخص خفيف ومضحك\n\n"
         "وإذا ضعت هون لا تلوم البوت 😂"
     )
+    await show_screen(update, context, text, Keyboards.extras_menu())
+
+
+async def show_fun_status(update, context, user, tg_user=None, refresh: bool = False):
+    import fun_service
+
+    first = ""
+    if tg_user:
+        first = (tg_user.first_name or "").strip()
+    comment = None
+    if refresh:
+        comment = fun_service.pick_profile_comment()
+    text = fun_service.build_status_card(user, first_name=first, comment=comment)
+    context.user_data["fun_status_card"] = text
+    await show_screen(update, context, text, Keyboards.fun_status_menu())
+
+
+async def show_fun_achievements(update, context, user):
+    import fun_service
+
+    text = fun_service.build_achievements_list(user.id)
+    await show_screen(update, context, text, Keyboards.fun_achievements_menu())
+
+
+async def show_fun_weekly(update, context, user):
+    import fun_service
+
+    text = fun_service.build_weekly_report(user)
+    context.user_data["fun_weekly_report"] = text
+    await show_screen(update, context, text, Keyboards.fun_weekly_menu())
+
+
+async def show_hq_news(update, context):
+    import fun_service
+
+    text = f"📢 شو صاير بالمقر\n\n{fun_service.pick_news()}"
     await show_screen(update, context, text, Keyboards.extras_menu())
 
 
@@ -141,14 +184,23 @@ async def show_card(update, context, user, tg_user=None):
             p for p in [tg_user.first_name, tg_user.last_name] if p
         ).strip()
     if not name:
-        name = user.first_name or user.username or "—"
+        name = user.first_name or "—"
     join = getattr(user, "created_at", None)
     join_s = join.strftime("%Y-%m-%d") if join else "—"
+    title = "☕ زبون جديد بالمقر"
+    try:
+        import fun_service
+        title = fun_service.resolve_title(user)
+    except Exception:
+        pass
     text = (
         "🪪 ملفك الرسمي عند نابليون.\n\n"
         f"👤 الاسم: <b>{ui.esc(name)}</b>\n"
+        f"🎖️ اللقب: <b>{ui.esc(title)}</b>\n"
         f"🆔 رقمك: {tg_code(user.telegram_id)}\n"
         f"📅 تاريخ الانضمام: <b>{ui.esc(join_s)}</b>\n\n"
+        "للتصوير والمشاركة استخدم:\n"
+        "🧰 شغلات زيادة → 📸 ورجيني وضعي\n\n"
         "صورة شخصية مو مطلوبة...\n"
         "نحنا بوت مو دائرة نفوس 😂"
     )

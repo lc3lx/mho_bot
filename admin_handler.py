@@ -468,6 +468,10 @@ class AdminHandler:
             ok = await AdminHandler._handle_army_input(update, context, text, operation)
             if not ok:
                 return
+        elif str(operation or "").startswith("fun_edit_"):
+            ok = await AdminHandler._handle_fun_edit(update, context, text, operation)
+            if not ok:
+                return
         
         # مسح العملية
         context.user_data.pop('admin_operation', None)
@@ -1000,16 +1004,12 @@ class AdminHandler:
 
                         await napoleon_ui.animate_review_progress(edit_progress, finish=True)
 
-                        account = (
-                            transaction.withdraw_destination
-                            if transaction.transaction_type == "withdraw"
-                            else ""
-                        )
                         user_msg = napoleon_ui.operation_done_receipt(
                             transaction.id,
                             transaction.amount,
                             when,
-                            account=account or "",
+                            account="",
+                            method=transaction.method or "",
                         )
                         try:
                             await context.bot.edit_message_text(
@@ -1017,13 +1017,29 @@ class AdminHandler:
                                 message_id=progress_msg.message_id,
                                 text=user_msg,
                                 parse_mode="HTML",
+                                reply_markup=Keyboards.fun_receipt_photo_menu(
+                                    transaction.id
+                                ),
                             )
                         except TelegramError:
                             await context.bot.send_message(
                                 chat_id=chat_id,
                                 text=user_msg,
                                 parse_mode="HTML",
+                                reply_markup=Keyboards.fun_receipt_photo_menu(
+                                    transaction.id
+                                ),
                             )
+                        try:
+                            import fun_service
+                            fun_service.track_order_success(user.id)
+                            rare = fun_service.maybe_rare(user.id)
+                            if rare:
+                                await context.bot.send_message(
+                                    chat_id=chat_id, text=rare
+                                )
+                        except Exception:
+                            pass
                     elif transaction.transaction_type == "withdraw":
                         user_msg = napoleon_ui.withdraw_failed_receipt(
                             transaction.id, when
@@ -1653,4 +1669,61 @@ class AdminHandler:
             )
             return False
         return False
+
+    @staticmethod
+    async def fun_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        text = (
+            "🎭 ترفيه المقر\n\n"
+            "عدّل النصوص من هون — سطر لكل عنصر.\n"
+            "ما في مكافآت مالية تلقائية على الإنجازات أو الرسائل النادرة.\n\n"
+            "اختار المجموعة اللي بدك تعدّلها:"
+        )
+        await _admin_edit(
+            update, text, reply_markup=Keyboards.admin_fun_menu(), context=context
+        )
+
+    @staticmethod
+    async def fun_edit_prompt(
+        update: Update, context: ContextTypes.DEFAULT_TYPE, kind: str
+    ):
+        import fun_service
+
+        if kind not in fun_service.FUN_SETTING_KEYS:
+            await _admin_edit(
+                update,
+                "❌ مجموعة غير معروفة",
+                reply_markup=Keyboards.admin_fun_menu(),
+                context=context,
+            )
+            return
+        preview = fun_service.pool_preview(kind)
+        context.user_data["admin_operation"] = f"fun_edit_{kind}"
+        await _admin_edit(
+            update,
+            f"{preview}\n\n"
+            "✏️ ابعت القائمة الجديدة كاملة (سطر لكل عنصر).\n"
+            "رح تستبدل القديمة.\n\n"
+            "للألقاب استخدم:\n"
+            "code|min_home|min_backs|min_orders|min_support|min_forbidden|اللقب",
+            reply_markup=Keyboards.cancel_admin_operation(),
+            context=context,
+        )
+
+    @staticmethod
+    async def _handle_fun_edit(update, context, text, operation) -> bool:
+        import fun_service
+
+        kind = str(operation).replace("fun_edit_", "", 1)
+        n = fun_service.save_pool(kind, text)
+        if not n:
+            await update.message.reply_text(
+                "❌ القائمة فاضية. ابعت سطر واحد على الأقل.",
+                reply_markup=Keyboards.cancel_admin_operation(),
+            )
+            return False
+        await update.message.reply_text(
+            f"✅ تم حفظ {n} عنصر.",
+            reply_markup=Keyboards.admin_fun_menu(),
+        )
+        return True
 

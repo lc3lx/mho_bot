@@ -877,6 +877,7 @@ class WithdrawFlow:
                 f"تأكيد التقبيض — عمولة {fee} — صافي {net}",
             )
             telegram_id = user.telegram_id if user else None
+            user_db_id = user.id if user else None
             session.commit()
         finally:
             session.close()
@@ -897,6 +898,14 @@ class WithdrawFlow:
                 pass
 
         if telegram_id:
+            comment = ""
+            try:
+                import fun_service
+                if user_db_id:
+                    fun_service.track_order_success(user_db_id)
+                comment = f"\n\n📢 تعليق المحاسب\n{fun_service.pick_receipt_comment()}"
+            except Exception:
+                pass
             text = (
                 "✅ تم السحب بنجاح\n\n"
                 f"💰 مبلغ السحب {format_currency(amount)}\n"
@@ -905,6 +914,7 @@ class WithdrawFlow:
                 f"✅ الصافي اللي استلمته {format_currency(net)}\n"
                 f"💳 طريقة الاستلام {method_txt}\n"
                 f"🧾 رقم الطلب {tg_code(order_id)}"
+                f"{comment}"
             )
             try:
                 await context.bot.send_message(

@@ -293,6 +293,14 @@ def _is_legacy_topup_reply_button(text: str) -> bool:
 async def show_funded_home(update: Update, context: ContextTypes.DEFAULT_TYPE, user):
     """القائمة الرئيسية."""
     await strip_sticky_reply_keyboard(update, context)
+    newly = []
+    try:
+        import fun_service
+        count_back = bool(context.user_data.pop("_fun_count_back", False))
+        _, newly = fun_service.track_home_open(user.id, count_back=count_back)
+    except Exception:
+        logger.debug("fun track_home_open skipped", exc_info=True)
+
     welcome_message = build_home_card(user)
     markup = Keyboards.start_menu()
     context.user_data.pop("state", None)
@@ -302,6 +310,7 @@ async def show_funded_home(update: Update, context: ContextTypes.DEFAULT_TYPE, u
     ):
         if update.callback_query:
             await interactive_answer(update.callback_query, "🏠 رجوع للمقر")
+        await _fun_post_home(update, context, user, newly)
         return
 
     if update.callback_query:
@@ -326,6 +335,34 @@ async def show_funded_home(update: Update, context: ContextTypes.DEFAULT_TYPE, u
             reply_markup=Keyboards.start_menu(),
             parse_mode="HTML",
         )
+    await _fun_post_home(update, context, user, newly)
+
+
+async def _fun_post_home(update, context, user, newly):
+    """إنجازات / رسالة نادرة بعد عرض المقر — بدون تعطيل العمليات."""
+    try:
+        import fun_service
+        if newly:
+            text = fun_service.achievement_notify(newly[0])
+            if update.callback_query:
+                await safe_edit_callback_message(
+                    update,
+                    text,
+                    reply_markup=Keyboards.fun_achievement_notify_menu(),
+                    context=context,
+                )
+            elif update.effective_chat:
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text=text,
+                    reply_markup=Keyboards.fun_achievement_notify_menu(),
+                )
+            return
+        rare = fun_service.maybe_rare(user.id)
+        if rare and update.effective_chat:
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=rare)
+    except Exception:
+        logger.debug("fun post-home skipped", exc_info=True)
 
 
 
@@ -531,6 +568,13 @@ async def wallet_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """الحقني يا دعم"""
+    try:
+        user = db.get_user(update.effective_user.id)
+        if user:
+            import fun_service
+            fun_service.track_support(user.id)
+    except Exception:
+        pass
     await screens.show_support(update, context)
 
 
@@ -691,6 +735,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     # القائمة الرئيسية
     if data == "main_menu":
+        context.user_data["_fun_count_back"] = True
         await main_menu_handler(update, context)
         return
     if data == "full_menu":
@@ -702,6 +747,21 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     # شاشات نابليون الجديدة
     if data == "forbidden_press":
+        if user:
+            try:
+                import fun_service
+                _, newly = fun_service.track_forbidden(user.id)
+                if newly:
+                    await interactive_answer(query, newly[0]["name"], alert=True)
+                    await safe_edit_callback_message(
+                        update,
+                        fun_service.achievement_notify(newly[0]),
+                        reply_markup=Keyboards.fun_achievement_notify_menu(),
+                        context=context,
+                    )
+                    return
+            except Exception:
+                pass
         await interactive_answer(query, napoleon_ui.forbidden_press_text(), alert=True)
         return
     if data == "extras_menu":
@@ -713,30 +773,109 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     if data == "extras_surprises":
         await safe_edit_callback_message(
             update,
-            "🎁 مفاجآت المعلم\n\nلسا عم نحضّرها بالمستودع الخلفي.\nخلّيك قريب 😂",
+            "🎁 مفاجآت المعلم\n\nأكواد عروض ومفاجآت البوت.\n\nلسا في أشياء عم تتحضّر بالمستودع الخلفي.\nخلّيك قريب 😂",
             reply_markup=Keyboards.extras_menu(),
             context=context,
         )
         return
     if data == "extras_news":
-        await safe_edit_callback_message(
-            update,
-            "📢 آخر الأخبار\n\nما في بيان رسمي اليوم.\nالمقر هادي… وهذا خبر كويس 😌",
-            reply_markup=Keyboards.extras_menu(),
-            context=context,
-        )
+        await screens.show_hq_news(update, context)
         return
     if data == "extras_settings":
         await safe_edit_callback_message(
             update,
-            "⚙️ الإعدادات\n\nقريبًا من هون بتقدر تضبط إشعاراتك وحساباتك المحفوظة.",
+            "⚙️ دبّرلي الإعدادات\n\n"
+            "الحساب والتنبيهات والخصوصية.\n\n"
+            "قريبًا من هون بتقدر تضبط إشعاراتك وحساباتك المحفوظة.\n"
+            "هلق فيك تمرّ على الحسابات المحفوظة من جيبتي.",
             reply_markup=Keyboards.extras_menu(),
+            context=context,
+        )
+        return
+    if data == "fun_status_card" or data == "fun_status_refresh":
+        u = db.get_user(update.effective_user.id)
+        if u:
+            await screens.show_fun_status(
+                update,
+                context,
+                u,
+                update.effective_user,
+                refresh=(data == "fun_status_refresh"),
+            )
+        return
+    if data == "fun_status_share":
+        card = context.user_data.get("fun_status_card")
+        if not card:
+            u = db.get_user(update.effective_user.id)
+            if u:
+                import fun_service
+                card = fun_service.build_status_card(
+                    u, first_name=(update.effective_user.first_name or "")
+                )
+        if card and update.effective_chat:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=card + "\n\n📤 وجّه هالرسالة أو خد سكرين — بدون بيانات حساسة.",
+            )
+            await interactive_answer(query, "تم… وجّه الرسالة أو صوّرها 📸")
+        return
+    if data == "fun_achievements":
+        u = db.get_user(update.effective_user.id)
+        if u:
+            await screens.show_fun_achievements(update, context, u)
+        return
+    if data == "fun_weekly" or data == "fun_weekly_share":
+        u = db.get_user(update.effective_user.id)
+        if not u:
+            return
+        if data == "fun_weekly_share":
+            import fun_service
+            report = context.user_data.get("fun_weekly_report") or fun_service.build_weekly_report(u)
+            if update.effective_chat:
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text=report + "\n\n📤 وجّه التقرير أو صوّره — بلا مبالغ حساسة.",
+                )
+                await interactive_answer(query, "التقرير جاهز للمشاركة")
+            return
+        await screens.show_fun_weekly(update, context, u)
+        return
+    if data.startswith("fun_receipt_photo_"):
+        try:
+            oid = int(data.replace("fun_receipt_photo_", "", 1))
+        except ValueError:
+            return
+        import fun_service
+        session = db.get_session()
+        try:
+            tx = session.query(Transaction).filter(Transaction.id == oid).first()
+            if not tx:
+                await interactive_answer(query, "الإيصال غير موجود", alert=True)
+                return
+            u = db.get_user(update.effective_user.id)
+            if not u or tx.user_id != u.id:
+                await interactive_answer(query, "هذا الإيصال مو إلك", alert=True)
+                return
+            text = fun_service.build_photo_receipt_from_tx(tx)
+        finally:
+            session.close()
+        await safe_edit_callback_message(
+            update,
+            text,
+            reply_markup=Keyboards.back_to_main(),
             context=context,
         )
         return
     if data == "wallet_refresh":
         user = db.get_user(update.effective_user.id)
         await screens.show_pocket(update, context, user)
+        try:
+            import fun_service
+            rare = fun_service.maybe_rare(user.id) if user else None
+            if rare and update.effective_chat:
+                await context.bot.send_message(chat_id=update.effective_chat.id, text=rare)
+        except Exception:
+            pass
         return
     if data == "deposit_other":
         await safe_edit_callback_message(
@@ -1152,6 +1291,11 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             await AdminHandler.army_rank_override_prompt(update, context)
         elif data == "admin_army_audit":
             await AdminHandler.army_audit_list(update, context)
+        elif data == "admin_fun":
+            await AdminHandler.fun_menu(update, context)
+        elif data.startswith("admin_fun_"):
+            kind = data.replace("admin_fun_", "", 1)
+            await AdminHandler.fun_edit_prompt(update, context, kind)
         elif data == "cancel_admin_operation":
             context.user_data.pop("admin_operation", None)
             context.user_data.pop("admin_state", None)
@@ -1285,6 +1429,12 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         chat_id = update.effective_chat.id if update.effective_chat else None
         await reset_payment_session(context, bot=context.bot, chat_id=chat_id)
         user = db.get_user(update.effective_user.id)
+        try:
+            if user:
+                import fun_service
+                fun_service.track_cancel(user.id)
+        except Exception:
+            pass
         await show_user_home(update, context, user)
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1479,7 +1629,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await start_handler(update, context)
             return
         # ردود سرّية على كلمات معيّنة
-        secret = napoleon_ui.match_secret_reply(raw_text)
+        secret = napoleon_ui.match_secret_reply(
+            raw_text, user_id=(user.id if user else None)
+        )
         if secret:
             await update.message.reply_text(secret)
             return
@@ -1863,6 +2015,13 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def handle_terms(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالجة الشروط والأحكام"""
+    try:
+        u = db.get_user(update.effective_user.id)
+        if u:
+            import fun_service
+            fun_service.track_terms_read(u.id)
+    except Exception:
+        pass
     terms_text = (
         Config.MESSAGES["terms_gate"].format(bot_name=Config.BOT_DISPLAY_NAME)
         + f"""

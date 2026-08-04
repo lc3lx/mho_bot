@@ -165,13 +165,73 @@ class Keyboards:
     def extras_menu():
         """🧰 شغلات زيادة"""
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("🌐 لفة عالفيس", url=Config.FACEBOOK_URL)],
+            [InlineKeyboardButton("🌐 لفّة عالفيس", url=Config.FACEBOOK_URL)],
             [InlineKeyboardButton("↩️ رجعلي حوالتي", callback_data="refund_request")],
             [InlineKeyboardButton("🎁 مفاجآت المعلم", callback_data="extras_surprises")],
-            [InlineKeyboardButton("📘 الدليل الكامل", callback_data="terms")],
-            [InlineKeyboardButton("⚙️ الإعدادات", callback_data="extras_settings")],
-            [InlineKeyboardButton("📢 آخر الأخبار", callback_data="extras_news")],
+            [InlineKeyboardButton("📘 فهمني من الآخر", callback_data="terms")],
+            [InlineKeyboardButton("⚙️ دبّرلي الإعدادات", callback_data="extras_settings")],
+            [InlineKeyboardButton("📢 شو صاير بالمقر", callback_data="extras_news")],
+            [InlineKeyboardButton("📸 ورجيني وضعي", callback_data="fun_status_card")],
+            [InlineKeyboardButton("🏆 إنجازاتي", callback_data="fun_achievements")],
+            [InlineKeyboardButton("📊 تقريري الأسبوعي", callback_data="fun_weekly")],
             [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def fun_status_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("📤 شارك بطاقتي", callback_data="fun_status_share")],
+            [InlineKeyboardButton("🔄 طلعلي تعليق غيره", callback_data="fun_status_refresh")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def fun_achievement_notify_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("📸 اعرض الإنجاز", callback_data="fun_achievements")],
+            [InlineKeyboardButton("🏆 كل إنجازاتي", callback_data="fun_achievements")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def fun_achievements_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 رجوع", callback_data="extras_menu")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def fun_weekly_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("📸 شارك التقرير", callback_data="fun_weekly_share")],
+            [InlineKeyboardButton("🔄 حدث التقرير", callback_data="fun_weekly")],
+            [Keyboards.home_btn()],
+        ])
+
+    @staticmethod
+    def fun_receipt_photo_menu(order_id: int = 0):
+        rows = []
+        if order_id:
+            rows.append([
+                InlineKeyboardButton(
+                    "📸 إيصال للتصوير",
+                    callback_data=f"fun_receipt_photo_{order_id}",
+                )
+            ])
+        rows.append([Keyboards.home_btn()])
+        return InlineKeyboardMarkup(rows)
+
+    @staticmethod
+    def admin_fun_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("☕ مزاج يومي", callback_data="admin_fun_moods")],
+            [InlineKeyboardButton("💬 تعليقات البطاقة", callback_data="admin_fun_profile")],
+            [InlineKeyboardButton("🧾 تعليقات الإيصال", callback_data="admin_fun_receipt")],
+            [InlineKeyboardButton("📊 تعليقات التقرير", callback_data="admin_fun_weekly")],
+            [InlineKeyboardButton("✨ رسائل نادرة", callback_data="admin_fun_rare")],
+            [InlineKeyboardButton("📢 أخبار المقر", callback_data="admin_fun_news")],
+            [InlineKeyboardButton("🎖️ الألقاب", callback_data="admin_fun_titles")],
+            [InlineKeyboardButton("🔙 لوحة الإدمن", callback_data="admin_panel")],
         ])
 
     @staticmethod
@@ -332,6 +392,7 @@ class Keyboards:
     @staticmethod
     def withdraw_paid_menu(order_id: int):
         return InlineKeyboardMarkup([
+            [InlineKeyboardButton("📸 إيصال للتصوير", callback_data=f"fun_receipt_photo_{order_id}")],
             [InlineKeyboardButton("📋 عرض الإيصال", callback_data=f"wd_track_{order_id}")],
             [Keyboards.home_btn()],
         ])
@@ -677,6 +738,7 @@ class Keyboards:
             ],
             [InlineKeyboardButton("🌐 بروكسي Ichancy", callback_data="admin_proxy")],
             [InlineKeyboardButton("👑 جيش نابليون", callback_data="admin_army")],
+            [InlineKeyboardButton("🎭 ترفيه المقر", callback_data="admin_fun")],
             [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu")],
         ]
         return InlineKeyboardMarkup(keyboard)

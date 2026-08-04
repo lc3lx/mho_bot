@@ -380,6 +380,35 @@ class ArmyAuditLog(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class UserFunStat(Base):
+    """إحصائيات ترفيهية خفيفة (إنجازات / تقرير / ألقاب) — بلا بيانات حساسة"""
+    __tablename__ = "user_fun_stats"
+
+    user_id = Column(Integer, primary_key=True)
+    back_clicks = Column(Integer, default=0)
+    cancel_count = Column(Integer, default=0)
+    support_count = Column(Integer, default=0)
+    forbidden_presses = Column(Integer, default=0)
+    home_opens = Column(Integer, default=0)
+    home_opens_today = Column(Integer, default=0)
+    home_opens_day = Column(String(10))
+    opinion_changes = Column(Integer, default=0)
+    correct_tx_first = Column(Integer, default=0)
+    terms_read = Column(Boolean, default=False)
+    unlocked = Column(Text, default="[]")  # JSON list of achievement codes
+    title_override = Column(String(80))
+    last_rare_date = Column(String(10))
+    week_start = Column(String(10))
+    week_logins = Column(Integer, default=0)
+    week_orders = Column(Integer, default=0)
+    week_backs = Column(Integer, default=0)
+    week_cancels = Column(Integer, default=0)
+    week_support = Column(Integer, default=0)
+    week_achievements = Column(Integer, default=0)
+    akhira_count = Column(Integer, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class SavedPaymentAccount(Base):
     """أرقام/حسابات محفوظة للزبون (سيريتل كاش / شام كاش)"""
     __tablename__ = 'saved_payment_accounts'

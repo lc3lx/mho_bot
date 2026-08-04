@@ -64,13 +64,24 @@ SECRET_REPLIES = {
 
 
 def pick_mood() -> str:
-    return random.choice(BOT_MOODS)
+    """مزاج يومي ثابت — قابل للتعديل من لوحة الإدارة."""
+    try:
+        from fun_service import daily_mood
+        return daily_mood()
+    except Exception:
+        return random.choice(BOT_MOODS)
 
 
 def build_hq_home(user) -> str:
     balance = format_currency(user.balance or 0)
     uid = ui.esc(user.telegram_id)
     mood = ui.esc(pick_mood())
+    title_line = ""
+    try:
+        from fun_service import resolve_title
+        title_line = f"🎖️ لقبك: <b>{ui.esc(resolve_title(user))}</b>\n"
+    except Exception:
+        pass
     return (
         f"🛡️ <b>تنبيه أمني</b>\n\n"
         f"لا تعتمد أي رابط أو رسالة خارج هذا البوت\n"
@@ -78,6 +89,7 @@ def build_hq_home(user) -> str:
         f"{DIV}\n\n"
         f"👑 <b>مقر نابليون</b>\n\n"
         f"💎 رصيدك: <b>{balance}</b>\n"
+        f"{title_line}"
         f"🆔 رقمك: <code>{uid}</code>\n\n"
         f"📢 مزاج البوت اليوم:\n{mood}\n\n"
         f"{DIV}\n\n"
@@ -154,25 +166,31 @@ ACCOUNTANT_COMMENTS = [
 
 
 def pick_accountant_comment() -> str:
-    return random.choice(ACCOUNTANT_COMMENTS)
+    try:
+        from fun_service import pick_receipt_comment
+        return pick_receipt_comment()
+    except Exception:
+        return random.choice(ACCOUNTANT_COMMENTS)
 
 
-def operation_done_receipt(order_id, amount, when: str, account: str = "") -> str:
-    """إشعار إتمام العملية للزبون مع تعليق محاسب عشوائي."""
-    account_line = ""
-    if account and account != "—":
-        account_line = f"🆔 الحساب: <code>{ui.esc(account)}</code>\n"
-    return (
-        "👑 <b>NAPOLEON BOT</b>\n\n"
-        "✅ العملية تمت\n\n"
-        f"💰 المبلغ: <b>{format_currency(amount)}</b>\n"
-        f"{account_line}"
-        f"🧾 رقم العملية: <b>#{ui.esc(order_id)}</b>\n"
-        f"🕒 الوقت: {ui.esc(when)}\n\n"
-        f"{DIV}\n\n"
-        "📢 تعليق المحاسب:\n"
-        f"«{ui.esc(pick_accountant_comment())}»"
-    )
+def operation_done_receipt(
+    order_id, amount, when: str, account: str = "", method: str = ""
+) -> str:
+    """إشعار إتمام — بدون بيانات حساسة (موبايل/محفظة/تيليغرام)."""
+    try:
+        from fun_service import build_success_receipt
+        return build_success_receipt(order_id, amount, method or "", when)
+    except Exception:
+        return (
+            "👑 <b>NAPOLEON BOT</b>\n\n"
+            "✅ تمت العملية\n\n"
+            f"🧾 رقم العملية: <b>#{ui.esc(order_id)}</b>\n"
+            f"💰 المبلغ: <b>{format_currency(amount)}</b>\n"
+            f"🕒 الوقت: {ui.esc(when)}\n\n"
+            f"{DIV}\n\n"
+            "📢 تعليق المحاسب:\n"
+            f"«{ui.esc(pick_accountant_comment())}»"
+        )
 
 
 def withdraw_done_receipt(order_id, amount, account, when: str) -> str:
@@ -229,7 +247,14 @@ def forbidden_press_text() -> str:
     return "شكلك صارف التوتل… وجاي هون تلهّي حالك 😂"
 
 
-def match_secret_reply(text: str) -> Optional[str]:
+def match_secret_reply(text: str, user_id: int = None) -> Optional[str]:
+    try:
+        from fun_service import match_secret
+        hit = match_secret(text, user_id=user_id)
+        if hit:
+            return hit
+    except Exception:
+        pass
     if not text:
         return None
     cleaned = text.strip()
