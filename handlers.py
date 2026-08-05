@@ -217,12 +217,10 @@ async def send_subscription_required(
             "مهم: ضيف البوت مو حساب شخصي."
         )
     else:
-        text = (
-            f"{Config.MESSAGES['ad_warning']}\n\n"
-            + Config.MESSAGES["terms_gate"].format(bot_name=Config.BOT_DISPLAY_NAME)
-            + "\n\n"
-            + Config.MESSAGES["subscription_verify_hint"]
-        )
+        text = Config.MESSAGES["terms_gate"].format(bot_name=Config.BOT_DISPLAY_NAME)
+        hint = (Config.MESSAGES.get("subscription_verify_hint") or "").strip()
+        if hint:
+            text = f"{text}\n\n{hint}"
     markup = Keyboards.required_subscription()
     try:
         if update.callback_query:
