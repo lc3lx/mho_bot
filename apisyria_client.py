@@ -201,17 +201,43 @@ class ApiSyriaClient:
             transaction.get("date")
             or transaction.get("datetime")
             or transaction.get("created_at")
+            or transaction.get("createdAt")
+            or transaction.get("tran_date")
+            or transaction.get("time")
             or ""
         )
-        if not raw:
+        if raw in (None, ""):
             return None
 
-        text = str(raw).strip()
+        # Unix timestamp (ثواني أو ميلي)
+        if isinstance(raw, (int, float)) or (isinstance(raw, str) and raw.strip().isdigit()):
+            try:
+                ts = float(raw)
+                if ts > 1e12:  # milliseconds
+                    ts /= 1000.0
+                if ts > 1e9:
+                    return datetime.utcfromtimestamp(ts)
+            except (TypeError, ValueError, OSError):
+                pass
+
+        text = str(raw).strip().replace("T", " ").replace("Z", "")
+        if "+" in text[10:]:
+            text = text.split("+", 1)[0].strip()
+        if text.endswith("UTC"):
+            text = text[:-3].strip()
+        # قص الكسور الثابتة
+        if "." in text:
+            head, _frac = text.split(".", 1)
+            text = head.strip()
+
         for fmt in (
             "%Y-%m-%d %H:%M:%S",
             "%Y-%m-%d %H:%M",
             "%Y/%m/%d %H:%M:%S",
+            "%Y/%m/%d %H:%M",
             "%d-%m-%Y %H:%M:%S",
+            "%d/%m/%Y %H:%M:%S",
+            "%d/%m/%Y %H:%M",
         ):
             try:
                 return datetime.strptime(text, fmt)
@@ -226,17 +252,16 @@ class ApiSyriaClient:
         timeout_minutes: int = None,
     ) -> bool:
         """
-        يقبل العملية إذا:
-        - الطلب نفسه لم يتجاوز مهلة الجلسة الطويلة (إن وُجدت)
-        - ووقت التحويل ضمن نافذة المهلة (افتراضياً 15 دقيقة)
-        - إذا API ما رجّع تاريخ واضح: نقبل طالما الطلب لسا ضمن المهلة
+        يقبل التحويل إذا كان حديثاً ضمن المهلة.
+        يراعي فرق التوقيت (UTC ↔ سوريا ≈ +2/+3) حتى ما ينرفض تحويل فوري بالغلط.
+        إذا ما في تاريخ من الـ API: نقبل طالما جلسة الطلب لسا مفتوحة.
         """
         from datetime import datetime, timedelta
 
-        minutes = timeout_minutes or self.deposit_timeout_minutes
+        minutes = int(timeout_minutes or self.deposit_timeout_minutes)
         now_utc = datetime.utcnow()
 
-        # مهلة الجلسة من فتح الطلب — أوسع قليلاً من نافذة التحويل نفسها
+        # مهلة الجلسة من فتح الطلب — أوسع من نافذة «حداثة» التحويل
         session_limit = max(minutes * 4, 60)
         if request_created_at and now_utc - request_created_at > timedelta(
             minutes=session_limit
@@ -245,16 +270,18 @@ class ApiSyriaClient:
 
         tx_time = self.parse_tx_datetime(transaction)
         if not tx_time:
-            # تاريخ العملية غير معروف — لا نرفض كـ «خارج المهلة»
-            # طالما الطلب نفسه لسا ضمن نافذة التحويل
-            if request_created_at:
-                return now_utc - request_created_at <= timedelta(minutes=minutes)
+            # بدون تاريخ: لا نرفض كـ «خارج المهلة»
             return True
 
-        # تواريخ API قد تكون بتوقيت سوريا المحلي؛ نقبل إذا طابقت UTC أو المحلي
-        for now in (now_utc, datetime.now()):
-            window_start = now - timedelta(minutes=minutes + 1)
-            window_end = now + timedelta(minutes=2)
-            if window_start <= tx_time <= window_end:
-                return True
+        # تفسير تاريخ الـ API مع احتمال توقيت سوريا (+2/+3) بينما المقارنة على UTC
+        max_age = timedelta(minutes=minutes + 3)
+        min_age = timedelta(minutes=-10)
+        now_local = datetime.now()
+        for now in (now_utc, now_local):
+            for offset_h in (0, 2, 3):
+                adjusted = tx_time - timedelta(hours=offset_h)
+                age = now - adjusted
+                if min_age <= age <= max_age:
+                    return True
+
         return False

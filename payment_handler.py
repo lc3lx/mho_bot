@@ -553,7 +553,14 @@ class PaymentHandler:
             session.commit()
             session.refresh(transaction)
             transaction_id = transaction.id
+            # مرجع المهلة = وقت فتح طلب الشحن، مو وقت إنشاء سجل التحقق
             request_created_at = transaction.created_at
+            started = context.user_data.get("deposit_started_at")
+            if started:
+                try:
+                    request_created_at = datetime.fromisoformat(started)
+                except ValueError:
+                    pass
         finally:
             session.close()
 
