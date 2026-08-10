@@ -531,6 +531,9 @@ class IchancyClient:
         return f"{self.player_api_url}/{endpoint.lstrip('/')}"
 
     def _extract_error(self, body: Dict[str, Any]) -> str:
+        if not isinstance(body, dict):
+            return "فشل الطلب على ichancy"
+
         notifications = body.get("notification") or []
         if notifications and isinstance(notifications, list):
             first = notifications[0]
@@ -538,8 +541,22 @@ class IchancyClient:
                 return str(first["content"])
             if isinstance(first, str) and first.strip():
                 return first.strip()
-        # بعض الردود تضع الرسالة في مفاتيح أخرى
-        for key in ("message", "error", "Error", "msg", "description"):
+
+        # ASP.NET / FluentValidation — شائع مع HTTP 422
+        errors = body.get("errors") or body.get("Errors")
+        if isinstance(errors, dict) and errors:
+            parts = []
+            for key, val in errors.items():
+                if isinstance(val, list):
+                    parts.append(f"{key}: {', '.join(str(x) for x in val)}")
+                else:
+                    parts.append(f"{key}: {val}")
+            if parts:
+                return " | ".join(parts)
+        if isinstance(errors, list) and errors:
+            return " | ".join(str(x) for x in errors)
+
+        for key in ("title", "message", "error", "Error", "msg", "description", "detail"):
             val = body.get(key)
             if isinstance(val, str) and val.strip():
                 return val.strip()
@@ -749,7 +766,26 @@ class IchancyClient:
                 status_code=403,
             )
         if response.status_code == 422:
-            raise IchancyError(self._extract_error(body), status_code=422)
+            detail = self._extract_error(body)
+            # #region agent log
+            _agent_dbg(
+                "C,D",
+                "ichancy_client.py:_raw_post",
+                "HTTP 422 validation",
+                {
+                    "detail": detail,
+                    "body_snip": str(body)[:800],
+                    "errors": body.get("errors") or body.get("Errors"),
+                    "notif": body.get("notification"),
+                },
+            )
+            # #endregion
+            print(
+                f"[ICHANCY FAIL] http=422 detail={detail!r} body={str(body)[:800]!r}",
+                flush=True,
+            )
+            logger.error("Ichancy HTTP 422: %s", str(body)[:800])
+            raise IchancyError(detail, status_code=422)
         if response.status_code >= 400:
             raise IchancyError(
                 self._extract_error(body),
@@ -1469,6 +1505,30 @@ class IchancyClient:
         except (TypeError, ValueError):
             return 0.0
 
+    @staticmethod
+    def _transfer_amount(amount: float, *, negative: bool = False):
+        """المبلغ كما تتوقعه المنصة غالباً: رقم صحيح إذا ما في كسور."""
+        val = abs(float(amount))
+        if abs(val - round(val)) < 1e-9:
+            out = int(round(val))
+        else:
+            out = round(val, 2)
+        return -out if negative else out
+
+    def _transfer_payload(
+        self, player_ref: str, amount: float, comment: str, *, withdraw: bool
+    ) -> Dict[str, Any]:
+        """payload موحّد — playerId رقمي (int) لتفادي 422 validation."""
+        pid = int(str(player_ref).strip())
+        return {
+            "amount": self._transfer_amount(amount, negative=withdraw),
+            "comment": (comment or "")[:200],
+            "playerId": pid,
+            "currencyCode": self.currency_code,
+            "currency": self.currency,
+            "moneyStatus": int(self.money_status),
+        }
+
     def withdraw_from_player(
         self,
         player_ref: str,
@@ -1487,30 +1547,30 @@ class IchancyClient:
                 f"withdrawFromPlayer يحتاج playerId رقمي، وصل: {player_ref!r}"
             )
 
-        payload = {
-            "amount": -abs(float(amount)),
-            "comment": comment[:200],
-            "playerId": player_ref,
-            "currencyCode": self.currency_code,
-            "currency": self.currency,
-            "moneyStatus": self.money_status,
-        }
+        payload = self._transfer_payload(
+            player_ref, amount, comment, withdraw=True
+        )
         # #region agent log
         _agent_dbg(
             "B,C,D",
             "ichancy_client.py:withdraw_from_player",
             "withdraw payload",
             {
-                "playerId": player_ref,
+                "playerId": payload["playerId"],
                 "amount": payload["amount"],
                 "currency": payload["currency"],
                 "currencyCode": payload["currencyCode"],
                 "moneyStatus": payload["moneyStatus"],
-                "amount_type": type(amount).__name__,
+                "amount_type": type(payload["amount"]).__name__,
+                "playerId_type": type(payload["playerId"]).__name__,
             },
         )
         # #endregion
-        print(f"[ICHANCY withdraw] playerId={player_ref} amount={payload['amount']}", flush=True)
+        print(
+            f"[ICHANCY withdraw] playerId={payload['playerId']} "
+            f"amount={payload['amount']!r} currency={payload['currency']}",
+            flush=True,
+        )
         try:
             result = self._request(
                 "global/api/UserApi/withdrawFromPlayer",
@@ -1524,18 +1584,18 @@ class IchancyClient:
                 "A,E",
                 "ichancy_client.py:withdraw_from_player",
                 "withdraw failed",
-                {"error": exc.message, "status_code": exc.status_code, "playerId": player_ref},
+                {"error": exc.message, "status_code": exc.status_code, "playerId": payload["playerId"]},
             )
             # #endregion
             print(
-                f"[ICHANCY withdraw FAIL] playerId={player_ref} "
-                f"amount={payload['amount']} error={exc.message!r} "
+                f"[ICHANCY withdraw FAIL] playerId={payload['playerId']} "
+                f"amount={payload['amount']!r} error={exc.message!r} "
                 f"http={exc.status_code}",
                 flush=True,
             )
             raise
         print(f"[ICHANCY withdraw] OK result={result!r}", flush=True)
-        logger.info("withdraw OK playerId=%s", player_ref)
+        logger.info("withdraw OK playerId=%s", payload["playerId"])
         if not isinstance(result, dict):
             raise IchancyError("استجابة سحب غير متوقعة من ichancy")
         return result
@@ -1556,35 +1616,32 @@ class IchancyClient:
                 f"depositToPlayer يحتاج playerId رقمي، وصل: {player_ref!r}"
             )
 
-        payload = {
-            "amount": abs(float(amount)),
-            "comment": comment[:200],
-            "playerId": player_ref,
-            "currencyCode": self.currency_code,
-            "currency": self.currency,
-            "moneyStatus": self.money_status,
-        }
+        payload = self._transfer_payload(
+            player_ref, amount, comment, withdraw=False
+        )
         # #region agent log
         _agent_dbg(
             "B,C,D",
             "ichancy_client.py:deposit_to_player",
             "deposit payload",
             {
-                "playerId": player_ref,
+                "playerId": payload["playerId"],
                 "amount": payload["amount"],
                 "currency": payload["currency"],
                 "currencyCode": payload["currencyCode"],
                 "moneyStatus": payload["moneyStatus"],
-                "amount_type": type(amount).__name__,
+                "amount_type": type(payload["amount"]).__name__,
+                "playerId_type": type(payload["playerId"]).__name__,
             },
         )
         # #endregion
         print(
-            f"[ICHANCY deposit] playerId={player_ref} amount={payload['amount']}",
+            f"[ICHANCY deposit] playerId={payload['playerId']} "
+            f"amount={payload['amount']!r} currency={payload['currency']} "
+            f"moneyStatus={payload['moneyStatus']}",
             flush=True,
         )
         try:
-            # إعادة تسجيل الدخول عند انتهاء الجلسة — بدونها يفشل الإيداع بصمت أحياناً
             result = self._request(
                 "global/api/UserApi/depositToPlayer",
                 payload,
@@ -1597,18 +1654,18 @@ class IchancyClient:
                 "A,E",
                 "ichancy_client.py:deposit_to_player",
                 "deposit failed",
-                {"error": exc.message, "status_code": exc.status_code, "playerId": player_ref},
+                {"error": exc.message, "status_code": exc.status_code, "playerId": payload["playerId"]},
             )
             # #endregion
             print(
-                f"[ICHANCY deposit FAIL] playerId={player_ref} "
-                f"amount={payload['amount']} error={exc.message!r} "
+                f"[ICHANCY deposit FAIL] playerId={payload['playerId']} "
+                f"amount={payload['amount']!r} error={exc.message!r} "
                 f"http={exc.status_code}",
                 flush=True,
             )
             raise
         print(f"[ICHANCY deposit] OK result={result!r}", flush=True)
-        logger.info("deposit OK playerId=%s result=%s", player_ref, result)
+        logger.info("deposit OK playerId=%s result=%s", payload["playerId"], result)
         if not isinstance(result, dict):
             raise IchancyError("استجابة إيداع غير متوقعة من ichancy")
         return result
