@@ -348,8 +348,8 @@ class Config:
         "username": os.getenv("ICHANCY_USERNAME", ""),
         "password": os.getenv("ICHANCY_PASSWORD", ""),
         "parent_id": os.getenv("ICHANCY_PARENT_ID", ""),
-        "currency": os.getenv("ICHANCY_CURRENCY", "SYP"),
-        "currency_code": os.getenv("ICHANCY_CURRENCY_CODE", os.getenv("ICHANCY_CURRENCY", "SYP")),
+        "currency": os.getenv("ICHANCY_CURRENCY", "NSP"),
+        "currency_code": os.getenv("ICHANCY_CURRENCY_CODE", os.getenv("ICHANCY_CURRENCY", "NSP")),
         "money_status": int(os.getenv("ICHANCY_MONEY_STATUS", "5")),
         # كل زبون يسحب من المنصة للبوت مرة واحدة كل نصف ساعة
         "withdraw_cooldown_minutes": int(os.getenv("ICHANCY_WITHDRAW_COOLDOWN", "30")),

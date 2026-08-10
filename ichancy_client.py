@@ -1520,12 +1520,16 @@ class IchancyClient:
     ) -> Dict[str, Any]:
         """payload موحّد — playerId رقمي (int) لتفادي 422 validation."""
         pid = int(str(player_ref).strip())
+        # عملة الحساب الفعلية من المنصة (بعد الإصلاح السوري صارت NSP مو SYP)
+        currency = (self.currency_code or self.currency or "NSP").strip().upper()
+        if currency in ("SYP", "SYL", "SY"):
+            currency = "NSP"
         return {
             "amount": self._transfer_amount(amount, negative=withdraw),
             "comment": (comment or "")[:200],
             "playerId": pid,
-            "currencyCode": self.currency_code,
-            "currency": self.currency,
+            "currencyCode": currency,
+            "currency": currency,
             "moneyStatus": int(self.money_status),
         }
 
@@ -1550,6 +1554,20 @@ class IchancyClient:
         payload = self._transfer_payload(
             player_ref, amount, comment, withdraw=True
         )
+        try:
+            bal = self._request(
+                "global/api/UserApi/getPlayerBalanceById",
+                {"playerId": int(str(player_ref).strip())},
+                timeout=30,
+                retry_on_ex=True,
+            )
+            if isinstance(bal, list) and bal and isinstance(bal[0], dict):
+                code = str(bal[0].get("currencyCode") or "").strip().upper()
+                if code:
+                    payload["currencyCode"] = code
+                    payload["currency"] = code
+        except Exception:
+            pass
         # #region agent log
         _agent_dbg(
             "B,C,D",
@@ -1619,9 +1637,24 @@ class IchancyClient:
         payload = self._transfer_payload(
             player_ref, amount, comment, withdraw=False
         )
+        # طابق عملة المحفظة الفعلية من المنصة إن توفرت (NSP بعد الإصلاح)
+        try:
+            bal = self._request(
+                "global/api/UserApi/getPlayerBalanceById",
+                {"playerId": int(str(player_ref).strip())},
+                timeout=30,
+                retry_on_ex=True,
+            )
+            if isinstance(bal, list) and bal and isinstance(bal[0], dict):
+                code = str(bal[0].get("currencyCode") or "").strip().upper()
+                if code:
+                    payload["currencyCode"] = code
+                    payload["currency"] = code
+        except Exception:
+            pass
         # #region agent log
         _agent_dbg(
-            "B,C,D",
+            "C",
             "ichancy_client.py:deposit_to_player",
             "deposit payload",
             {
