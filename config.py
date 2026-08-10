@@ -350,6 +350,8 @@ class Config:
         "parent_id": os.getenv("ICHANCY_PARENT_ID", ""),
         "currency": os.getenv("ICHANCY_CURRENCY", "NSP"),
         "currency_code": os.getenv("ICHANCY_CURRENCY_CODE", os.getenv("ICHANCY_CURRENCY", "NSP")),
+        # البوت بالليرة الجديدة — API ايشانسي غالباً بالوحدة القديمة (×100)
+        "amount_scale": int(os.getenv("ICHANCY_AMOUNT_SCALE", "100")),
         "money_status": int(os.getenv("ICHANCY_MONEY_STATUS", "5")),
         # كل زبون يسحب من المنصة للبوت مرة واحدة كل نصف ساعة
         "withdraw_cooldown_minutes": int(os.getenv("ICHANCY_WITHDRAW_COOLDOWN", "30")),

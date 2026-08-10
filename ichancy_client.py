@@ -82,9 +82,10 @@ class IchancyClient:
         self.username = cfg.get("username", "")
         self.password = cfg.get("password", "")
         self.parent_id = cfg.get("parent_id", "")
-        self.currency = cfg.get("currency", "SYP")
-        self.currency_code = cfg.get("currency_code", cfg.get("currency", "SYP"))
+        self.currency = cfg.get("currency", "NSP")
+        self.currency_code = cfg.get("currency_code", cfg.get("currency", "NSP"))
         self.money_status = int(cfg.get("money_status", 5))
+        self.amount_scale = max(1, int(cfg.get("amount_scale", 100) or 100))
         self.default_timeout = int(cfg.get("request_timeout", 60))
 
         proxy_cfg = Config.get_ichancy_proxy_config()
@@ -538,7 +539,14 @@ class IchancyClient:
         if notifications and isinstance(notifications, list):
             first = notifications[0]
             if isinstance(first, dict) and first.get("content"):
-                return str(first["content"])
+                content = str(first["content"])
+                low = content.lower()
+                if "min deposit" in low:
+                    return (
+                        "المبلغ أقل من الحد الأدنى للشحن على منصة iChancy.\n"
+                        "جرّب مبلغ أكبر أو تأكد من إعداد التحويل (×100)."
+                    )
+                return content
             if isinstance(first, str) and first.strip():
                 return first.strip()
 
@@ -1489,26 +1497,36 @@ class IchancyClient:
         if isinstance(result, list):
             for item in result:
                 if isinstance(item, dict) and item.get("main", True):
-                    return float(item.get("balance", 0) or 0)
+                    return self._from_api_amount(item.get("balance", 0))
             if result and isinstance(result[0], dict):
-                return float(result[0].get("balance", 0) or 0)
+                return self._from_api_amount(result[0].get("balance", 0))
             return 0.0
 
         if isinstance(result, dict):
-            return float(
+            return self._from_api_amount(
                 result.get("balance", result.get("Balance", result.get("amount", 0)))
-                or 0
             )
 
         try:
-            return float(result)
+            return self._from_api_amount(result)
         except (TypeError, ValueError):
             return 0.0
 
-    @staticmethod
-    def _transfer_amount(amount: float, *, negative: bool = False):
-        """المبلغ كما تتوقعه المنصة غالباً: رقم صحيح إذا ما في كسور."""
-        val = abs(float(amount))
+    def _from_api_amount(self, raw_amount) -> float:
+        """من وحدة API → وحدة البوت (÷ scale)."""
+        try:
+            val = float(raw_amount or 0)
+        except (TypeError, ValueError):
+            return 0.0
+        scale = max(1, int(self.amount_scale or 1))
+        return val / scale
+
+    def _transfer_amount(self, amount: float, *, negative: bool = False):
+        """
+        مبلغ البوت → مبلغ API.
+        مثال: الزبون يكتب 20 → نرسل 2000 (scale=100).
+        """
+        val = abs(float(amount)) * max(1, int(self.amount_scale or 1))
         if abs(val - round(val)) < 1e-9:
             out = int(round(val))
         else:
@@ -1518,14 +1536,14 @@ class IchancyClient:
     def _transfer_payload(
         self, player_ref: str, amount: float, comment: str, *, withdraw: bool
     ) -> Dict[str, Any]:
-        """payload موحّد — playerId رقمي (int) لتفادي 422 validation."""
+        """payload موحّد — playerId رقمي (int) + تحويل ×scale."""
         pid = int(str(player_ref).strip())
-        # عملة الحساب الفعلية من المنصة (بعد الإصلاح السوري صارت NSP مو SYP)
         currency = (self.currency_code or self.currency or "NSP").strip().upper()
         if currency in ("SYP", "SYL", "SY"):
             currency = "NSP"
+        api_amount = self._transfer_amount(amount, negative=withdraw)
         return {
-            "amount": self._transfer_amount(amount, negative=withdraw),
+            "amount": api_amount,
             "comment": (comment or "")[:200],
             "playerId": pid,
             "currencyCode": currency,
@@ -1671,7 +1689,7 @@ class IchancyClient:
         print(
             f"[ICHANCY deposit] playerId={payload['playerId']} "
             f"amount={payload['amount']!r} currency={payload['currency']} "
-            f"moneyStatus={payload['moneyStatus']}",
+            f"moneyStatus={payload['moneyStatus']} scale={self.amount_scale}",
             flush=True,
         )
         try:
