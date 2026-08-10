@@ -307,7 +307,7 @@ class IchancyHandler:
                         ichancy_client.get_player_balance, player_id
                     )
                     platform_balance = format_currency(balance)
-d             except IchancyError:
+            except IchancyError:
                 platform_balance = "تعذر الجلب"
 
         text = (
