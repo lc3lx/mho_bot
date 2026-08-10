@@ -692,6 +692,7 @@ class IchancyClient:
         data: Optional[Dict[str, Any]] = None,
         use_auth: bool = True,
         timeout: int = None,
+        _auth_retried: bool = False,
     ) -> Dict[str, Any]:
         headers = {
             "Content-Type": "application/json",
@@ -761,6 +762,41 @@ class IchancyClient:
                 f"استجابة غير صالحة من ichancy (HTTP {response.status_code})",
                 status_code=response.status_code,
             ) from exc
+
+        # توكن منتهي — سجّل دخول جديد وأعد المحاولة مرة واحدة
+        if (
+            response.status_code == 401
+            and use_auth
+            and not _auth_retried
+        ):
+            print(
+                f"[ICHANCY auth] HTTP 401 on {endpoint} — force reauth + retry",
+                flush=True,
+            )
+            # #region agent log
+            _agent_dbg(
+                "E",
+                "ichancy_client.py:_raw_post",
+                "HTTP 401 reauth retry",
+                {"endpoint": endpoint, "body_snip": str(body)[:300]},
+            )
+            # #endregion
+            try:
+                self.force_reauth()
+            except IchancyError:
+                raise IchancyError(
+                    self._extract_error(body)
+                    if isinstance(body, dict)
+                    else "غير مصرح (401) — فشل تجديد الجلسة",
+                    status_code=401,
+                )
+            return self._raw_post(
+                endpoint,
+                data=data,
+                use_auth=True,
+                timeout=timeout,
+                _auth_retried=True,
+            )
 
         if response.status_code == 401:
             raise IchancyError(
@@ -1569,6 +1605,9 @@ class IchancyClient:
                 f"withdrawFromPlayer يحتاج playerId رقمي، وصل: {player_ref!r}"
             )
 
+        print("[ICHANCY withdraw] force_reauth before transfer", flush=True)
+        self.force_reauth()
+
         payload = self._transfer_payload(
             player_ref, amount, comment, withdraw=True
         )
@@ -1651,6 +1690,10 @@ class IchancyClient:
             raise IchancyError(
                 f"depositToPlayer يحتاج playerId رقمي، وصل: {player_ref!r}"
             )
+
+        # جلسة جديدة قبل الشحن — نفس سلوك إعادة تشغيل السيرفر
+        print("[ICHANCY deposit] force_reauth before transfer", flush=True)
+        self.force_reauth()
 
         payload = self._transfer_payload(
             player_ref, amount, comment, withdraw=False
