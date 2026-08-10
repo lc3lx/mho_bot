@@ -105,8 +105,10 @@ async def show_deposit_hub(update, context, user):
     min_dep = Config.MIN_DEPOSIT
     text = (
         "💳 تعبئة محفظة البوت\n\n"
-        "ابعت المبلغ أرقام فقط 👇\n\n"
-        f"أقل مبلغ: {format_currency(min_dep)}\n\n"
+        "ابعت المبلغ كتابه فقط 👇\n\n"
+        "اكتب المبلغ العمله الجديده يا ملك\n\n"
+        f"اقل مبلغ ايداع : {format_currency(min_dep)} ل.س\n\n"
+        "اكتبه بالليره الجديده وبتلاقيه بحسابك بالليره القديمه\n\n"
         "المحاسب جاهز… بس خلّي الرقم واضح من أول مرة 😂"
     )
     context.user_data["state"] = "waiting_for_amount"
@@ -116,9 +118,12 @@ async def show_deposit_hub(update, context, user):
 
 async def show_wallet_deposit_methods(update, context, amount: float):
     """بعد المبلغ — اختيار طريقة الدفع."""
+    amt = format_currency(amount)
     text = (
         "💳 تعبئة محفظة البوت\n\n"
-        f"المبلغ {format_currency(amount)}\n\n"
+        f"المبلغ {amt}\n\n"
+        f"مبلغك {amt} ل.س جديد بس جوا الحساب بتلاقيهن بالعمله القديمه ياملك\n"
+        "اكتبه بالليره الجديده وبتلاقيه بحسابك بالليره القديمه\n\n"
         "هلق اختار طريقة الدفع المناسبة 👇\n\n"
         "المحاسب جاهز\n"
         "بس لا تغير رأيك كل شوي 😂"

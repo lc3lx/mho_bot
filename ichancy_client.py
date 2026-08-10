@@ -26,6 +26,27 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# #region agent log
+def _agent_dbg(hypothesis_id: str, location: str, message: str, data: dict | None = None):
+    try:
+        import json, time
+        from pathlib import Path
+        payload = {
+            "sessionId": "73d636",
+            "runId": "pre-fix",
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data or {},
+            "timestamp": int(time.time() * 1000),
+        }
+        path = Path(__file__).resolve().parent / "debug-73d636.log"
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+    except Exception:
+        pass
+# #endregion
+
 # بصمة متصفح حقيقية تساعد على تجاوز فحص Cloudflare
 BROWSER_IMPERSONATE = "chrome124"
 ALLOWED_PROXY_SCHEMES = ("http", "https", "socks5", "socks5h")
@@ -515,6 +536,15 @@ class IchancyClient:
             first = notifications[0]
             if isinstance(first, dict) and first.get("content"):
                 return str(first["content"])
+            if isinstance(first, str) and first.strip():
+                return first.strip()
+        # بعض الردود تضع الرسالة في مفاتيح أخرى
+        for key in ("message", "error", "Error", "msg", "description"):
+            val = body.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+            if isinstance(val, dict) and val.get("content"):
+                return str(val["content"])
         return "فشل الطلب على ichancy"
 
     @staticmethod
@@ -800,6 +830,21 @@ class IchancyClient:
         body = self._raw_post(endpoint, data=data, use_auth=True, timeout=timeout)
         result = body.get("result")
 
+        if result == "ex" and not retry_on_ex:
+            # #region agent log
+            _agent_dbg(
+                "E",
+                "ichancy_client.py:_request_full",
+                "result=ex retry disabled",
+                {
+                    "endpoint": endpoint,
+                    "detail": self._extract_error(body),
+                    "notif": body.get("notification") if isinstance(body, dict) else None,
+                    "body_snip": str(body)[:500],
+                },
+            )
+            # #endregion
+
         if result == "ex" and retry_on_ex:
             logger.warning(
                 "Ichancy returned result=ex on %s — forcing fresh signIn",
@@ -818,6 +863,20 @@ class IchancyClient:
                     endpoint,
                     str(body)[:300],
                 )
+                # #region agent log
+                _agent_dbg(
+                    "E",
+                    "ichancy_client.py:_request_full",
+                    "result=ex after reauth",
+                    {
+                        "endpoint": endpoint,
+                        "detail": detail,
+                        "body_keys": list(body.keys()) if isinstance(body, dict) else None,
+                        "notif": (body.get("notification") if isinstance(body, dict) else None),
+                        "result": result,
+                    },
+                )
+                # #endregion
                 raise IchancyError(
                     detail
                     if detail and detail != "فشل الطلب على ichancy"
@@ -829,6 +888,32 @@ class IchancyClient:
                 )
 
         if result is False:
+            # #region agent log
+            _agent_dbg(
+                "A",
+                "ichancy_client.py:_request_full",
+                "API result=False",
+                {
+                    "endpoint": endpoint,
+                    "detail": self._extract_error(body),
+                    "notif": (body.get("notification") if isinstance(body, dict) else None),
+                    "result": result,
+                    "status": body.get("status") if isinstance(body, dict) else None,
+                    "body_snip": str(body)[:500] if body is not None else None,
+                },
+            )
+            # #endregion
+            # يظهر مباشرة في pm2-out / pm2-error
+            print(
+                f"[ICHANCY FAIL] endpoint={endpoint} "
+                f"detail={self._extract_error(body)!r} body={str(body)[:800]!r}",
+                flush=True,
+            )
+            logger.error(
+                "Ichancy result=False on %s: %s",
+                endpoint,
+                str(body)[:800],
+            )
             raise IchancyError(self._extract_error(body))
 
         return body if isinstance(body, dict) else {"result": body}
@@ -1410,13 +1495,45 @@ class IchancyClient:
             "currency": self.currency,
             "moneyStatus": self.money_status,
         }
-        print(f"[ICHANCY withdraw] playerId={player_ref} amount={payload['amount']}", flush=True)
-        result = self._request(
-            "global/api/UserApi/withdrawFromPlayer",
-            payload,
-            timeout=60,
-            retry_on_ex=False,
+        # #region agent log
+        _agent_dbg(
+            "B,C,D",
+            "ichancy_client.py:withdraw_from_player",
+            "withdraw payload",
+            {
+                "playerId": player_ref,
+                "amount": payload["amount"],
+                "currency": payload["currency"],
+                "currencyCode": payload["currencyCode"],
+                "moneyStatus": payload["moneyStatus"],
+                "amount_type": type(amount).__name__,
+            },
         )
+        # #endregion
+        print(f"[ICHANCY withdraw] playerId={player_ref} amount={payload['amount']}", flush=True)
+        try:
+            result = self._request(
+                "global/api/UserApi/withdrawFromPlayer",
+                payload,
+                timeout=60,
+                retry_on_ex=True,
+            )
+        except IchancyError as exc:
+            # #region agent log
+            _agent_dbg(
+                "A,E",
+                "ichancy_client.py:withdraw_from_player",
+                "withdraw failed",
+                {"error": exc.message, "status_code": exc.status_code, "playerId": player_ref},
+            )
+            # #endregion
+            print(
+                f"[ICHANCY withdraw FAIL] playerId={player_ref} "
+                f"amount={payload['amount']} error={exc.message!r} "
+                f"http={exc.status_code}",
+                flush=True,
+            )
+            raise
         print(f"[ICHANCY withdraw] OK result={result!r}", flush=True)
         logger.info("withdraw OK playerId=%s", player_ref)
         if not isinstance(result, dict):
@@ -1447,16 +1564,49 @@ class IchancyClient:
             "currency": self.currency,
             "moneyStatus": self.money_status,
         }
+        # #region agent log
+        _agent_dbg(
+            "B,C,D",
+            "ichancy_client.py:deposit_to_player",
+            "deposit payload",
+            {
+                "playerId": player_ref,
+                "amount": payload["amount"],
+                "currency": payload["currency"],
+                "currencyCode": payload["currencyCode"],
+                "moneyStatus": payload["moneyStatus"],
+                "amount_type": type(amount).__name__,
+            },
+        )
+        # #endregion
         print(
             f"[ICHANCY deposit] playerId={player_ref} amount={payload['amount']}",
             flush=True,
         )
-        result = self._request(
-            "global/api/UserApi/depositToPlayer",
-            payload,
-            timeout=60,
-            retry_on_ex=False,
-        )
+        try:
+            # إعادة تسجيل الدخول عند انتهاء الجلسة — بدونها يفشل الإيداع بصمت أحياناً
+            result = self._request(
+                "global/api/UserApi/depositToPlayer",
+                payload,
+                timeout=60,
+                retry_on_ex=True,
+            )
+        except IchancyError as exc:
+            # #region agent log
+            _agent_dbg(
+                "A,E",
+                "ichancy_client.py:deposit_to_player",
+                "deposit failed",
+                {"error": exc.message, "status_code": exc.status_code, "playerId": player_ref},
+            )
+            # #endregion
+            print(
+                f"[ICHANCY deposit FAIL] playerId={player_ref} "
+                f"amount={payload['amount']} error={exc.message!r} "
+                f"http={exc.status_code}",
+                flush=True,
+            )
+            raise
         print(f"[ICHANCY deposit] OK result={result!r}", flush=True)
         logger.info("deposit OK playerId=%s result=%s", player_ref, result)
         if not isinstance(result, dict):

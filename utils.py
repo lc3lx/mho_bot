@@ -9,8 +9,15 @@ from typing import Optional, List, Dict, Any
 from database import User, Transaction
 
 def format_currency(amount: float) -> str:
-    """تنسيق العملة"""
-    return f"{amount:,.2f}"
+    """تنسيق العملة بدون فواصل ولا أصفار زائدة (200 بدل 200.00)."""
+    try:
+        val = float(amount or 0)
+    except (TypeError, ValueError):
+        val = 0.0
+    if abs(val - round(val)) < 1e-9:
+        return str(int(round(val)))
+    text = f"{val:.2f}".rstrip("0").rstrip(".")
+    return text
 
 
 def tg_code(value) -> str:

@@ -25,6 +25,27 @@ logger = logging.getLogger(__name__)
 db = DatabaseManager()
 ichancy_client = IchancyClient()
 
+# #region agent log
+def _agent_dbg(hypothesis_id: str, location: str, message: str, data: dict | None = None):
+    try:
+        import json, time
+        from pathlib import Path
+        payload = {
+            "sessionId": "73d636",
+            "runId": "pre-fix",
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data or {},
+            "timestamp": int(time.time() * 1000),
+        }
+        path = Path(__file__).resolve().parent / "debug-73d636.log"
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+    except Exception:
+        pass
+# #endregion
+
 ICHANCY_LOGIN_PREFIX = "Na_"
 RANDOM_NAME_POOL = (
     "Ali", "Omar", "Samer", "Rami", "Nour", "Hadi", "Ziad", "Karim",
@@ -286,7 +307,7 @@ class IchancyHandler:
                         ichancy_client.get_player_balance, player_id
                     )
                     platform_balance = format_currency(balance)
-            except IchancyError:
+d             except IchancyError:
                 platform_balance = "تعذر الجلب"
 
         text = (
@@ -665,13 +686,15 @@ class IchancyHandler:
         text = (
             "💸 شحن حساب iChancy\n\n"
             f"الحساب: {tg_code(user.ichancy_username)}\n\n"
-            "هلق ابعت مبلغ التعبئة أرقام فقط\n\n"
+            "هلق ابعت مبلغ التعبئة كتابه فقط\n\n"
+            "اكتب المبلغ العمله الجديده يا ملك\n\n"
             "مثال:\n"
             f"{tg_code('25000')}\n\n"
             "بلا فواصل\n"
             "المحاسب ما ناقصه ألغاز اليوم 😂\n\n"
             f"💵 رصيد البوت: {format_currency(user.balance)}\n"
-            f"أقل مبلغ: {format_currency(min_topup)}"
+            f"اقل مبلغ ايداع : {format_currency(min_topup)} ل.س\n\n"
+            "اكتبه بالليره الجديده وبتلاقيه بحسابك بالليره القديمه"
         )
         context.user_data["state"] = "waiting_for_amount"
         context.user_data["operation"] = "ichancy_topup"
@@ -754,6 +777,20 @@ class IchancyHandler:
             f"playerId={player_id!r} amount={amount}",
             flush=True,
         )
+        # #region agent log
+        _agent_dbg(
+            "B,D",
+            "ichancy_handler.py:process_topup",
+            "topup before API",
+            {
+                "username": user.ichancy_username,
+                "player_id": player_id,
+                "amount": amount,
+                "balance": float(user.balance or 0),
+                "db_player_id": user.ichancy_player_id,
+            },
+        )
+        # #endregion
 
         reference = generate_transaction_reference()
 
@@ -806,6 +843,14 @@ class IchancyHandler:
                 )
 
             except IchancyError as exc:
+                # #region agent log
+                _agent_dbg(
+                    "A,B,C,D,E",
+                    "ichancy_handler.py:process_topup",
+                    "topup IchancyError",
+                    {"error": exc.message, "status_code": getattr(exc, "status_code", None), "amount": amount, "player_id": player_id},
+                )
+                # #endregion
                 # إرجاع الرصيد
                 db_user.balance += amount
                 transaction.status = "failed"
