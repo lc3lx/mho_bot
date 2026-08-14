@@ -1727,3 +1727,322 @@ class AdminHandler:
         )
         return True
 
+
+    # ─── إعدادات التقبيض / فضي محفظتي ─────────────────────
+
+    @staticmethod
+    async def withdraw_settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        import payout_service as ps
+
+        s = ps.settings_snapshot()
+        max_txt = format_currency(s["max"]) if s["max"] is not None else "بلا حد"
+        daily_txt = (
+            format_currency(s["daily_limit"])
+            if s["daily_limit"] is not None
+            else "بلا حد"
+        )
+        fee_method = s["fee_method"]
+        fee_label = (
+            "نسبة من مبلغ السحب"
+            if fee_method == ps.FEE_METHOD_PERCENT_WITHDRAW
+            else fee_method
+        )
+        text = (
+            "🏧 إعدادات التقبيض (فضي محفظتي)\n\n"
+            f"📉 أقل مبلغ: {format_currency(s['min'])}\n"
+            f"📈 أعلى مبلغ: {max_txt}\n"
+            f"📅 حد يومي: {daily_txt}\n"
+            f"🔢 طلبات/يوم: {s['max_requests']}\n"
+            f"⏱ انتظار بين طلبين: {s['cooldown']} ث\n"
+            f"🧮 العمولة: {s['fee_percent']:g}%\n"
+            f"📐 طريقة الحساب: {fee_label}\n"
+            f"📢 كروب التقبيض: {s['payout_group'] or '—'}\n"
+            f"🚑 كروب الدعم: {s['support_group'] or '—'}\n"
+        )
+        await _admin_edit(
+            update,
+            text,
+            reply_markup=Keyboards.admin_withdraw_settings_menu(),
+            context=context,
+        )
+
+    @staticmethod
+    async def withdraw_setting_prompt(
+        update: Update, context: ContextTypes.DEFAULT_TYPE, key: str
+    ):
+        prompts = {
+            "min": ("withdraw_min", "أرسل أقل مبلغ للسحب (رقم):"),
+            "max": (
+                "withdraw_max",
+                "أرسل أعلى مبلغ للسحب (رقم، أو 0 لإلغاء الحد):",
+            ),
+            "daily": (
+                "withdraw_daily_limit",
+                "أرسل الحد اليومي بالمبلغ (أو 0 لإلغاء الحد):",
+            ),
+            "reqs": ("withdraw_max_requests_day", "أرسل عدد طلبات السحب المسموحة باليوم:"),
+            "cd": ("withdraw_cooldown_seconds", "أرسل مدة الانتظار بين طلبين بالثواني:"),
+            "fee": ("withdraw_fee_percent", "أرسل نسبة العمولة (مثال 10):"),
+            "feemethod": (
+                "withdraw_fee_method",
+                "أرسل طريقة الحساب:\npercent_of_withdraw",
+            ),
+            "paygroup": (
+                "payout_admin_group_id",
+                "أرسل آيدي كروب التقبيض (مثل -100123... أو 0 للمسح):",
+            ),
+            "supgroup": (
+                "support_group_id",
+                "أرسل آيدي كروب الدعم (مثل -100123... أو 0 للمسح):",
+            ),
+        }
+        if key not in prompts:
+            q = getattr(update, "callback_query", None)
+            if q:
+                try:
+                    await q.answer()
+                except Exception:
+                    pass
+            return
+        setting_key, prompt = prompts[key]
+        context.user_data["admin_state"] = "waiting_wd_setting_value"
+        context.user_data["admin_wd_setting_key"] = setting_key
+        await _admin_edit(
+            update,
+            prompt,
+            reply_markup=Keyboards.cancel_admin_operation(),
+            context=context,
+        )
+
+    @staticmethod
+    async def withdraw_setting_save(
+        update: Update, context: ContextTypes.DEFAULT_TYPE, raw: str
+    ):
+        import payout_service as ps
+
+        key = context.user_data.pop("admin_wd_setting_key", None)
+        context.user_data.pop("admin_state", None)
+        if not key:
+            await update.message.reply_text("انتهت الجلسة.")
+            return
+        val = (raw or "").strip()
+        if key in (
+            "withdraw_min",
+            "withdraw_max",
+            "withdraw_daily_limit",
+            "withdraw_fee_percent",
+        ):
+            try:
+                num = float(val.replace(",", ""))
+            except ValueError:
+                await update.message.reply_text(
+                    "❌ رقم غير صالح",
+                    reply_markup=Keyboards.admin_withdraw_settings_menu(),
+                )
+                return
+            if key in ("withdraw_max", "withdraw_daily_limit") and num <= 0:
+                ps.set_withdraw_setting(key, "")
+            else:
+                ps.set_withdraw_setting(key, str(num))
+        elif key in (
+            "withdraw_max_requests_day",
+            "withdraw_cooldown_seconds",
+        ):
+            try:
+                num = int(float(val))
+            except ValueError:
+                await update.message.reply_text(
+                    "❌ رقم غير صالح",
+                    reply_markup=Keyboards.admin_withdraw_settings_menu(),
+                )
+                return
+            ps.set_withdraw_setting(key, str(max(0, num)))
+        elif key in ("payout_admin_group_id", "support_group_id"):
+            if val in ("0", "", "-", "none", "None"):
+                ps.set_withdraw_setting(key, "")
+            else:
+                try:
+                    int(val)
+                except ValueError:
+                    await update.message.reply_text(
+                        "❌ آيدي غير صالح",
+                        reply_markup=Keyboards.admin_withdraw_settings_menu(),
+                    )
+                    return
+                ps.set_withdraw_setting(key, val)
+        else:
+            ps.set_withdraw_setting(key, val)
+
+        await update.message.reply_text(
+            f"✅ تم حفظ {key} = {val or '(فارغ)'}",
+            reply_markup=Keyboards.admin_withdraw_settings_menu(),
+        )
+
+    @staticmethod
+    async def payout_methods_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        import payout_service as ps
+
+        methods = ps.list_methods(enabled_only=False)
+        lines = ["💳 طرق التقبيض\n"]
+        for m in methods:
+            flag = "✅" if m.enabled else "⛔"
+            lines.append(f"{flag} {m.name} ({m.code})")
+        await _admin_edit(
+            update,
+            "\n".join(lines),
+            reply_markup=Keyboards.admin_payout_methods_menu(methods),
+            context=context,
+        )
+
+    @staticmethod
+    async def payout_method_detail(
+        update: Update, context: ContextTypes.DEFAULT_TYPE, method_id: int
+    ):
+        import payout_service as ps
+
+        m = ps.get_method_by_id(method_id)
+        if not m:
+            return
+        text = (
+            f"💳 {m.name}\n"
+            f"رمز: {m.code}\n"
+            f"الحالة: {'مفعّل' if m.enabled else 'معطّل'}\n"
+            f"حد أدنى: {m.min_amount if m.min_amount is not None else '—'}\n"
+            f"حد أقصى: {m.max_amount if m.max_amount is not None else '—'}\n"
+            f"كروب: {m.admin_group_id or '—'}\n"
+            f"حقول: {m.required_fields or '[]'}\n\n"
+            f"تعليمات:\n{m.instructions or '—'}"
+        )
+        await _admin_edit(
+            update,
+            text,
+            reply_markup=Keyboards.admin_payout_method_detail_menu(m.id, m.enabled),
+            context=context,
+        )
+
+    @staticmethod
+    async def payout_method_toggle(
+        update: Update, context: ContextTypes.DEFAULT_TYPE, method_id: int
+    ):
+        import payout_service as ps
+
+        m = ps.get_method_by_id(method_id)
+        if not m:
+            return
+        ps.set_method_enabled(method_id, not m.enabled)
+        await AdminHandler.payout_method_detail(update, context, method_id)
+
+    @staticmethod
+    async def payout_method_add_start(
+        update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        context.user_data["admin_state"] = "waiting_payout_method_add"
+        await _admin_edit(
+            update,
+            "➕ إضافة طريقة تقبيض\n\n"
+            "أرسل بالصيغة:\n"
+            "code|الاسم|instructions\n\n"
+            "مثال:\n"
+            "paypal|PayPal|ابعت إيميل PayPal",
+            reply_markup=Keyboards.cancel_admin_operation(),
+            context=context,
+        )
+
+    @staticmethod
+    async def payout_method_add_save(
+        update: Update, context: ContextTypes.DEFAULT_TYPE, raw: str
+    ):
+        import payout_service as ps
+
+        context.user_data.pop("admin_state", None)
+        parts = [p.strip() for p in (raw or "").split("|")]
+        if len(parts) < 2:
+            await update.message.reply_text(
+                "❌ الصيغة: code|الاسم|instructions",
+                reply_markup=Keyboards.admin_withdraw_settings_menu(),
+            )
+            return
+        code = parts[0].lower().replace(" ", "_")
+        name = parts[1]
+        instructions = parts[2] if len(parts) > 2 else ""
+        ps.upsert_method(
+            code,
+            name,
+            enabled=False,
+            required_fields=["destination"],
+            instructions=instructions,
+        )
+        await update.message.reply_text(
+            f"✅ تمت إضافة {name} (معطّلة — فعّلها من القائمة)",
+            reply_markup=Keyboards.admin_payout_methods_menu(
+                ps.list_methods(enabled_only=False)
+            ),
+        )
+
+    @staticmethod
+    async def payout_method_edit_start(
+        update: Update, context: ContextTypes.DEFAULT_TYPE, field: str, method_id: int
+    ):
+        field_map = {
+            "name": "name",
+            "min": "min_amount",
+            "max": "max_amount",
+            "instr": "instructions",
+            "group": "admin_group_id",
+            "fields": "required_fields",
+        }
+        db_field = field_map.get(field)
+        if not db_field:
+            return
+        context.user_data["admin_state"] = "waiting_payout_method_edit"
+        context.user_data["admin_pm_edit_id"] = method_id
+        context.user_data["admin_pm_edit_field"] = db_field
+        hints = {
+            "name": "أرسل الاسم الجديد:",
+            "min_amount": "أرسل الحد الأدنى (أو - لإزالته):",
+            "max_amount": "أرسل الحد الأقصى (أو - لإزالته):",
+            "instructions": "أرسل نص التعليمات:",
+            "admin_group_id": "أرسل آيدي كروب الطريقة (أو 0 للمسح):",
+            "required_fields": "أرسل الحقول مفصولة بفاصلة (مثال: shamcash_address):",
+        }
+        await _admin_edit(
+            update,
+            hints.get(db_field, "أرسل القيمة:"),
+            reply_markup=Keyboards.cancel_admin_operation(),
+            context=context,
+        )
+
+    @staticmethod
+    async def payout_method_edit_save(
+        update: Update, context: ContextTypes.DEFAULT_TYPE, raw: str
+    ):
+        import json
+        import payout_service as ps
+
+        method_id = int(context.user_data.pop("admin_pm_edit_id", 0) or 0)
+        field = context.user_data.pop("admin_pm_edit_field", None)
+        context.user_data.pop("admin_state", None)
+        if not method_id or not field:
+            await update.message.reply_text("انتهت الجلسة.")
+            return
+        val = (raw or "").strip()
+        if field in ("min_amount", "max_amount"):
+            if val in ("-", "0", ""):
+                val = None
+            else:
+                val = float(val.replace(",", ""))
+        elif field == "admin_group_id":
+            if val in ("0", "-", ""):
+                val = None
+        elif field == "required_fields":
+            fields = [x.strip() for x in val.split(",") if x.strip()]
+            val = json.dumps(fields, ensure_ascii=False)
+        ps.update_method_field(method_id, field, val)
+        m = ps.get_method_by_id(method_id)
+        await update.message.reply_text(
+            "✅ تم التحديث",
+            reply_markup=Keyboards.admin_payout_method_detail_menu(
+                method_id, bool(m and m.enabled)
+            ),
+        )
+

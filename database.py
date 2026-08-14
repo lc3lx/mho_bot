@@ -118,11 +118,72 @@ class Transaction(Base):
     decided_by_name = Column(String(120))  # اسم الأدمن عند القرار
     decided_by_telegram_id = Column(Integer)  # آيدي تليغرام للأدمن
     decided_at = Column(DateTime)  # وقت قرار الإدارة
+    public_id = Column(String(40), unique=True, index=True)  # رقم طلب فريد للعرض
+    assigned_admin_telegram_id = Column(Integer)  # قفل تنفيذ متزامن
+    assigned_admin_name = Column(String(120))
+    accepted_at = Column(DateTime)
+    paid_at = Column(DateTime)
+    admin_group_chat_id = Column(String(50))
+    admin_group_message_id = Column(Integer)
+    user_track_chat_id = Column(String(50))
+    user_track_message_id = Column(Integer)
+    status_before_cancel = Column(String(30))
+    reject_reason_code = Column(String(40))
+    payout_method_code = Column(String(50))  # رمز طريقة التقبيض من payout_methods
     created_at = Column(DateTime, default=datetime.utcnow)
     processed_at = Column(DateTime)
     
     # العلاقات
     user = relationship("User", back_populates="transactions")
+
+
+class PayoutMethod(Base):
+    """طرق تقبيض قابلة للتوسعة من لوحة الإدارة"""
+    __tablename__ = "payout_methods"
+
+    id = Column(Integer, primary_key=True)
+    code = Column(String(50), unique=True, nullable=False, index=True)
+    name = Column(String(120), nullable=False)
+    enabled = Column(Boolean, default=False)
+    min_amount = Column(Float)  # اختياري — يتجاوز الحد العام إن وُجد
+    max_amount = Column(Float)
+    # JSON list مثل: ["shamcash_address"] أو ["phone"] أو ["wallet","network"]
+    required_fields = Column(Text, default="[]")
+    admin_group_id = Column(String(50))  # كروب مسؤول عن هذه الطريقة
+    instructions = Column(Text)
+    sort_order = Column(Integer, default=100)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class SupportTicket(Base):
+    """تذكرة دعم مربوطة بطلب سحب/تقبيض"""
+    __tablename__ = "support_tickets"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    order_id = Column(Integer, ForeignKey("transactions.id"), nullable=True, index=True)
+    status = Column(String(30), default="open", index=True)  # open | resolved | escalated
+    subject = Column(String(200))
+    support_group_chat_id = Column(String(50))
+    support_group_message_id = Column(Integer)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    resolved_at = Column(DateTime)
+    resolved_by_name = Column(String(120))
+    escalated_at = Column(DateTime)
+
+
+class SupportTicketMessage(Base):
+    """رسائل داخل تذكرة الدعم"""
+    __tablename__ = "support_ticket_messages"
+
+    id = Column(Integer, primary_key=True)
+    ticket_id = Column(Integer, ForeignKey("support_tickets.id"), nullable=False, index=True)
+    direction = Column(String(20), nullable=False)  # user_to_support | support_to_user
+    content = Column(Text, nullable=False)
+    sender_telegram_id = Column(Integer)
+    sender_name = Column(String(120))  # داخلي فقط — لا يُعرض للمستخدم كحساب شخصي
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 class Gift(Base):
     """جدول الهدايا بين المستخدمين"""
@@ -480,6 +541,41 @@ class DatabaseManager:
                 conn.execute(text("ALTER TABLE transactions ADD COLUMN decided_by_telegram_id INTEGER"))
             if "decided_at" not in columns:
                 conn.execute(text("ALTER TABLE transactions ADD COLUMN decided_at TIMESTAMP"))
+            if "public_id" not in columns:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN public_id VARCHAR(40)"))
+            if "assigned_admin_telegram_id" not in columns:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN assigned_admin_telegram_id INTEGER"))
+            if "assigned_admin_name" not in columns:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN assigned_admin_name VARCHAR(120)"))
+            if "accepted_at" not in columns:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN accepted_at TIMESTAMP"))
+            if "paid_at" not in columns:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN paid_at TIMESTAMP"))
+            if "admin_group_chat_id" not in columns:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN admin_group_chat_id VARCHAR(50)"))
+            if "admin_group_message_id" not in columns:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN admin_group_message_id INTEGER"))
+            if "user_track_chat_id" not in columns:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN user_track_chat_id VARCHAR(50)"))
+            if "user_track_message_id" not in columns:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN user_track_message_id INTEGER"))
+            if "status_before_cancel" not in columns:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN status_before_cancel VARCHAR(30)"))
+            if "reject_reason_code" not in columns:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN reject_reason_code VARCHAR(40)"))
+            if "payout_method_code" not in columns:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN payout_method_code VARCHAR(50)"))
+            try:
+                conn.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS "
+                        "ix_transactions_public_id ON transactions(public_id)"
+                    )
+                )
+            except Exception:
+                pass
+
+        self._seed_payout_methods()
 
         if "users" in inspector.get_table_names():
             user_columns = {col["name"] for col in inspector.get_columns("users")}
@@ -572,6 +668,85 @@ class DatabaseManager:
                     conn.execute(text("ALTER TABLE gift_code_usage ADD COLUMN status VARCHAR(20) DEFAULT 'success'"))
                 if "reject_reason" not in gu_cols:
                     conn.execute(text("ALTER TABLE gift_code_usage ADD COLUMN reject_reason TEXT"))
+
+    def _seed_payout_methods(self):
+        """طرق تقبيض افتراضية — شام كاش مفعّلة فقط حالياً."""
+        import json
+
+        defaults = [
+            {
+                "code": "shamcash",
+                "name": "💠 شام كاش",
+                "enabled": True,
+                "required_fields": ["shamcash_address"],
+                "instructions": (
+                    "ابعت عنوان محفظة شام كاش اللي بدك تستلم عليه\n"
+                    "انسخه مثل ما هو:\n\n"
+                    "راجع العنوان منيح\n"
+                    "لانه بعد التقبيض ما عاد فينا نقول كانت تجربة 😂"
+                ),
+                "sort_order": 10,
+            },
+            {
+                "code": "syriatel_cash",
+                "name": "📱 سيرياتيل كاش",
+                "enabled": False,
+                "required_fields": ["phone"],
+                "instructions": (
+                    "ابعت رقم سيرياتيل كاش اللي بدك تستلم عليه\n\n"
+                    "مثال\n09XXXXXXXX\n\n"
+                    "راجع الرقم منيح"
+                ),
+                "sort_order": 20,
+            },
+            {
+                "code": "usdt",
+                "name": "🌐 USDT",
+                "enabled": False,
+                "required_fields": ["wallet", "network"],
+                "instructions": (
+                    "ابعت عنوان محفظة USDT مع الشبكة الصحيحة\n"
+                    "الشبكة الغلط بتاخد المصاري"
+                ),
+                "sort_order": 30,
+            },
+            {
+                "code": "bank_transfer",
+                "name": "🏦 حوالة",
+                "enabled": False,
+                "required_fields": ["bank_details"],
+                "instructions": "ابعت بيانات الحوالة كاملة كما هي في البنك.",
+                "sort_order": 40,
+            },
+        ]
+        session = self.get_session()
+        try:
+            for item in defaults:
+                exists = (
+                    session.query(PayoutMethod)
+                    .filter(PayoutMethod.code == item["code"])
+                    .first()
+                )
+                if exists:
+                    continue
+                session.add(
+                    PayoutMethod(
+                        code=item["code"],
+                        name=item["name"],
+                        enabled=item["enabled"],
+                        required_fields=json.dumps(
+                            item["required_fields"], ensure_ascii=False
+                        ),
+                        instructions=item["instructions"],
+                        sort_order=item["sort_order"],
+                    )
+                )
+            session.commit()
+        except Exception:
+            session.rollback()
+        finally:
+            session.close()
+
     def get_session(self):
         """الحصول على جلسة قاعدة البيانات"""
         return self.SessionLocal()

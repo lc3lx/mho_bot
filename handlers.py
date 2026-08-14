@@ -933,11 +933,103 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         order_id = int(data.replace("wd_track_", "", 1))
         await WithdrawFlow.track_order(update, context, order_id)
         return
+    if data.startswith("wd_support_"):
+        from withdraw_flow import WithdrawFlow
+        order_id = int(data.replace("wd_support_", "", 1))
+        await WithdrawFlow.start_support(update, context, order_id)
+        return
+    if data.startswith("admin_wd_accept_"):
+        if update.effective_user.id not in Config.ADMIN_IDS:
+            return
+        from withdraw_flow import WithdrawFlow
+        order_id = int(data.replace("admin_wd_accept_", "", 1))
+        ok, msg = await WithdrawFlow.admin_accept_order(
+            context, order_id, admin_user=update.effective_user
+        )
+        await interactive_answer(query, msg, alert=True)
+        return
+    if data.startswith("admin_wd_transfer_"):
+        if update.effective_user.id not in Config.ADMIN_IDS:
+            return
+        from withdraw_flow import WithdrawFlow
+        order_id = int(data.replace("admin_wd_transfer_", "", 1))
+        ok, msg = await WithdrawFlow.admin_transfer_to_me(
+            context, order_id, admin_user=update.effective_user
+        )
+        await interactive_answer(query, msg, alert=True)
+        return
+    if data.startswith("admin_wd_pay_ask_"):
+        if update.effective_user.id not in Config.ADMIN_IDS:
+            return
+        from withdraw_flow import WithdrawFlow
+        import payout_service as ps
+        order_id = int(data.replace("admin_wd_pay_ask_", "", 1))
+        tx = WithdrawFlow._get_tx(order_id)
+        if not tx:
+            await interactive_answer(query, "غير موجود", alert=True)
+            return
+        net = float(tx.net_amount or 0)
+        dest = tx.withdraw_destination or "—"
+        await safe_edit_callback_message(
+            update,
+            (
+                "هل تم تقبيض المستخدم فعليا؟\n\n"
+                f"الصافي {format_currency(net)}\n"
+                f"العنوان {dest}"
+            ),
+            reply_markup=Keyboards.admin_withdraw_pay_confirm_menu(order_id),
+            context=context,
+        )
+        return
+    if data.startswith("admin_wd_pay_yes_"):
+        if update.effective_user.id not in Config.ADMIN_IDS:
+            return
+        from withdraw_flow import WithdrawFlow
+        order_id = int(data.replace("admin_wd_pay_yes_", "", 1))
+        ok, msg = await WithdrawFlow.admin_mark_paid(
+            context, order_id, admin_user=update.effective_user
+        )
+        await interactive_answer(query, msg, alert=True)
+        return
+    if data.startswith("admin_wd_pay_back_"):
+        if update.effective_user.id not in Config.ADMIN_IDS:
+            return
+        from withdraw_flow import WithdrawFlow
+        import withdraw_ops as ops
+        order_id = int(data.replace("admin_wd_pay_back_", "", 1))
+        tx = WithdrawFlow._get_tx(order_id)
+        if not tx:
+            await interactive_answer(query, "غير موجود", alert=True)
+            return
+        user = db.get_user_by_db_id(tx.user_id)
+        text = ops.build_admin_order_text(tx, user, full_address=True)
+        await safe_edit_callback_message(
+            update,
+            text,
+            reply_markup=Keyboards.admin_withdraw_order_menu(
+                order_id,
+                assigned=bool(getattr(tx, "assigned_admin_telegram_id", None)),
+                cancel_req=(tx.status == "cancel_requested"),
+            ),
+            context=context,
+        )
+        return
+    if data.startswith("admin_wd_to_support_"):
+        if update.effective_user.id not in Config.ADMIN_IDS:
+            return
+        from withdraw_flow import WithdrawFlow
+        order_id = int(data.replace("admin_wd_to_support_", "", 1))
+        ok, msg = await WithdrawFlow.admin_forward_to_support(
+            context, order_id, admin_user=update.effective_user
+        )
+        await interactive_answer(query, msg, alert=True)
+        return
     if data.startswith("admin_wd_paid_"):
         if update.effective_user.id not in Config.ADMIN_IDS:
             return
         from withdraw_flow import WithdrawFlow
         order_id = int(data.replace("admin_wd_paid_", "", 1))
+        # توافق خلفي — يطلب تأكيد أولاً عبر pay_ask
         ok, msg = await WithdrawFlow.admin_mark_paid(
             context, order_id, admin_user=update.effective_user
         )
@@ -953,17 +1045,53 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         )
         await interactive_answer(query, msg, alert=True)
         return
-    if data.startswith("admin_wd_reject_"):
+    if data.startswith("admin_wd_rej_"):
         if update.effective_user.id not in Config.ADMIN_IDS:
             return
         from withdraw_flow import WithdrawFlow
+        import payout_service as ps
+        # admin_wd_rej_{code}_{order_id}
+        rest = data.replace("admin_wd_rej_", "", 1)
+        # codes: bad_shamcash, account_issue, wrong_amount, duplicate, other
+        known = list(ps.REJECT_REASONS.keys())
+        code = None
+        order_id = None
+        for c in sorted(known, key=len, reverse=True):
+            prefix = c + "_"
+            if rest.startswith(prefix):
+                code = c
+                order_id = int(rest[len(prefix):])
+                break
+        if not code or order_id is None:
+            await interactive_answer(query, "سبب غير معروف", alert=True)
+            return
+        if code == "other":
+            context.user_data["admin_state"] = "waiting_wd_reject_reason"
+            context.user_data["admin_wd_reject_id"] = order_id
+            await safe_edit_callback_message(
+                update,
+                f"❌ ارفض السحب #{order_id}\n\nأرسل سبب الرفض:",
+                reply_markup=Keyboards.cancel_admin_operation(),
+                context=context,
+            )
+            return
+        ok, msg = await WithdrawFlow.admin_reject_withdraw(
+            context,
+            order_id,
+            reason=ps.REJECT_REASONS.get(code, code),
+            admin_user=update.effective_user,
+            reason_code=code,
+        )
+        await interactive_answer(query, msg, alert=True)
+        return
+    if data.startswith("admin_wd_reject_"):
+        if update.effective_user.id not in Config.ADMIN_IDS:
+            return
         order_id = int(data.replace("admin_wd_reject_", "", 1))
-        context.user_data["admin_state"] = "waiting_wd_reject_reason"
-        context.user_data["admin_wd_reject_id"] = order_id
         await safe_edit_callback_message(
             update,
-            f"❌ ارفض السحب #{order_id}\n\nأرسل سبب الرفض:",
-            reply_markup=Keyboards.cancel_admin_operation(),
+            f"❌ رفض الطلب #{order_id}\n\nاختار السبب:",
+            reply_markup=Keyboards.admin_withdraw_reject_reasons_menu(order_id),
             context=context,
         )
         return
@@ -989,6 +1117,63 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             reply_markup=Keyboards.cancel_admin_operation(),
             context=context,
         )
+        return
+    if data.startswith("sup_ticket_reply_"):
+        if update.effective_user.id not in Config.ADMIN_IDS:
+            return
+        import withdraw_ops as ops
+        ticket_id = int(data.replace("sup_ticket_reply_", "", 1))
+        context.user_data["admin_state"] = "waiting_support_ticket_reply"
+        context.user_data["support_reply_ticket_id"] = ticket_id
+        await safe_edit_callback_message(
+            update,
+            f"💬 رد على التذكرة #{ticket_id}\n\nأرسل نص الرد:",
+            reply_markup=Keyboards.cancel_admin_operation(),
+            context=context,
+        )
+        return
+    if data.startswith("sup_ticket_open_wd_"):
+        if update.effective_user.id not in Config.ADMIN_IDS:
+            return
+        from withdraw_flow import WithdrawFlow
+        import withdraw_ops as ops
+        order_id = int(data.replace("sup_ticket_open_wd_", "", 1))
+        tx = WithdrawFlow._get_tx(order_id)
+        if not tx:
+            await interactive_answer(query, "الطلب غير موجود", alert=True)
+            return
+        user = db.get_user_by_db_id(tx.user_id)
+        text = ops.build_admin_order_text(tx, user, full_address=True)
+        await safe_edit_callback_message(
+            update,
+            text,
+            reply_markup=Keyboards.admin_withdraw_order_menu(
+                order_id,
+                assigned=bool(getattr(tx, "assigned_admin_telegram_id", None)),
+                cancel_req=(tx.status == "cancel_requested"),
+            ),
+            context=context,
+        )
+        return
+    if data.startswith("sup_ticket_resolve_"):
+        if update.effective_user.id not in Config.ADMIN_IDS:
+            return
+        import withdraw_ops as ops
+        ticket_id = int(data.replace("sup_ticket_resolve_", "", 1))
+        ok, msg = await ops.support_resolve(
+            context, ticket_id, update.effective_user
+        )
+        await interactive_answer(query, msg, alert=True)
+        return
+    if data.startswith("sup_ticket_escalate_"):
+        if update.effective_user.id not in Config.ADMIN_IDS:
+            return
+        import withdraw_ops as ops
+        ticket_id = int(data.replace("sup_ticket_escalate_", "", 1))
+        ok, msg = await ops.support_escalate(
+            context, ticket_id, update.effective_user
+        )
+        await interactive_answer(query, msg, alert=True)
         return
     if data == "ichancy_topup_know_id":
         await IchancyHandler.start_topup(update, context)
@@ -1155,7 +1340,11 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         return
     if data == "withdraw_edit_data":
         from withdraw_flow import WithdrawFlow
-        await WithdrawFlow.show_methods(update, context)
+        method = context.user_data.get("method")
+        if method:
+            await WithdrawFlow.choose_method(update, context, method)
+        else:
+            await WithdrawFlow.show_methods(update, context)
         return
     if data == "withdraw_abort":
         context.user_data.clear()
@@ -1257,6 +1446,28 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             await AdminHandler.test_current_proxy(update, context)
         elif data == "admin_proxy_disable":
             await AdminHandler.disable_proxy(update, context)
+        elif data == "admin_wd_settings":
+            await AdminHandler.withdraw_settings_menu(update, context)
+        elif data == "admin_wd_methods":
+            await AdminHandler.payout_methods_menu(update, context)
+        elif data == "admin_wd_method_add":
+            await AdminHandler.payout_method_add_start(update, context)
+        elif data.startswith("admin_wd_method_"):
+            mid = int(data.replace("admin_wd_method_", "", 1))
+            await AdminHandler.payout_method_detail(update, context, mid)
+        elif data.startswith("admin_wd_mtoggle_"):
+            mid = int(data.replace("admin_wd_mtoggle_", "", 1))
+            await AdminHandler.payout_method_toggle(update, context, mid)
+        elif data.startswith("admin_wd_medit_"):
+            # admin_wd_medit_{field}_{id}
+            rest = data.replace("admin_wd_medit_", "", 1)
+            field, _, sid = rest.rpartition("_")
+            await AdminHandler.payout_method_edit_start(
+                update, context, field, int(sid)
+            )
+        elif data.startswith("admin_wd_set_"):
+            key = data.replace("admin_wd_set_", "", 1)
+            await AdminHandler.withdraw_setting_prompt(update, context, key)
         elif data == "admin_rate_shamcash":
             await AdminHandler.start_set_rate(update, context, "shamcash")
         elif data == "admin_rate_usdt":
@@ -1506,8 +1717,43 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, reply_markup=Keyboards.admin_panel())
         return
 
+    if is_admin and admin_state == "waiting_support_ticket_reply":
+        import withdraw_ops as ops
+        ticket_id = int(context.user_data.pop("support_reply_ticket_id", 0) or 0)
+        context.user_data.pop("admin_state", None)
+        ok, msg = await ops.support_send_reply(
+            context, ticket_id, update.message.text.strip(), update.effective_user
+        )
+        await update.message.reply_text(msg, reply_markup=Keyboards.admin_panel())
+        return
+
+    if is_admin and admin_state == "waiting_wd_setting_value":
+        await AdminHandler.withdraw_setting_save(
+            update, context, update.message.text.strip()
+        )
+        return
+
+    if is_admin and admin_state == "waiting_payout_method_add":
+        await AdminHandler.payout_method_add_save(
+            update, context, update.message.text.strip()
+        )
+        return
+
+    if is_admin and admin_state == "waiting_payout_method_edit":
+        await AdminHandler.payout_method_edit_save(
+            update, context, update.message.text.strip()
+        )
+        return
+
     if user and not user_accepted_terms(user) and not is_admin:
         await send_consent_gate(update, context)
+        return
+
+    if user_state == "waiting_payout_support_msg":
+        from withdraw_flow import WithdrawFlow
+        await WithdrawFlow.handle_support_message(
+            update, context, update.message.text or ""
+        )
         return
 
     if user_state == "waiting_for_withdraw_amount":

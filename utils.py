@@ -32,9 +32,13 @@ def tg_bold(value) -> str:
 
 def calculate_withdrawal_fee(amount: float, fee_percentage: float = None) -> tuple[float, float]:
     """حساب رسوم السحب: (الرسوم، صافي المبلغ للمستلم)"""
-    from config import Config
     if fee_percentage is None:
-        fee_percentage = Config.WITHDRAWAL_FEE_PERCENTAGE
+        try:
+            import payout_service as ps
+            fee_percentage = ps.get_fee_percent()
+        except Exception:
+            from config import Config
+            fee_percentage = Config.WITHDRAWAL_FEE_PERCENTAGE
     fee = round(amount * (fee_percentage / 100), 2)
     net = round(amount - fee, 2)
     return fee, net

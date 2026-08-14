@@ -1,0 +1,950 @@
+"""
+عمليات إدارة التقبيض + تذاكر الدعم + إشعارات الكروب.
+يُستدعى من withdraw_flow لتفادي تضخيم الملف الأساسي.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime
+from typing import Optional
+
+from telegram.error import TelegramError
+
+from config import Config
+from database import (
+    DatabaseManager,
+    SupportTicket,
+    SupportTicketMessage,
+    Transaction,
+    User,
+)
+from keyboards import Keyboards
+import payout_service as ps
+from utils import format_currency, get_user_display_name, tg_code
+
+logger = logging.getLogger(__name__)
+db = DatabaseManager()
+
+ST_PENDING_REVIEW = "pending_review"
+ST_AWAITING_PAYOUT = "awaiting_payout"
+ST_CANCEL_REQUESTED = "cancel_requested"
+ST_PROCESSING = "processing"
+ST_PAID = "paid"
+ST_CANCELLED = "cancelled"
+ST_REJECTED = "rejected"
+
+ACTIVE_CANCELLABLE = {
+    ST_PENDING_REVIEW,
+    ST_AWAITING_PAYOUT,
+    ST_PROCESSING,
+    "pending",
+}
+BLOCK_CANCEL_APPROVE = {ST_PAID, "completed"}
+
+STATUS_AR = {
+    ST_PENDING_REVIEW: "⏳ بانتظار المراجعة",
+    ST_AWAITING_PAYOUT: "⏳ بانتظار المراجعة",
+    ST_CANCEL_REQUESTED: "↩️ إلغاء قيد المراجعة",
+    ST_PROCESSING: "🔎 قيد التنفيذ",
+    ST_PAID: "✅ تم التقبيض",
+    ST_CANCELLED: "↩️ ملغي",
+    ST_REJECTED: "❌ مرفوض",
+    "pending": "⏳ بانتظار المراجعة",
+    "completed": "✅ تم التقبيض",
+    "failed": "❌ مرفوض",
+    "cancelled": "↩️ ملغي",
+}
+
+
+def status_label(status: str) -> str:
+    return STATUS_AR.get(status or "", status or "—")
+
+
+def method_label(method: str) -> str:
+    return ps.method_display_name(method)
+
+
+def fee_breakdown(amount: float) -> tuple[float, float, float]:
+    fee, net = ps.calculate_fee(amount)
+    return fee, net, 0.0
+
+
+def admin_name(admin_user) -> str:
+    if not admin_user:
+        return "admin"
+    uname = getattr(admin_user, "username", None)
+    if uname:
+        return f"@{uname}"
+    first = getattr(admin_user, "first_name", None) or ""
+    last = getattr(admin_user, "last_name", None) or ""
+    full = f"{first} {last}".strip()
+    return full or str(getattr(admin_user, "id", "admin"))
+
+
+def stamp_decision(tx: Transaction, admin_user, note: str = ""):
+    now = datetime.utcnow()
+    tx.decided_at = now
+    tx.processed_at = now
+    if admin_user:
+        tx.decided_by_telegram_id = int(getattr(admin_user, "id", 0) or 0) or None
+        tx.decided_by_name = admin_name(admin_user)
+    if note:
+        stamp = f"[{now.isoformat()} | {tx.decided_by_name or 'admin'}] {note}"
+        tx.admin_notes = ((tx.admin_notes or "").rstrip() + "\n" + stamp).strip()
+
+
+def order_ref(tx: Transaction) -> str:
+    return getattr(tx, "public_id", None) or str(tx.id)
+
+
+def get_tx(order_id: int) -> Optional[Transaction]:
+    session = db.get_session()
+    try:
+        tx = session.query(Transaction).filter(Transaction.id == order_id).first()
+        return db._detach(session, tx)
+    finally:
+        session.close()
+
+
+def resolve_notify_chat_ids(tx: Transaction) -> list:
+    ids = []
+    pm = ps.get_method(getattr(tx, "payout_method_code", None) or tx.method or "")
+    if pm and pm.admin_group_id:
+        try:
+            ids.append(int(pm.admin_group_id))
+        except (TypeError, ValueError):
+            pass
+    gid = ps.get_payout_admin_group_id()
+    if gid and gid not in ids:
+        ids.append(gid)
+    if not ids:
+        ids.extend(Config.ADMIN_IDS)
+    return ids
+
+
+def build_admin_order_text(tx: Transaction, user: User, *, full_address: bool = True) -> str:
+    fee = float(tx.fee_amount or 0)
+    net = float(tx.net_amount or 0)
+    profit = float(tx.profit_amount or 0)
+    dest = tx.withdraw_destination or "—"
+    if not full_address:
+        dest = ps.mask_destination(dest)
+    ichancy = getattr(user, "ichancy_username", None) or "—"
+    if tx.status in (ST_PENDING_REVIEW, "pending", ST_AWAITING_PAYOUT):
+        title = "👑 طلب تقبيض جديد"
+    else:
+        title = f"👑 طلب تقبيض — {status_label(tx.status)}"
+    lines = [
+        title,
+        f"🧾 رقم الطلب {order_ref(tx)} (#{tx.id})",
+        "",
+        f"👤 المستخدم {get_user_display_name(user)}",
+        f"🆔 تيليغرام {getattr(user, 'telegram_id', '')}",
+        f"🎮 حساب iChancy {ichancy}",
+        f"💰 مبلغ السحب {format_currency(tx.amount)}",
+        f"📈 الربح المحتسب {format_currency(profit)}",
+        f"🧮 العمولة {format_currency(fee)}",
+        f"✅ الصافي المطلوب تقبيضه {format_currency(net)}",
+        f"💠 الطريقة {method_label(tx.method or getattr(tx, 'payout_method_code', None))}",
+        f"📍 عنوان {dest}",
+        f"🕒 وقت الطلب {tx.created_at}",
+        f"📌 الحالة {status_label(tx.status)}",
+    ]
+    if getattr(tx, "assigned_admin_name", None):
+        lines.append(f"👤 استلمه {tx.assigned_admin_name}")
+        if getattr(tx, "accepted_at", None):
+            lines.append(f"🕒 وقت الاستلام {tx.accepted_at}")
+    if tx.status == ST_PAID and getattr(tx, "paid_at", None):
+        lines.append("✅ تم التقبيض")
+        lines.append(
+            f"👤 نفذها {tx.decided_by_name or tx.assigned_admin_name or '—'}"
+        )
+        lines.append(f"🕒 {tx.paid_at}")
+    if tx.status == ST_CANCEL_REQUESTED:
+        lines.append("")
+        lines.append("🚨 المستخدم طلب إلغاء السحب")
+        if tx.cancel_requested_at:
+            lines.append(f"🕒 طلب الإلغاء {tx.cancel_requested_at}")
+    return "\n".join(lines)
+
+
+async def refresh_admin_group_message(context, order_id: int) -> bool:
+    tx = get_tx(order_id)
+    if not tx or not getattr(tx, "admin_group_chat_id", None) or not getattr(
+        tx, "admin_group_message_id", None
+    ):
+        return False
+    user = db.get_user_by_db_id(tx.user_id)
+    text = build_admin_order_text(tx, user, full_address=True)
+    markup = Keyboards.admin_withdraw_order_menu(
+        order_id,
+        assigned=bool(getattr(tx, "assigned_admin_telegram_id", None)),
+        cancel_req=(tx.status == ST_CANCEL_REQUESTED),
+    )
+    if tx.status in (ST_PAID, ST_CANCELLED, ST_REJECTED, "completed"):
+        markup = None
+    try:
+        await context.bot.edit_message_text(
+            chat_id=int(tx.admin_group_chat_id),
+            message_id=int(tx.admin_group_message_id),
+            text=text,
+            reply_markup=markup,
+        )
+        return True
+    except TelegramError:
+        return False
+
+
+async def notify_admins_new(context, order_id: int):
+    tx = get_tx(order_id)
+    if not tx:
+        return
+    user = db.get_user_by_db_id(tx.user_id)
+    text = build_admin_order_text(tx, user, full_address=True)
+    markup = Keyboards.admin_withdraw_order_menu(order_id, assigned=False)
+    primary_chat = None
+    primary_msg = None
+    for chat_id in resolve_notify_chat_ids(tx):
+        try:
+            sent = await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=markup,
+            )
+            if primary_chat is None:
+                primary_chat = chat_id
+                primary_msg = sent.message_id
+        except TelegramError:
+            logger.exception("فشل إرسال طلب سحب لـ %s", chat_id)
+    if primary_chat is not None:
+        session = db.get_session()
+        try:
+            row = session.query(Transaction).filter(Transaction.id == order_id).first()
+            if row:
+                row.admin_group_chat_id = str(primary_chat)
+                row.admin_group_message_id = primary_msg
+                session.commit()
+        finally:
+            session.close()
+
+
+async def notify_admins_cancel(context, order_id: int):
+    edited = await refresh_admin_group_message(context, order_id)
+    if edited:
+        return
+    tx = get_tx(order_id)
+    if not tx:
+        return
+    user = db.get_user_by_db_id(tx.user_id)
+    text = build_admin_order_text(tx, user, full_address=True)
+    markup = Keyboards.admin_withdraw_order_menu(
+        order_id,
+        assigned=bool(getattr(tx, "assigned_admin_telegram_id", None)),
+        cancel_req=True,
+    )
+    for chat_id in resolve_notify_chat_ids(tx):
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id, text=text, reply_markup=markup
+            )
+        except TelegramError:
+            pass
+
+
+async def admin_accept_order(context, order_id: int, admin_user=None):
+    session = db.get_session()
+    try:
+        tx = session.query(Transaction).filter(Transaction.id == order_id).first()
+        if not tx:
+            return False, "الطلب غير موجود"
+        if tx.status in (
+            ST_PAID,
+            ST_CANCELLED,
+            ST_REJECTED,
+            "completed",
+            "failed",
+            "cancelled",
+        ):
+            return False, f"لا يمكن: {status_label(tx.status)}"
+        if tx.status == ST_CANCEL_REQUESTED:
+            return False, "يوجد طلب إلغاء — عالج الإلغاء أولاً"
+
+        admin_tid = int(getattr(admin_user, "id", 0) or 0)
+        if (
+            getattr(tx, "assigned_admin_telegram_id", None)
+            and tx.assigned_admin_telegram_id != admin_tid
+            and tx.status == ST_PROCESSING
+        ):
+            return (
+                False,
+                f"الطلب محجوز لـ {tx.assigned_admin_name or tx.assigned_admin_telegram_id}",
+            )
+
+        now = datetime.utcnow()
+        tx.assigned_admin_telegram_id = admin_tid or None
+        tx.assigned_admin_name = admin_name(admin_user)
+        tx.accepted_at = now
+        tx.status = ST_PROCESSING
+        stamp_decision(tx, admin_user, "استلام الطلب — قيد التنفيذ")
+        user = session.query(User).filter(User.id == tx.user_id).first()
+        telegram_id = user.telegram_id if user else None
+        public_id = order_ref(tx)
+        session.commit()
+    finally:
+        session.close()
+
+    if telegram_id:
+        text = (
+            "🔎 طلبك صار قيد التنفيذ\n\n"
+            f"🧾 رقم الطلب {tg_code(public_id)}\n\n"
+            "الموظف استلمه\n"
+            "هلق صار في حدا رسمي يتحمل المسؤولية 😂"
+        )
+        try:
+            await context.bot.send_message(
+                chat_id=telegram_id,
+                text=text,
+                parse_mode="HTML",
+                reply_markup=Keyboards.withdraw_submitted_menu(order_id),
+            )
+        except TelegramError:
+            pass
+    await refresh_admin_group_message(context, order_id)
+    return True, "تم استلام الطلب"
+
+
+async def admin_transfer_to_me(context, order_id: int, admin_user=None):
+    session = db.get_session()
+    try:
+        tx = session.query(Transaction).filter(Transaction.id == order_id).first()
+        if not tx:
+            return False, "غير موجود"
+        if tx.status in (ST_PAID, ST_CANCELLED, ST_REJECTED, "completed"):
+            return False, f"لا يمكن: {status_label(tx.status)}"
+        admin_tid = int(getattr(admin_user, "id", 0) or 0)
+        prev = getattr(tx, "assigned_admin_name", None)
+        tx.assigned_admin_telegram_id = admin_tid or None
+        tx.assigned_admin_name = admin_name(admin_user)
+        tx.accepted_at = datetime.utcnow()
+        if tx.status in (ST_PENDING_REVIEW, ST_AWAITING_PAYOUT, "pending"):
+            tx.status = ST_PROCESSING
+        stamp_decision(
+            tx, admin_user, f"تحويل من {prev or '—'} → {admin_name(admin_user)}"
+        )
+        session.commit()
+    finally:
+        session.close()
+    await refresh_admin_group_message(context, order_id)
+    return True, "تم التحويل إليك"
+
+
+async def admin_mark_paid(context, order_id: int, admin_user=None):
+    session = db.get_session()
+    was_cancel = False
+    try:
+        tx = session.query(Transaction).filter(Transaction.id == order_id).first()
+        if not tx:
+            return False, "غير موجود"
+        if tx.status == ST_PAID or tx.status == "completed":
+            return False, "تم التقبيض مسبقاً — ممنوع التكرار"
+        if tx.status in (ST_CANCELLED, ST_REJECTED, "cancelled", "failed"):
+            return False, f"لا يمكن: {status_label(tx.status)}"
+
+        admin_tid = int(getattr(admin_user, "id", 0) or 0)
+        if (
+            getattr(tx, "assigned_admin_telegram_id", None)
+            and admin_tid
+            and tx.assigned_admin_telegram_id != admin_tid
+        ):
+            return (
+                False,
+                f"الطلب محجوز لـ {tx.assigned_admin_name} — حوّله أولاً",
+            )
+
+        user = session.query(User).filter(User.id == tx.user_id).first()
+        if tx.status == ST_CANCEL_REQUESTED:
+            was_cancel = True
+            tx.cancel_rejection_reason = "تم التقبيض أثناء طلب الإلغاء"
+
+        amount = float(tx.amount or 0)
+        fee, net, profit = fee_breakdown(amount)
+        tx.fee_amount = fee
+        tx.net_amount = net
+        tx.profit_amount = float(tx.profit_amount or profit)
+
+        if user:
+            user.reserved_balance = max(
+                0.0, float(user.reserved_balance or 0) - amount
+            )
+        method_txt = method_label(tx.method or getattr(tx, "payout_method_code", None))
+        if tx.crypto_currency and tx.crypto_network:
+            method_txt = f"{tx.crypto_currency}/{tx.crypto_network}"
+
+        now = datetime.utcnow()
+        tx.status = ST_PAID
+        tx.paid_at = now
+        if not getattr(tx, "assigned_admin_telegram_id", None) and admin_user:
+            tx.assigned_admin_telegram_id = admin_tid or None
+            tx.assigned_admin_name = admin_name(admin_user)
+        stamp_decision(
+            tx, admin_user, f"تأكيد التقبيض — عمولة {fee} — صافي {net}"
+        )
+        telegram_id = user.telegram_id if user else None
+        user_db_id = user.id if user else None
+        public_id = order_ref(tx)
+        session.commit()
+    finally:
+        session.close()
+
+    if telegram_id and was_cancel:
+        try:
+            await context.bot.send_message(
+                chat_id=telegram_id,
+                text=(
+                    "❌ ما عاد فينا نلغي السحب\n\n"
+                    "العملية اتقبضت\n\n"
+                    f"🧾 رقم الطلب {tg_code(public_id)}"
+                ),
+                parse_mode="HTML",
+                reply_markup=Keyboards.withdraw_locked_menu(order_id),
+            )
+        except TelegramError:
+            pass
+
+    if telegram_id:
+        comment = ""
+        try:
+            import fun_service
+
+            if user_db_id:
+                fun_service.track_order_success(user_db_id)
+            comment = f"\n\n📢 تعليق المحاسب\n{fun_service.pick_receipt_comment()}"
+        except Exception:
+            pass
+        text = (
+            "✅ تم التقبيض\n\n"
+            f"💰 مبلغ السحب {format_currency(amount)}\n"
+            f"🧮 العمولة {format_currency(fee)}\n"
+            f"✅ الصافي المقبوض {format_currency(net)}\n"
+            f"{method_txt}\n"
+            f"🧾 رقم الطلب {tg_code(public_id)}\n\n"
+            "خلصت العملية\n"
+            "المحاسب وقع الورقة قبل ما حدا يغير رأيه 😂"
+            f"{comment}"
+        )
+        try:
+            await context.bot.send_message(
+                chat_id=telegram_id,
+                text=text,
+                parse_mode="HTML",
+                reply_markup=Keyboards.withdraw_paid_menu(order_id),
+            )
+        except TelegramError:
+            pass
+
+    await refresh_admin_group_message(context, order_id)
+    return True, "تم التقبيض"
+
+
+async def admin_reject_withdraw(
+    context, order_id: int, reason: str = "", admin_user=None, reason_code: str = ""
+):
+    session = db.get_session()
+    try:
+        tx = session.query(Transaction).filter(Transaction.id == order_id).first()
+        if not tx:
+            return False, "غير موجود"
+        if tx.status in (ST_PAID, "completed"):
+            return False, "تم التقبيض مسبقاً — ما عاد ممكن الرفض مع إرجاع"
+        user = session.query(User).filter(User.id == tx.user_id).first()
+        amount = float(tx.amount or 0)
+        already_closed = tx.status in (
+            ST_CANCELLED,
+            ST_REJECTED,
+            "cancelled",
+            "failed",
+        )
+        if user and not already_closed:
+            user.balance = float(user.balance or 0) + amount
+            user.reserved_balance = max(
+                0.0, float(user.reserved_balance or 0) - amount
+            )
+        if reason_code:
+            tx.reject_reason_code = reason_code
+            if not reason:
+                reason = ps.REJECT_REASONS.get(reason_code, reason_code)
+        tx.status = ST_REJECTED
+        tx.fee_amount = 0.0
+        tx.net_amount = 0.0
+        stamp_decision(
+            tx, admin_user, f"رفض السحب قبل التقبيض — إرجاع كامل — {reason}"
+        )
+        new_balance = float(user.balance or 0) if user else 0
+        telegram_id = user.telegram_id if user else None
+        public_id = order_ref(tx)
+        session.commit()
+    finally:
+        session.close()
+
+    if telegram_id:
+        text = (
+            "❌ ما قدرنا ننفذ طلب التقبيض\n\n"
+            f"السبب\n{reason or '—'}\n\n"
+            "رجعنا المبلغ كامل لمحفظتك\n\n"
+            f"💰 المبلغ الراجع {format_currency(amount)}\n"
+            f"💎 رصيدك الحالي {format_currency(new_balance)}\n"
+            f"🧾 رقم الطلب {tg_code(public_id)}"
+        )
+        try:
+            await context.bot.send_message(
+                chat_id=telegram_id,
+                text=text,
+                parse_mode="HTML",
+                reply_markup=Keyboards.withdraw_rejected_menu(order_id),
+            )
+        except TelegramError:
+            pass
+    await refresh_admin_group_message(context, order_id)
+    return True, "مرفوض مع إرجاع الرصيد"
+
+
+async def admin_approve_cancel(context, order_id: int, admin_user=None):
+    session = db.get_session()
+    try:
+        tx = session.query(Transaction).filter(Transaction.id == order_id).first()
+        if not tx:
+            return False, "الطلب غير موجود"
+        if tx.status in BLOCK_CANCEL_APPROVE:
+            return False, "ممنوع: تم التقبيض"
+        if tx.status != ST_CANCEL_REQUESTED:
+            return False, f"حالة الطلب الآن: {status_label(tx.status)}"
+
+        user = session.query(User).filter(User.id == tx.user_id).first()
+        amount = float(tx.amount or 0)
+        if user:
+            user.balance = float(user.balance or 0) + amount
+            user.reserved_balance = max(
+                0.0, float(user.reserved_balance or 0) - amount
+            )
+        tx.status = ST_CANCELLED
+        tx.fee_amount = 0.0
+        tx.net_amount = 0.0
+        stamp_decision(
+            tx, admin_user, "موافقة على إلغاء السحب — إرجاع كامل بدون عمولة"
+        )
+        session.commit()
+        telegram_id = user.telegram_id if user else None
+        new_balance = float(user.balance or 0) if user else 0
+        public_id = order_ref(tx)
+    finally:
+        session.close()
+
+    if telegram_id:
+        text = (
+            "✅ تم إلغاء السحب\n\n"
+            f"💰 رجعنا {format_currency(amount)} لمحفظتك\n"
+            f"💎 رصيدك الحالي {format_currency(new_balance)}\n"
+            f"🧾 رقم الطلب {tg_code(public_id)}\n\n"
+            "المحاسب رجع المصاري\n"
+            "بس كتب بالملاحظات انك غيرت رأيك 😂"
+        )
+        try:
+            await context.bot.send_message(
+                chat_id=telegram_id,
+                text=text,
+                parse_mode="HTML",
+                reply_markup=Keyboards.withdraw_cancelled_done_menu(),
+            )
+        except TelegramError:
+            pass
+    await refresh_admin_group_message(context, order_id)
+    return True, "تم إلغاء السحب وإرجاع المبلغ"
+
+
+async def admin_reject_cancel(
+    context, order_id: int, reason: str = "", paid: bool = False, admin_user=None
+):
+    session = db.get_session()
+    try:
+        tx = session.query(Transaction).filter(Transaction.id == order_id).first()
+        if not tx:
+            return False, "الطلب غير موجود"
+        user = session.query(User).filter(User.id == tx.user_id).first()
+        telegram_id = user.telegram_id if user else None
+        public_id = order_ref(tx)
+
+        if paid or tx.status in BLOCK_CANCEL_APPROVE:
+            tx.cancel_rejection_reason = reason or "تم التقبيض"
+            if tx.status == ST_CANCEL_REQUESTED:
+                tx.status = ST_PAID if paid else ST_PROCESSING
+            stamp_decision(tx, admin_user, f"رفض إلغاء بعد التقبيض — {reason}")
+            session.commit()
+            msg = (
+                "❌ ما عاد فينا نلغي السحب\n\n"
+                "العملية اتقبضت أو فاتت بالتنفيذ النهائي\n\n"
+                f"🧾 رقم الطلب {tg_code(public_id)}"
+            )
+            markup = Keyboards.withdraw_locked_menu(order_id)
+        else:
+            if tx.status != ST_CANCEL_REQUESTED:
+                return False, f"حالة الطلب: {status_label(tx.status)}"
+            restore = getattr(tx, "status_before_cancel", None) or ST_PENDING_REVIEW
+            if restore == ST_CANCEL_REQUESTED:
+                restore = ST_PENDING_REVIEW
+            tx.cancel_rejection_reason = reason or "رفض إداري"
+            tx.status = restore
+            stamp_decision(tx, admin_user, f"رفض طلب الإلغاء — {reason}")
+            session.commit()
+            msg = (
+                "❌ ما تمت الموافقة على الإلغاء\n\n"
+                f"السبب\n{reason or '—'}\n\n"
+                "طلب السحب لسا شغال بشكل طبيعي\n\n"
+                f"🧾 رقم الطلب {tg_code(public_id)}"
+            )
+            markup = Keyboards.withdraw_submitted_menu(order_id)
+    finally:
+        session.close()
+
+    if telegram_id:
+        try:
+            await context.bot.send_message(
+                chat_id=telegram_id,
+                text=msg,
+                parse_mode="HTML",
+                reply_markup=markup,
+            )
+        except TelegramError:
+            pass
+    await refresh_admin_group_message(context, order_id)
+    return True, "تم رفض طلب الإلغاء"
+
+
+async def admin_forward_to_support(context, order_id: int, admin_user=None):
+    tx = get_tx(order_id)
+    if not tx:
+        return False, "غير موجود"
+    user = db.get_user_by_db_id(tx.user_id)
+    text = (
+        f"🚑 تحويل للدعم من الإدارة\n"
+        f"طلب {order_ref(tx)} (#{order_id})\n"
+        f"المستخدم: {get_user_display_name(user)}\n"
+        f"المبلغ: {format_currency(tx.amount)}\n"
+        f"الحالة: {status_label(tx.status)}\n"
+        f"من: {admin_name(admin_user)}"
+    )
+    support_gid = ps.get_support_group_id()
+    targets = [support_gid] if support_gid else list(Config.ADMIN_IDS)
+    for chat_id in targets:
+        if not chat_id:
+            continue
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=Keyboards.admin_withdraw_order_menu(
+                    order_id,
+                    assigned=bool(getattr(tx, "assigned_admin_telegram_id", None)),
+                    cancel_req=(tx.status == ST_CANCEL_REQUESTED),
+                ),
+            )
+        except TelegramError:
+            pass
+    session = db.get_session()
+    try:
+        row = session.query(Transaction).filter(Transaction.id == order_id).first()
+        if row:
+            stamp_decision(row, admin_user, "تحويل للدعم")
+            session.commit()
+    finally:
+        session.close()
+    return True, "تم التحويل للدعم"
+
+
+# ─── دعم ─────────────────────────────────────────────────
+
+async def start_support(update, context, order_id: int):
+    from withdraw_flow import WithdrawFlow
+
+    user = db.get_user(update.effective_user.id)
+    tx = get_tx(order_id)
+    if not user or not tx or tx.user_id != user.id:
+        await update.callback_query.answer("الطلب غير موجود", show_alert=True)
+        return
+
+    session = db.get_session()
+    try:
+        ticket = (
+            session.query(SupportTicket)
+            .filter(
+                SupportTicket.order_id == order_id,
+                SupportTicket.user_id == user.id,
+                SupportTicket.status.in_(["open", "escalated"]),
+            )
+            .order_by(SupportTicket.id.desc())
+            .first()
+        )
+        if not ticket:
+            ticket = SupportTicket(
+                user_id=user.id,
+                order_id=order_id,
+                status="open",
+                subject=f"دعم طلب سحب {order_ref(tx)}",
+            )
+            session.add(ticket)
+            session.commit()
+            session.refresh(ticket)
+        ticket_id = ticket.id
+    finally:
+        session.close()
+
+    context.user_data["state"] = "waiting_payout_support_msg"
+    context.user_data["support_ticket_id"] = ticket_id
+    context.user_data["support_order_id"] = order_id
+
+    text = (
+        "🚑 فتحتلك تذكرة دعم\n\n"
+        f"🧾 الطلب {tg_code(order_ref(tx))}\n\n"
+        "اكتب شو المشكلة برسالة وحدة\n"
+        "والدعم بيشوف كل تفاصيل العملية"
+    )
+    await WithdrawFlow._show(
+        update,
+        context,
+        text,
+        Keyboards.withdraw_submitted_menu(
+            order_id, can_cancel=tx.status in ACTIVE_CANCELLABLE
+        ),
+        parse_mode="HTML",
+    )
+
+
+async def handle_support_message(update, context, text: str):
+    user = db.get_user(update.effective_user.id)
+    ticket_id = int(context.user_data.get("support_ticket_id") or 0)
+    order_id = int(context.user_data.get("support_order_id") or 0)
+    msg = (text or "").strip()
+    if not user or not ticket_id or not msg:
+        return
+
+    tx = get_tx(order_id) if order_id else None
+    session = db.get_session()
+    try:
+        ticket = session.query(SupportTicket).filter(SupportTicket.id == ticket_id).first()
+        if not ticket:
+            await update.message.reply_text("التذكرة غير موجودة.")
+            return
+        session.add(
+            SupportTicketMessage(
+                ticket_id=ticket_id,
+                direction="user_to_support",
+                content=msg,
+                sender_telegram_id=int(user.telegram_id),
+                sender_name=get_user_display_name(user),
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    context.user_data.pop("state", None)
+
+    group_text = (
+        "🚑 تذكرة جديدة\n\n"
+        f"🧾 رقم التذكرة {ticket_id}\n"
+        f"🧾 طلب السحب {order_ref(tx) if tx else order_id}\n"
+        f"👤 المستخدم {get_user_display_name(user)}\n"
+        f"💰 المبلغ {format_currency(tx.amount) if tx else '—'}\n"
+        f"📌 حالة الطلب {status_label(tx.status) if tx else '—'}\n\n"
+        f"💬 رسالة المستخدم\n{msg}"
+    )
+    support_gid = ps.get_support_group_id()
+    targets = [support_gid] if support_gid else list(Config.ADMIN_IDS)
+    for chat_id in targets:
+        if not chat_id:
+            continue
+        try:
+            sent = await context.bot.send_message(
+                chat_id=chat_id,
+                text=group_text,
+                reply_markup=Keyboards.support_ticket_admin_menu(ticket_id, order_id),
+            )
+            session = db.get_session()
+            try:
+                t = (
+                    session.query(SupportTicket)
+                    .filter(SupportTicket.id == ticket_id)
+                    .first()
+                )
+                if t:
+                    t.support_group_chat_id = str(chat_id)
+                    t.support_group_message_id = sent.message_id
+                    session.commit()
+            finally:
+                session.close()
+        except TelegramError:
+            logger.exception("فشل إرسال تذكرة دعم")
+
+    await update.message.reply_text(
+        "✅ وصلت رسالتك للدعم\nرح يردّوا عليك من البوت",
+        reply_markup=Keyboards.withdraw_submitted_menu(
+            order_id, can_cancel=bool(tx and tx.status in ACTIVE_CANCELLABLE)
+        ),
+    )
+
+
+async def support_send_reply(context, ticket_id: int, reply_text: str, admin_user):
+    session = db.get_session()
+    try:
+        ticket = session.query(SupportTicket).filter(SupportTicket.id == ticket_id).first()
+        if not ticket:
+            return False, "التذكرة غير موجودة"
+        user = session.query(User).filter(User.id == ticket.user_id).first()
+        if not user:
+            return False, "المستخدم غير موجود"
+        session.add(
+            SupportTicketMessage(
+                ticket_id=ticket_id,
+                direction="support_to_user",
+                content=reply_text,
+                sender_telegram_id=int(getattr(admin_user, "id", 0) or 0) or None,
+                sender_name=admin_name(admin_user),
+            )
+        )
+        session.commit()
+        telegram_id = user.telegram_id
+        order_id = ticket.order_id
+    finally:
+        session.close()
+
+    user_text = f"💬 رد الدعم\n\n{reply_text}\n\n🧾 تذكرة #{ticket_id}"
+    try:
+        await context.bot.send_message(
+            chat_id=telegram_id,
+            text=user_text,
+            reply_markup=Keyboards.withdraw_submitted_menu(order_id or 0)
+            if order_id
+            else Keyboards.start_menu(),
+        )
+    except TelegramError:
+        return False, "فشل إرسال الرد للمستخدم"
+    return True, "تم إرسال الرد"
+
+
+async def support_resolve(context, ticket_id: int, admin_user):
+    session = db.get_session()
+    try:
+        ticket = session.query(SupportTicket).filter(SupportTicket.id == ticket_id).first()
+        if not ticket:
+            return False, "غير موجودة"
+        ticket.status = "resolved"
+        ticket.resolved_at = datetime.utcnow()
+        ticket.resolved_by_name = admin_name(admin_user)
+        user = session.query(User).filter(User.id == ticket.user_id).first()
+        telegram_id = user.telegram_id if user else None
+        session.commit()
+    finally:
+        session.close()
+    if telegram_id:
+        try:
+            await context.bot.send_message(
+                chat_id=telegram_id,
+                text=(
+                    f"✅ تذكرة الدعم #{ticket_id} اتحلّت.\n"
+                    "إذا احتجت شي تاني افتح تذكرة جديدة."
+                ),
+            )
+        except TelegramError:
+            pass
+    return True, "تم حل التذكرة"
+
+
+async def support_escalate(context, ticket_id: int, admin_user):
+    session = db.get_session()
+    try:
+        ticket = session.query(SupportTicket).filter(SupportTicket.id == ticket_id).first()
+        if not ticket:
+            return False, "غير موجودة"
+        ticket.status = "escalated"
+        ticket.escalated_at = datetime.utcnow()
+        order_id = ticket.order_id
+        session.commit()
+    finally:
+        session.close()
+    note = (
+        f"🚨 تصعيد تذكرة #{ticket_id}\n"
+        f"طلب سحب: {order_id}\n"
+        f"من: {admin_name(admin_user)}"
+    )
+    for admin_id in Config.ADMIN_IDS:
+        try:
+            await context.bot.send_message(chat_id=admin_id, text=note)
+        except TelegramError:
+            pass
+    return True, "تم التصعيد للإدارة"
+
+
+def check_user_limits(user: User, amount: float) -> Optional[str]:
+    """رسالة خطأ إن تجاوز الحدود، أو None."""
+    max_w = ps.get_max_withdraw()
+    if max_w is not None and amount > max_w:
+        return (
+            f"🤨 المبلغ فوق الحد الأعلى\n\n"
+            f"أعلى مبلغ للسحب {format_currency(max_w)}"
+        )
+
+    session = db.get_session()
+    try:
+        day_start = datetime.utcnow().replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        todays = (
+            session.query(Transaction)
+            .filter(
+                Transaction.user_id == user.id,
+                Transaction.transaction_type == "withdraw",
+                Transaction.created_at >= day_start,
+                Transaction.status.notin_(
+                    [ST_CANCELLED, ST_REJECTED, "cancelled", "failed"]
+                ),
+            )
+            .all()
+        )
+        max_reqs = ps.get_max_requests_per_day()
+        if max_reqs > 0 and len(todays) >= max_reqs:
+            return (
+                f"✋ وصلت لحد طلبات السحب اليوم ({max_reqs})\n"
+                "جرّب بكرا — المحاسب بياخد إجازة نوم 😂"
+            )
+        daily_cap = ps.get_daily_amount_limit()
+        if daily_cap is not None:
+            used = sum(float(t.amount or 0) for t in todays)
+            if used + amount > daily_cap + 1e-9:
+                return (
+                    f"✋ الحد اليومي للسحب {format_currency(daily_cap)}\n"
+                    f"استخدمت اليوم {format_currency(used)}"
+                )
+
+        cooldown = ps.get_cooldown_seconds()
+        if cooldown > 0:
+            last = (
+                session.query(Transaction)
+                .filter(
+                    Transaction.user_id == user.id,
+                    Transaction.transaction_type == "withdraw",
+                )
+                .order_by(Transaction.created_at.desc())
+                .first()
+            )
+            if last and last.created_at:
+                elapsed = (datetime.utcnow() - last.created_at).total_seconds()
+                if elapsed < cooldown:
+                    left = int(cooldown - elapsed)
+                    mins = max(1, (left + 59) // 60)
+                    return (
+                        f"⏱ مهلك شوي\n\n"
+                        f"لازم تنتظر حوالي {mins} دقيقة بين طلبين"
+                    )
+    finally:
+        session.close()
+    return None

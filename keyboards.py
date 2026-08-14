@@ -310,14 +310,24 @@ class Keyboards:
         ])
 
     @staticmethod
-    def withdraw_methods_menu():
-        return InlineKeyboardMarkup([
-            [InlineKeyboardButton("📱 سيرياتيل كاش", callback_data="wd_method_syriatel_cash")],
-            [InlineKeyboardButton("💠 شام كاش", callback_data="wd_method_shamcash")],
-            [InlineKeyboardButton("🌐 عملات رقمية", callback_data="wd_method_usdt")],
-            [InlineKeyboardButton("🧩 طرق ثانية", callback_data="wd_method_other")],
-            [InlineKeyboardButton("🔙 رجوع", callback_data="withdraw")],
-        ])
+    def withdraw_methods_menu(methods=None):
+        """methods: list of objects/dicts with .code/.name أو (code, name)."""
+        rows = []
+        for m in methods or []:
+            if hasattr(m, "code"):
+                code, name = m.code, m.name
+            else:
+                code, name = m[0], m[1]
+            rows.append([
+                InlineKeyboardButton(name, callback_data=f"wd_method_{code}")
+            ])
+        if not rows:
+            rows.append([
+                InlineKeyboardButton("💠 شام كاش", callback_data="wd_method_shamcash")
+            ])
+        rows.append([InlineKeyboardButton("❌ إلغاء", callback_data="withdraw_abort")])
+        rows.append([Keyboards.home_btn()])
+        return InlineKeyboardMarkup(rows)
 
     @staticmethod
     def withdraw_crypto_menu():
@@ -331,6 +341,7 @@ class Keyboards:
     def withdraw_dest_back_menu():
         return InlineKeyboardMarkup([
             [InlineKeyboardButton("🔙 رجوع", callback_data="wallet_withdraw_methods")],
+            [InlineKeyboardButton("❌ إلغاء", callback_data="withdraw_abort")],
         ])
 
     @staticmethod
@@ -341,14 +352,16 @@ class Keyboards:
                 [Keyboards.home_btn()],
             ])
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ أكد السحب", callback_data="withdraw_confirm_submit")],
-            [InlineKeyboardButton("✏️ عدل البيانات", callback_data="withdraw_edit_data")],
-            [InlineKeyboardButton("❌ إلغاء العملية", callback_data="withdraw_abort")],
+            [InlineKeyboardButton("✅ أكد طلب التقبيض", callback_data="withdraw_confirm_submit")],
+            [InlineKeyboardButton("✏️ غير العنوان", callback_data="withdraw_edit_data")],
+            [InlineKeyboardButton("❌ إلغاء", callback_data="withdraw_abort")],
         ])
 
     @staticmethod
     def withdraw_submitted_menu(order_id: int, can_cancel: bool = True):
-        rows = []
+        rows = [
+            [InlineKeyboardButton("📋 تابع طلبي", callback_data=f"wd_track_{order_id}")],
+        ]
         if can_cancel:
             rows.append([
                 InlineKeyboardButton(
@@ -357,7 +370,10 @@ class Keyboards:
                 )
             ])
         rows.append([
-            InlineKeyboardButton("📋 تابع الطلب", callback_data=f"wd_track_{order_id}")
+            InlineKeyboardButton(
+                "🚑 الحقني يا دعم",
+                callback_data=f"wd_support_{order_id}",
+            )
         ])
         rows.append([Keyboards.home_btn()])
         return InlineKeyboardMarkup(rows)
@@ -378,8 +394,8 @@ class Keyboards:
     @staticmethod
     def withdraw_locked_menu(order_id: int):
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("📋 تابع الطلب", callback_data=f"wd_track_{order_id}")],
-            [InlineKeyboardButton("🚑 الحقني يا دعم", callback_data="contact")],
+            [InlineKeyboardButton("📋 تابع طلبي", callback_data=f"wd_track_{order_id}")],
+            [InlineKeyboardButton("🚑 الحقني يا دعم", callback_data=f"wd_support_{order_id}")],
             [Keyboards.home_btn()],
         ])
 
@@ -387,38 +403,125 @@ class Keyboards:
     def withdraw_cancelled_done_menu():
         return InlineKeyboardMarkup([
             [InlineKeyboardButton("🎮 رجعت المصاري للمحفظة", callback_data="main_menu")],
+            [Keyboards.home_btn()],
         ])
 
     @staticmethod
     def withdraw_paid_menu(order_id: int):
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("📸 إيصال للتصوير", callback_data=f"fun_receipt_photo_{order_id}")],
             [InlineKeyboardButton("📋 عرض الإيصال", callback_data=f"wd_track_{order_id}")],
+            [InlineKeyboardButton("📸 إيصال للتصوير", callback_data=f"fun_receipt_photo_{order_id}")],
             [Keyboards.home_btn()],
         ])
 
     @staticmethod
-    def withdraw_rejected_menu():
-        return InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 جرّب من جديد", callback_data="withdraw")],
-            [InlineKeyboardButton("🚑 الحقني يا دعم", callback_data="contact")],
-            [Keyboards.home_btn()],
-        ])
+    def withdraw_rejected_menu(order_id: int = 0):
+        rows = [
+            [InlineKeyboardButton("🔄 اعمل طلب جديد", callback_data="withdraw")],
+        ]
+        if order_id:
+            rows.append([
+                InlineKeyboardButton(
+                    "🚑 الحقني يا دعم",
+                    callback_data=f"wd_support_{order_id}",
+                )
+            ])
+        else:
+            rows.append([
+                InlineKeyboardButton("🚑 الحقني يا دعم", callback_data="contact")
+            ])
+        rows.append([Keyboards.home_btn()])
+        return InlineKeyboardMarkup(rows)
 
     @staticmethod
-    def admin_withdraw_order_menu(order_id: int):
-        return InlineKeyboardMarkup([
-            [InlineKeyboardButton(
-                "✅ تم التقبيض",
-                callback_data=f"admin_wd_paid_{order_id}",
-            )],
-            [InlineKeyboardButton(
-                "⚙️ قيد التنفيذ",
-                callback_data=f"admin_wd_processing_{order_id}",
-            )],
-            [InlineKeyboardButton(
-                "❌ ارفض السحب",
+    def admin_withdraw_order_menu(order_id: int, *, assigned: bool = False, cancel_req: bool = False):
+        rows = []
+        if cancel_req:
+            rows.append([
+                InlineKeyboardButton(
+                    "✅ وافق على الإلغاء",
+                    callback_data=f"admin_wd_cancel_ok_{order_id}",
+                )
+            ])
+            rows.append([
+                InlineKeyboardButton(
+                    "❌ ارفض الإلغاء",
+                    callback_data=f"admin_wd_cancel_no_{order_id}",
+                )
+            ])
+        if not assigned:
+            rows.append([
+                InlineKeyboardButton(
+                    "✅ استلمت الطلب",
+                    callback_data=f"admin_wd_accept_{order_id}",
+                )
+            ])
+        else:
+            rows.append([
+                InlineKeyboardButton(
+                    "🔄 تحويل لنفسي",
+                    callback_data=f"admin_wd_transfer_{order_id}",
+                )
+            ])
+        rows.append([
+            InlineKeyboardButton(
+                "💸 تم التقبيض",
+                callback_data=f"admin_wd_pay_ask_{order_id}",
+            )
+        ])
+        rows.append([
+            InlineKeyboardButton(
+                "❌ رفض الطلب",
                 callback_data=f"admin_wd_reject_{order_id}",
+            )
+        ])
+        rows.append([
+            InlineKeyboardButton(
+                "🚑 تحويل للدعم",
+                callback_data=f"admin_wd_to_support_{order_id}",
+            )
+        ])
+        return InlineKeyboardMarkup(rows)
+
+    @staticmethod
+    def admin_withdraw_pay_confirm_menu(order_id: int):
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                "✅ نعم تم التقبيض",
+                callback_data=f"admin_wd_pay_yes_{order_id}",
+            )],
+            [InlineKeyboardButton(
+                "❌ رجوع",
+                callback_data=f"admin_wd_pay_back_{order_id}",
+            )],
+        ])
+
+    @staticmethod
+    def admin_withdraw_reject_reasons_menu(order_id: int):
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                "بيانات شام كاش غلط",
+                callback_data=f"admin_wd_rej_bad_shamcash_{order_id}",
+            )],
+            [InlineKeyboardButton(
+                "مشكلة بالحساب",
+                callback_data=f"admin_wd_rej_account_issue_{order_id}",
+            )],
+            [InlineKeyboardButton(
+                "مبلغ غير صحيح",
+                callback_data=f"admin_wd_rej_wrong_amount_{order_id}",
+            )],
+            [InlineKeyboardButton(
+                "طلب مكرر",
+                callback_data=f"admin_wd_rej_duplicate_{order_id}",
+            )],
+            [InlineKeyboardButton(
+                "سبب آخر",
+                callback_data=f"admin_wd_rej_other_{order_id}",
+            )],
+            [InlineKeyboardButton(
+                "❌ رجوع",
+                callback_data=f"admin_wd_pay_back_{order_id}",
             )],
         ])
 
@@ -433,6 +536,84 @@ class Keyboards:
                 "❌ ارفض الإلغاء",
                 callback_data=f"admin_wd_cancel_no_{order_id}",
             )],
+        ])
+
+    @staticmethod
+    def support_ticket_admin_menu(ticket_id: int, order_id: int = 0):
+        rows = [
+            [InlineKeyboardButton(
+                "💬 رد على المستخدم",
+                callback_data=f"sup_ticket_reply_{ticket_id}",
+            )],
+        ]
+        if order_id:
+            rows.append([
+                InlineKeyboardButton(
+                    "🔎 فتح طلب السحب",
+                    callback_data=f"sup_ticket_open_wd_{order_id}",
+                )
+            ])
+        rows.append([
+            InlineKeyboardButton(
+                "✅ حل المشكلة",
+                callback_data=f"sup_ticket_resolve_{ticket_id}",
+            )
+        ])
+        rows.append([
+            InlineKeyboardButton(
+                "🚨 تصعيد للإدارة",
+                callback_data=f"sup_ticket_escalate_{ticket_id}",
+            )
+        ])
+        return InlineKeyboardMarkup(rows)
+
+    @staticmethod
+    def admin_withdraw_settings_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("📉 أقل مبلغ سحب", callback_data="admin_wd_set_min")],
+            [InlineKeyboardButton("📈 أعلى مبلغ سحب", callback_data="admin_wd_set_max")],
+            [InlineKeyboardButton("📅 حد يومي (مبلغ)", callback_data="admin_wd_set_daily")],
+            [InlineKeyboardButton("🔢 عدد طلبات/يوم", callback_data="admin_wd_set_reqs")],
+            [InlineKeyboardButton("⏱ انتظار بين طلبين (ث)", callback_data="admin_wd_set_cd")],
+            [InlineKeyboardButton("🧮 نسبة العمولة %", callback_data="admin_wd_set_fee")],
+            [InlineKeyboardButton("📐 طريقة حساب العمولة", callback_data="admin_wd_set_feemethod")],
+            [InlineKeyboardButton("📢 كروب التقبيض", callback_data="admin_wd_set_paygroup")],
+            [InlineKeyboardButton("🚑 كروب الدعم", callback_data="admin_wd_set_supgroup")],
+            [InlineKeyboardButton("💳 طرق التقبيض", callback_data="admin_wd_methods")],
+            [InlineKeyboardButton("🔙 لوحة الإدمن", callback_data="admin_panel")],
+        ])
+
+    @staticmethod
+    def admin_payout_methods_menu(methods):
+        rows = []
+        for m in methods or []:
+            flag = "✅" if m.enabled else "⛔"
+            rows.append([
+                InlineKeyboardButton(
+                    f"{flag} {m.name}",
+                    callback_data=f"admin_wd_method_{m.id}",
+                )
+            ])
+        rows.append([
+            InlineKeyboardButton("➕ إضافة طريقة", callback_data="admin_wd_method_add")
+        ])
+        rows.append([
+            InlineKeyboardButton("🔙 إعدادات السحب", callback_data="admin_wd_settings")
+        ])
+        return InlineKeyboardMarkup(rows)
+
+    @staticmethod
+    def admin_payout_method_detail_menu(method_id: int, enabled: bool):
+        toggle = "⛔ تعطيل" if enabled else "✅ تفعيل"
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton(toggle, callback_data=f"admin_wd_mtoggle_{method_id}")],
+            [InlineKeyboardButton("✏️ الاسم", callback_data=f"admin_wd_medit_name_{method_id}")],
+            [InlineKeyboardButton("📉 حد أدنى", callback_data=f"admin_wd_medit_min_{method_id}")],
+            [InlineKeyboardButton("📈 حد أقصى", callback_data=f"admin_wd_medit_max_{method_id}")],
+            [InlineKeyboardButton("📝 التعليمات", callback_data=f"admin_wd_medit_instr_{method_id}")],
+            [InlineKeyboardButton("📢 كروب الطريقة", callback_data=f"admin_wd_medit_group_{method_id}")],
+            [InlineKeyboardButton("📋 الحقول المطلوبة", callback_data=f"admin_wd_medit_fields_{method_id}")],
+            [InlineKeyboardButton("🔙 الطرق", callback_data="admin_wd_methods")],
         ])
 
     @staticmethod
@@ -737,6 +918,7 @@ class Keyboards:
                 InlineKeyboardButton("💱 أسعار الصرف", callback_data="admin_settings"),
             ],
             [InlineKeyboardButton("🌐 بروكسي Ichancy", callback_data="admin_proxy")],
+            [InlineKeyboardButton("🏧 إعدادات التقبيض", callback_data="admin_wd_settings")],
             [InlineKeyboardButton("👑 جيش نابليون", callback_data="admin_army")],
             [InlineKeyboardButton("🎭 ترفيه المقر", callback_data="admin_fun")],
             [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu")],

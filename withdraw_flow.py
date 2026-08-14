@@ -1,5 +1,5 @@
 """
-سحب محفظة البوت — مسار خفيف بحالات واضحة ورصيد محجوز.
+سحب / تقبيض محفظة البوت (فضي محفظتي) — رصيد محجوز + طرق قابلة للتوسعة.
 """
 
 from __future__ import annotations
@@ -17,8 +17,9 @@ from accounts_handler import SavedAccountsHandler
 from config import Config
 from database import DatabaseManager, Transaction, User
 from keyboards import Keyboards
+import payout_service as ps
+import withdraw_ops as ops
 from utils import (
-    calculate_withdrawal_fee,
     format_currency,
     get_user_display_name,
     safe_edit_callback_message,
@@ -28,14 +29,14 @@ from utils import (
 logger = logging.getLogger(__name__)
 db = DatabaseManager()
 
-# حالات السحب
-ST_PENDING_REVIEW = "pending_review"  # قيد المراجعة
-ST_AWAITING_PAYOUT = "awaiting_payout"  # بانتظار التقبيض
-ST_CANCEL_REQUESTED = "cancel_requested"  # طلب إلغاء قيد المراجعة
-ST_PROCESSING = "processing"  # قيد التنفيذ
-ST_PAID = "paid"  # تم التقبيض
-ST_CANCELLED = "cancelled"  # ملغي
-ST_REJECTED = "rejected"  # مرفوض
+# حالات التقبيض الثابتة
+ST_PENDING_REVIEW = ops.ST_PENDING_REVIEW
+ST_AWAITING_PAYOUT = ops.ST_AWAITING_PAYOUT
+ST_CANCEL_REQUESTED = ops.ST_CANCEL_REQUESTED
+ST_PROCESSING = ops.ST_PROCESSING
+ST_PAID = ops.ST_PAID
+ST_CANCELLED = ops.ST_CANCELLED
+ST_REJECTED = ops.ST_REJECTED
 
 LEGACY_ACTIVE = {
     "pending",
@@ -44,69 +45,34 @@ LEGACY_ACTIVE = {
     ST_CANCEL_REQUESTED,
     ST_PROCESSING,
 }
-ACTIVE_CANCELLABLE = {ST_PENDING_REVIEW, ST_AWAITING_PAYOUT, "pending"}
-# بعد التقبيض أو أثناء التنفيذ النهائي — ممنوع الموافقة على الإلغاء
-BLOCK_CANCEL_APPROVE = {ST_PAID, ST_PROCESSING, "completed"}
+ACTIVE_CANCELLABLE = ops.ACTIVE_CANCELLABLE
+BLOCK_CANCEL_APPROVE = ops.BLOCK_CANCEL_APPROVE
 
-STATUS_AR = {
-    ST_PENDING_REVIEW: "قيد المراجعة",
-    ST_AWAITING_PAYOUT: "بانتظار التقبيض",
-    ST_CANCEL_REQUESTED: "طلب إلغاء قيد المراجعة",
-    ST_PROCESSING: "قيد التنفيذ",
-    ST_PAID: "تم التقبيض",
-    ST_CANCELLED: "ملغي",
-    ST_REJECTED: "مرفوض",
-    "pending": "قيد المراجعة",
-    "completed": "تم التقبيض",
-    "failed": "مرفوض",
-    "cancelled": "ملغي",
-}
-
-METHOD_AR = {
-    "syriatel_cash": "📱 سيرياتيل كاش",
-    "shamcash": "💠 شام كاش",
-    "usdt": "🌐 عملات رقمية",
-}
+STATUS_AR = ops.STATUS_AR
 
 
 def status_label(status: str) -> str:
-    return STATUS_AR.get(status or "", status or "—")
+    return ops.status_label(status)
 
 
 def method_label(method: str) -> str:
-    return METHOD_AR.get(method or "", method or "—")
+    return ops.method_label(method)
 
 
 def fee_breakdown(amount: float) -> tuple[float, float, float]:
-    """عمولة 10% من مبلغ السحب فقط → (fee, net, profit)."""
-    fee, net = calculate_withdrawal_fee(amount, Config.WITHDRAWAL_FEE_PERCENTAGE)
-    profit = 0.0
-    return fee, net, profit
+    return ops.fee_breakdown(amount)
 
 
 def _admin_name(admin_user) -> str:
-    if not admin_user:
-        return "admin"
-    uname = getattr(admin_user, "username", None)
-    if uname:
-        return f"@{uname}"
-    first = getattr(admin_user, "first_name", None) or ""
-    last = getattr(admin_user, "last_name", None) or ""
-    full = f"{first} {last}".strip()
-    return full or str(getattr(admin_user, "id", "admin"))
+    return ops.admin_name(admin_user)
 
 
 def _stamp_decision(tx: Transaction, admin_user, note: str = ""):
-    """يحفظ اسم الأدمن ووقت القرار مع كل موافقة/رفض."""
-    now = datetime.utcnow()
-    tx.decided_at = now
-    tx.processed_at = now
-    if admin_user:
-        tx.decided_by_telegram_id = int(getattr(admin_user, "id", 0) or 0) or None
-        tx.decided_by_name = _admin_name(admin_user)
-    if note:
-        stamp = f"[{now.isoformat()} | {tx.decided_by_name or 'admin'}] {note}"
-        tx.admin_notes = ((tx.admin_notes or "").rstrip() + "\n" + stamp).strip()
+    ops.stamp_decision(tx, admin_user, note)
+
+
+def _order_ref(tx: Transaction) -> str:
+    return ops.order_ref(tx)
 
 
 class WithdrawFlow:
@@ -120,7 +86,7 @@ class WithdrawFlow:
         if not user:
             return
         balance = float(user.balance or 0)
-        min_w = float(Config.MIN_WITHDRAWAL)
+        min_w = float(ps.get_min_withdraw())
 
         # احتفظ برسالة الشاشة السابقة إن وجدت لتعديلها
         prev_msg = context.user_data.get("wd_msg_id")
@@ -136,7 +102,8 @@ class WithdrawFlow:
                 "🏧 المحفظة ما فيها شي ينسحب\n\n"
                 f"💎 رصيدك الحالي {format_currency(balance)}\n"
                 f"📌 اقل مبلغ للسحب {format_currency(min_w)}\n\n"
-                "المحاسب فتح الدرج… هوا بس 😂"
+                "المحاسب فتح الدرج\n"
+                "ما لقى غير هوا 😂"
             )
             await WithdrawFlow._show(
                 update, context, text, Keyboards.withdraw_empty_menu()
@@ -149,7 +116,9 @@ class WithdrawFlow:
             "🏧 سحب من محفظة البوت\n\n"
             f"💎 رصيدك الحالي {format_currency(balance)}\n"
             f"📌 اقل مبلغ للسحب {format_currency(min_w)}\n\n"
-            "اكتب المبلغ — أرقام فقط"
+            "اكتب المبلغ اللي بدك تسحبه\n"
+            "ارقام فقط\n\n"
+            "والمحاسب رح يتصرف كأنه كان ناطرك من الصبح 😂"
         )
         await WithdrawFlow._show(
             update, context, text, Keyboards.withdraw_amount_menu()
@@ -202,7 +171,7 @@ class WithdrawFlow:
         if not user:
             return
         balance = float(user.balance or 0)
-        min_w = float(Config.MIN_WITHDRAWAL)
+        min_w = float(ps.get_min_withdraw())
 
         if amount < min_w:
             context.user_data["state"] = "waiting_for_withdraw_amount"
@@ -223,7 +192,8 @@ class WithdrawFlow:
                     context,
                     "🤨 المبلغ صغير شوي\n\n"
                     f"اقل مبلغ للسحب هو {format_currency(min_w)}\n\n"
-                    "كبره شوي",
+                    "كبره شوي\n\n"
+                    "المحاسب ما بيطلع من مكتبه عالفاضي 😂",
                     Keyboards.withdraw_amount_menu(),
                 )
             return
@@ -234,13 +204,22 @@ class WithdrawFlow:
             await WithdrawFlow._show(
                 update,
                 context,
-                "😅 على مهلك\n\n"
+                "🚫 المبلغ اكبر من رصيده\n\n"
                 f"طلبت {format_currency(amount)}\n"
                 f"ورصيدك كله {format_currency(balance)}\n\n"
-                "المحفظة ما بتستدين 😂",
+                "المحفظة ما بتستدين حتى من اقرب الناس 😂",
                 Keyboards.withdraw_empty_menu()
                 if balance < min_w
                 else Keyboards.withdraw_amount_menu(),
+            )
+            return
+
+        lim_err = ops.check_user_limits(user, amount)
+        if lim_err:
+            context.user_data["state"] = "waiting_for_withdraw_amount"
+            context.user_data["operation"] = "wallet_withdraw"
+            await WithdrawFlow._show(
+                update, context, lim_err, Keyboards.withdraw_amount_menu()
             )
             return
 
@@ -255,13 +234,19 @@ class WithdrawFlow:
         if not amount:
             await WithdrawFlow.start(update, context)
             return
+        methods = ps.list_methods(enabled_only=True)
+        if not methods:
+            methods = [type("M", (), {"code": "shamcash", "name": "💠 شام كاش"})()]
+        names = "\n".join(f"{m.name}" for m in methods)
         text = (
-            "💸 اختار طريقة استلام المبلغ\n\n"
+            "💸 طريقة التقبيض\n\n"
             f"💰 مبلغ السحب {format_currency(float(amount))}\n\n"
-            "اختار الطريقة اللي بدك توصلك عليها"
+            "حاليا التقبيض متوفر عن طريق\n"
+            f"{names}\n\n"
+            "اختارها ومنكمل"
         )
         await WithdrawFlow._show(
-            update, context, text, Keyboards.withdraw_methods_menu()
+            update, context, text, Keyboards.withdraw_methods_menu(methods)
         )
 
     # ─── طرق الاستلام ─────────────────────────────────────
@@ -270,63 +255,89 @@ class WithdrawFlow:
     async def choose_method(
         update: Update, context: ContextTypes.DEFAULT_TYPE, method: str
     ):
-        if method == "other":
-            await WithdrawFlow._show(
-                update,
-                context,
-                "🧩 طرق ثانية\n\n"
-                "المتاح الآن: سيرياتيل / شام كاش / عملات رقمية.\n"
-                "لحالة خاصة تواصل مع الدعم.",
-                Keyboards.withdraw_methods_menu(),
-            )
-            return
-
         amount = context.user_data.get("amount")
         if not amount:
             await WithdrawFlow.start(update, context)
             return
 
+        pm = ps.get_method(method)
+        enabled_methods = ps.list_methods(enabled_only=True)
+        if pm and not pm.enabled:
+            await WithdrawFlow._show(
+                update,
+                context,
+                "هذه الطريقة غير مفعّلة حالياً.",
+                Keyboards.withdraw_methods_menu(enabled_methods),
+            )
+            return
+        if not pm and method not in ("shamcash", "syriatel_cash", "usdt"):
+            await WithdrawFlow.show_methods(update, context)
+            return
+
+        if pm:
+            if pm.min_amount and float(amount) < float(pm.min_amount):
+                await WithdrawFlow._show(
+                    update,
+                    context,
+                    f"أقل مبلغ لهذه الطريقة {format_currency(pm.min_amount)}",
+                    Keyboards.withdraw_methods_menu(enabled_methods),
+                )
+                return
+            if pm.max_amount and float(amount) > float(pm.max_amount):
+                await WithdrawFlow._show(
+                    update,
+                    context,
+                    f"أعلى مبلغ لهذه الطريقة {format_currency(pm.max_amount)}",
+                    Keyboards.withdraw_methods_menu(enabled_methods),
+                )
+                return
+
         context.user_data["method"] = method
+        context.user_data["payout_method_code"] = method
         context.user_data["operation"] = "wallet_withdraw"
-
-        if method == "syriatel_cash":
-            context.user_data["state"] = "waiting_for_withdraw_destination"
-            text = (
-                "📱 سحب عن طريق سيرياتيل كاش\n\n"
-                "ابعت رقم سيرياتيل كاش\n\n"
-                "مثال: 09XXXXXXXX\n\n"
-                "راجع الرقم منيح"
-            )
-            await WithdrawFlow._show(
-                update, context, text, Keyboards.withdraw_dest_back_menu()
-            )
-            return
-
-        if method == "shamcash":
-            context.user_data["state"] = "waiting_for_withdraw_destination"
-            text = (
-                "💠 سحب عن طريق شام كاش\n\n"
-                "ابعت عنوان محفظة شام كاش\n\n"
-                "انسخه مثل ما هو — لا تكتبه من الذاكرة"
-            )
-            await WithdrawFlow._show(
-                update, context, text, Keyboards.withdraw_dest_back_menu()
-            )
-            return
 
         if method == "usdt":
             context.user_data["state"] = "waiting_for_crypto_choice"
             text = (
                 "🌐 سحب عملات رقمية\n\n"
-                "اختار العملة والشبكة\n\n"
-                "مهم: الشبكة الغلط بتاخد المصاري"
+                "اختار العملة والشبكة اللي بدك تستلم عليها\n\n"
+                "مهم جدا تكون العملة والشبكة صح\n"
+                "الشبكة الغلط بتاخد المصاري وبتعمل حالها ما بتعرفنا 😂"
             )
             await WithdrawFlow._show(
                 update, context, text, Keyboards.withdraw_crypto_menu()
             )
             return
 
-        await WithdrawFlow.show_methods(update, context)
+        context.user_data["state"] = "waiting_for_withdraw_destination"
+        instructions = (pm.instructions if pm and pm.instructions else "").strip()
+        if not instructions:
+            if method == "shamcash":
+                instructions = (
+                    "ابعت عنوان محفظة شام كاش اللي بدك تستلم عليه\n"
+                    "انسخه مثل ما هو:\n\n"
+                    "راجع العنوان منيح\n"
+                    "لانه بعد التقبيض ما عاد فينا نقول كانت تجربة 😂"
+                )
+            elif method == "syriatel_cash":
+                instructions = (
+                    "ابعت رقم سيرياتيل كاش اللي بدك تستلم عليه\n\n"
+                    "مثال\n09XXXXXXXX\n\n"
+                    "راجع الرقم منيح"
+                )
+            else:
+                instructions = "ابعت بيانات الاستلام المطلوبة."
+
+        if method == "shamcash":
+            text = f"💠 التقبيض عن طريق شام كاش\n\n{instructions}"
+        elif method == "syriatel_cash":
+            text = f"📱 سحب عن طريق سيرياتيل كاش\n\n{instructions}"
+        else:
+            text = f"{method_label(method)}\n\n{instructions}"
+
+        await WithdrawFlow._show(
+            update, context, text, Keyboards.withdraw_dest_back_menu()
+        )
 
     @staticmethod
     async def choose_crypto(
@@ -403,12 +414,12 @@ class WithdrawFlow:
 
     @staticmethod
     async def show_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user = db.get_user(update.effective_user.id)
         amount = float(context.user_data.get("amount") or 0)
         method = context.user_data.get("method")
         dest = context.user_data.get("withdraw_destination") or "—"
         fee, net, profit = fee_breakdown(amount)
-        balance = float(user.balance or 0) if user else 0
+        fee_pct = ps.get_fee_percent()
+        masked = ps.mask_destination(dest)
 
         method_txt = method_label(method)
         if method == "usdt":
@@ -417,16 +428,15 @@ class WithdrawFlow:
             method_txt = f"🌐 {cur} / {netw}"
 
         text = (
-            "🧾 راجع طلب السحب\n\n"
-            f"💎 رصيدك الحالي {format_currency(balance)}\n"
+            "🧾 راجع طلب التقبيض\n\n"
             f"💰 مبلغ السحب {format_currency(amount)}\n"
-            f"📈 الربح المحتسب ضمن المبلغ {format_currency(profit)}\n"
-            f"🧮 العمولة {Config.WITHDRAWAL_FEE_PERCENTAGE:g}% من المبلغ المسحوب "
+            f"📈 الربح المحتسب {format_currency(profit)}\n"
+            f"🧮 عمولة السحب {fee_pct:g} بالمية من مبلغ السحب "
             f"{format_currency(fee)}\n"
-            f"✅ الصافي اللي رح تستلمه {format_currency(net)}\n\n"
-            f"💳 طريقة الاستلام {method_txt}\n"
-            f"📍 بيانات الاستلام {tg_code(dest)}\n\n"
-            "راجع قبل التأكيد — بعد التنفيذ ما بينلغى بسهولة"
+            f"✅ الصافي اللي رح تقبضه {format_currency(net)}\n\n"
+            f"💠 الطريقة {method_txt}\n"
+            f"📍 العنوان {tg_code(masked)}\n\n"
+            "اذا كلشي صح أكد"
         )
         context.user_data["state"] = "waiting_withdraw_confirm"
         context.user_data["fee_amount"] = fee
@@ -485,12 +495,21 @@ class WithdrawFlow:
             await WithdrawFlow._show(
                 update,
                 context,
-                "✋ الطلب موجود اصلًا\n\nلا تعملنا نسختين من نفس الطلب",
+                "✋ الطلب موجود اصلًا\n\nلا تعملنا نسختين من نفس الفيلم 😂",
                 Keyboards.start_menu(),
             )
             context.user_data.clear()
             return
 
+        lim_err = ops.check_user_limits(user, amount)
+        if lim_err:
+            context.user_data["withdraw_submit_lock"] = False
+            await WithdrawFlow._show(
+                update, context, lim_err, Keyboards.withdraw_amount_menu()
+            )
+            return
+
+        public_id = ps.new_public_order_id()
         session = db.get_session()
         try:
             db_user = session.query(User).filter(User.id == user.id).first()
@@ -517,6 +536,7 @@ class WithdrawFlow:
                 transaction_type="withdraw",
                 amount=amount,
                 method=method,
+                payout_method_code=method,
                 status=ST_PENDING_REVIEW,
                 withdraw_destination=dest,
                 fee_amount=fee,  # متوقعة
@@ -524,8 +544,9 @@ class WithdrawFlow:
                 profit_amount=profit,
                 crypto_currency=crypto_c,
                 crypto_network=crypto_n,
+                public_id=public_id,
                 description=(
-                    f"سحب محفظة — {method_txt} — وجهة {dest} — "
+                    f"تقبيض محفظة — {method_txt} — وجهة {dest} — "
                     f"عمولة متوقعة {fee} — صافي متوقع {net}"
                 ),
             )
@@ -533,6 +554,7 @@ class WithdrawFlow:
             session.commit()
             session.refresh(tx)
             order_id = tx.id
+            public_id = tx.public_id or public_id
         except Exception:
             session.rollback()
             logger.exception("فشل إنشاء طلب سحب")
@@ -560,12 +582,14 @@ class WithdrawFlow:
         context.user_data["pending_withdraw_id"] = order_id
 
         text = (
-            "⏳ وصل طلب السحب\n\n"
-            f"💰 مبلغ السحب {format_currency(amount)}\n"
+            "⏳ طلب التقبيض وصل\n\n"
+            f"💰 المبلغ {format_currency(amount)}\n"
             f"🧮 العمولة المتوقعة {format_currency(fee)}\n"
             f"✅ الصافي المتوقع {format_currency(net)}\n"
-            f"🧾 رقم الطلب {tg_code(order_id)}\n\n"
-            "رح يوصلك إشعار أول ما يتم التقبيض"
+            f"{method_label(method)}\n"
+            f"🧾 رقم الطلب {tg_code(public_id)}\n\n"
+            "الطلب صار عند الإدارة\n"
+            "والمحاسب فتح الملف وعمل حاله مستعجل 😂"
         )
         await WithdrawFlow._show(
             update,
@@ -574,6 +598,25 @@ class WithdrawFlow:
             Keyboards.withdraw_submitted_menu(order_id),
             parse_mode="HTML",
         )
+        try:
+            chat_id = update.effective_chat.id if update.effective_chat else None
+            msg_id = context.user_data.get("wd_msg_id")
+            if chat_id and msg_id:
+                session = db.get_session()
+                try:
+                    row = (
+                        session.query(Transaction)
+                        .filter(Transaction.id == order_id)
+                        .first()
+                    )
+                    if row:
+                        row.user_track_chat_id = str(chat_id)
+                        row.user_track_message_id = int(msg_id)
+                        session.commit()
+                finally:
+                    session.close()
+        except Exception:
+            pass
 
         try:
             await WithdrawFlow._notify_admins_new(context, order_id)
@@ -643,17 +686,20 @@ class WithdrawFlow:
                 await update.callback_query.answer("ما عاد ممكن الإلغاء", show_alert=True)
                 return
 
+            tx.status_before_cancel = tx.status
             tx.status = ST_CANCEL_REQUESTED
             tx.cancel_requested_at = datetime.utcnow()
+            _stamp_decision(tx, None, "المستخدم طلب إلغاء السحب")
             session.commit()
+            public_id = _order_ref(tx)
         finally:
             session.close()
 
         text = (
             "⏳ وصل طلب الإلغاء\n\n"
-            "الإدارة رح تتأكد إذا المبلغ لسا ما اتقبض\n"
-            "إذا لسا معنا بيرجع كامل الرصيد لمحفظتك بدون عمولة\n\n"
-            f"🧾 رقم الطلب {tg_code(order_id)}"
+            "الإدارة رح تتأكد اذا المبلغ لسا ما اتقبض\n"
+            "اذا لسا معنا بيرجع كامل الرصيد لمحفظتك\n\n"
+            f"🧾 رقم الطلب {tg_code(public_id)}"
         )
         await WithdrawFlow._show(
             update,
@@ -684,20 +730,26 @@ class WithdrawFlow:
         fee = float(tx.fee_amount or fee_breakdown(tx.amount)[0])
         net = float(tx.net_amount or fee_breakdown(tx.amount)[1])
         profit = float(tx.profit_amount or 0)
+        masked = ps.mask_destination(tx.withdraw_destination or "")
         text = (
-            f"📋 متابعة الطلب {tg_code(order_id)}\n\n"
+            f"📋 متابعة الطلب {tg_code(_order_ref(tx))}\n\n"
             f"الحالة: {status_label(tx.status)}\n\n"
             f"💰 مبلغ السحب {format_currency(tx.amount)}\n"
             f"📈 الربح المحتسب {format_currency(profit)}\n"
             f"🧮 العمولة {format_currency(fee)}\n"
             f"✅ الصافي {format_currency(net)}\n"
-            f"💳 {method_label(tx.method)}\n"
-            f"📍 {tg_code(tx.withdraw_destination or '—')}"
+            f"💳 {method_label(tx.method or getattr(tx, 'payout_method_code', None))}\n"
+            f"📍 {tg_code(masked)}"
         )
-        if tx.decided_by_name and tx.decided_at:
+        if getattr(tx, "assigned_admin_name", None) and getattr(tx, "accepted_at", None):
             text += (
-                f"\n\n👤 قرار الإدارة: {tx.decided_by_name}"
-                f"\n🕒 {tx.decided_at}"
+                f"\n\n👤 استلمه: {tx.assigned_admin_name}"
+                f"\n🕒 {tx.accepted_at}"
+            )
+        if tx.decided_by_name and getattr(tx, "paid_at", None):
+            text += (
+                f"\n\n✅ نفّذها: {tx.decided_by_name}"
+                f"\n🕒 {tx.paid_at}"
             )
         can_cancel = tx.status in ACTIVE_CANCELLABLE
         await WithdrawFlow._show(
@@ -708,290 +760,63 @@ class WithdrawFlow:
             parse_mode="HTML",
         )
 
+    # ─── دعم مربوط بالطلب ─────────────────────────────────
+
+    @staticmethod
+    async def start_support(update, context, order_id: int):
+        await ops.start_support(update, context, order_id)
+
+    @staticmethod
+    async def handle_support_message(update, context, text: str):
+        await ops.handle_support_message(update, context, text)
+
     # ─── قرارات الإدارة ───────────────────────────────────
 
     @staticmethod
+    async def admin_accept_order(context, order_id: int, admin_user=None):
+        return await ops.admin_accept_order(context, order_id, admin_user)
+
+    @staticmethod
+    async def admin_transfer_to_me(context, order_id: int, admin_user=None):
+        return await ops.admin_transfer_to_me(context, order_id, admin_user)
+
+    @staticmethod
     async def admin_approve_cancel(context, order_id: int, admin_user=None):
-        session = db.get_session()
-        try:
-            tx = session.query(Transaction).filter(Transaction.id == order_id).first()
-            if not tx:
-                return False, "الطلب غير موجود"
-            # ممنوع الموافقة على الإلغاء بعد التقبيض / أثناء التنفيذ
-            if tx.status in BLOCK_CANCEL_APPROVE:
-                return False, "ممنوع: تم التقبيض أو الطلب قيد التنفيذ"
-            if tx.status != ST_CANCEL_REQUESTED:
-                return False, f"حالة الطلب الآن: {status_label(tx.status)}"
-
-            user = session.query(User).filter(User.id == tx.user_id).first()
-            amount = float(tx.amount or 0)
-            if user:
-                # إرجاع كامل المحجوز — بدون عمولة
-                user.balance = float(user.balance or 0) + amount
-                user.reserved_balance = max(
-                    0.0, float(user.reserved_balance or 0) - amount
-                )
-            tx.status = ST_CANCELLED
-            # العمولة ملغاة بالكامل — ما انخصمت أصلاً
-            tx.fee_amount = 0.0
-            tx.net_amount = 0.0
-            _stamp_decision(tx, admin_user, "موافقة على إلغاء السحب — إرجاع كامل بدون عمولة")
-            session.commit()
-            telegram_id = user.telegram_id if user else None
-            new_balance = float(user.balance or 0) if user else 0
-        finally:
-            session.close()
-
-        if telegram_id:
-            text = (
-                "✅ تم إلغاء السحب\n\n"
-                "رجعنا كامل المبلغ المحجوز لمحفظتك بدون عمولة\n\n"
-                f"💰 المبلغ الراجع {format_currency(amount)}\n"
-                f"💎 رصيدك الحالي {format_currency(new_balance)}\n"
-                f"🧾 رقم الطلب {tg_code(order_id)}"
-            )
-            try:
-                await context.bot.send_message(
-                    chat_id=telegram_id,
-                    text=text,
-                    parse_mode="HTML",
-                    reply_markup=Keyboards.withdraw_cancelled_done_menu(),
-                )
-            except TelegramError:
-                pass
-        return True, "تم إلغاء السحب وإرجاع المبلغ"
+        return await ops.admin_approve_cancel(context, order_id, admin_user)
 
     @staticmethod
     async def admin_reject_cancel(
         context, order_id: int, reason: str = "", paid: bool = False, admin_user=None
     ):
-        session = db.get_session()
-        try:
-            tx = session.query(Transaction).filter(Transaction.id == order_id).first()
-            if not tx:
-                return False, "الطلب غير موجود"
-            user = session.query(User).filter(User.id == tx.user_id).first()
-            telegram_id = user.telegram_id if user else None
-
-            # بعد التقبيض / قيد التنفيذ — رفض إلغاء فقط (بدون تغيير حالة السحب المدفوع)
-            if paid or tx.status in BLOCK_CANCEL_APPROVE:
-                tx.cancel_rejection_reason = reason or "تم التقبيض / قيد التنفيذ"
-                # لا نلمس حالة paid/processing إن كانت كذلك
-                if tx.status == ST_CANCEL_REQUESTED:
-                    tx.status = ST_PAID if paid else ST_AWAITING_PAYOUT
-                _stamp_decision(tx, admin_user, f"رفض إلغاء بعد التقبيض/تنفيذ — {reason}")
-                session.commit()
-                msg = (
-                    "❌ ما عاد فينا نلغي السحب\n\n"
-                    "العملية اتقبضت أو فاتت بالتنفيذ النهائي\n\n"
-                    f"🧾 رقم الطلب {tg_code(order_id)}"
-                )
-                markup = Keyboards.withdraw_locked_menu(order_id)
-            else:
-                if tx.status != ST_CANCEL_REQUESTED:
-                    return False, f"حالة الطلب: {status_label(tx.status)}"
-                tx.cancel_rejection_reason = reason or "رفض إداري"
-                tx.status = ST_AWAITING_PAYOUT
-                _stamp_decision(tx, admin_user, f"رفض طلب الإلغاء — {reason}")
-                session.commit()
-                msg = (
-                    "❌ ما تمت الموافقة على الإلغاء\n\n"
-                    f"السبب\n{reason or '—'}\n\n"
-                    "طلب السحب لسا شغال بشكل طبيعي\n\n"
-                    f"🧾 رقم الطلب {tg_code(order_id)}"
-                )
-                markup = Keyboards.withdraw_submitted_menu(order_id)
-        finally:
-            session.close()
-
-        if telegram_id:
-            try:
-                await context.bot.send_message(
-                    chat_id=telegram_id,
-                    text=msg,
-                    parse_mode="HTML",
-                    reply_markup=markup,
-                )
-            except TelegramError:
-                pass
-        return True, "تم رفض طلب الإلغاء"
+        return await ops.admin_reject_cancel(
+            context, order_id, reason=reason, paid=paid, admin_user=admin_user
+        )
 
     @staticmethod
     async def admin_mark_processing(context, order_id: int, admin_user=None):
-        session = db.get_session()
-        try:
-            tx = session.query(Transaction).filter(Transaction.id == order_id).first()
-            if not tx:
-                return False, "غير موجود"
-            if tx.status in (ST_PAID, ST_CANCELLED, ST_REJECTED, "completed", "failed", "cancelled"):
-                return False, f"لا يمكن: {status_label(tx.status)}"
-            prev = tx.status
-            # إذا كان فيه طلب إلغاء — يُرفض تلقائياً عند الدخول للتنفيذ
-            if prev == ST_CANCEL_REQUESTED:
-                tx.cancel_rejection_reason = "فات للتنفيذ أثناء طلب الإلغاء"
-            tx.status = ST_PROCESSING
-            _stamp_decision(tx, admin_user, "تحويل لقيد التنفيذ")
-            session.commit()
-        finally:
-            session.close()
-        return True, "قيد التنفيذ"
+        return await ops.admin_accept_order(context, order_id, admin_user)
 
     @staticmethod
     async def admin_mark_paid(context, order_id: int, admin_user=None):
-        """تأكيد التقبيض الحقيقي فقط — هنا تظهر رسالة نجاح السحب وتُثبت العمولة."""
-        session = db.get_session()
-        was_cancel = False
-        try:
-            tx = session.query(Transaction).filter(Transaction.id == order_id).first()
-            if not tx:
-                return False, "غير موجود"
-            if tx.status == ST_PAID or tx.status == "completed":
-                return False, "تم التقبيض مسبقاً"
-            if tx.status in (ST_CANCELLED, ST_REJECTED, "cancelled", "failed"):
-                return False, f"لا يمكن: {status_label(tx.status)}"
-
-            user = session.query(User).filter(User.id == tx.user_id).first()
-            if tx.status == ST_CANCEL_REQUESTED:
-                was_cancel = True
-                tx.cancel_rejection_reason = "تم التقبيض أثناء طلب الإلغاء — رُفض الإلغاء تلقائياً"
-
-            amount = float(tx.amount or 0)
-            # تثبيت العمولة عند نجاح التقبيض فقط (10% من مبلغ السحب)
-            fee, net, profit = fee_breakdown(amount)
-            tx.fee_amount = fee
-            tx.net_amount = net
-            tx.profit_amount = float(tx.profit_amount or profit)
-
-            if user:
-                user.reserved_balance = max(
-                    0.0, float(user.reserved_balance or 0) - amount
-                )
-            method_txt = method_label(tx.method)
-            if tx.crypto_currency and tx.crypto_network:
-                method_txt = f"{tx.crypto_currency}/{tx.crypto_network}"
-
-            tx.status = ST_PAID
-            _stamp_decision(
-                tx,
-                admin_user,
-                f"تأكيد التقبيض — عمولة {fee} — صافي {net}",
-            )
-            telegram_id = user.telegram_id if user else None
-            user_db_id = user.id if user else None
-            session.commit()
-        finally:
-            session.close()
-
-        if telegram_id and was_cancel:
-            try:
-                await context.bot.send_message(
-                    chat_id=telegram_id,
-                    text=(
-                        "❌ ما عاد فينا نلغي السحب\n\n"
-                        "العملية اتقبضت\n\n"
-                        f"🧾 رقم الطلب {tg_code(order_id)}"
-                    ),
-                    parse_mode="HTML",
-                    reply_markup=Keyboards.withdraw_locked_menu(order_id),
-                )
-            except TelegramError:
-                pass
-
-        if telegram_id:
-            comment = ""
-            try:
-                import fun_service
-                if user_db_id:
-                    fun_service.track_order_success(user_db_id)
-                comment = f"\n\n📢 تعليق المحاسب\n{fun_service.pick_receipt_comment()}"
-            except Exception:
-                pass
-            text = (
-                "✅ تم السحب بنجاح\n\n"
-                f"💰 مبلغ السحب {format_currency(amount)}\n"
-                f"📈 الربح المحتسب {format_currency(profit)}\n"
-                f"🧮 العمولة {format_currency(fee)}\n"
-                f"✅ الصافي اللي استلمته {format_currency(net)}\n"
-                f"💳 طريقة الاستلام {method_txt}\n"
-                f"🧾 رقم الطلب {tg_code(order_id)}"
-                f"{comment}"
-            )
-            try:
-                await context.bot.send_message(
-                    chat_id=telegram_id,
-                    text=text,
-                    parse_mode="HTML",
-                    reply_markup=Keyboards.withdraw_paid_menu(order_id),
-                )
-            except TelegramError:
-                pass
-        return True, "تم التقبيض"
+        return await ops.admin_mark_paid(context, order_id, admin_user)
 
     @staticmethod
-    async def admin_reject_withdraw(context, order_id: int, reason: str = "", admin_user=None):
-        session = db.get_session()
-        try:
-            tx = session.query(Transaction).filter(Transaction.id == order_id).first()
-            if not tx:
-                return False, "غير موجود"
-            if tx.status in (ST_PAID, "completed"):
-                return False, "تم التقبيض مسبقاً — ما عاد ممكن الرفض مع إرجاع"
-            user = session.query(User).filter(User.id == tx.user_id).first()
-            amount = float(tx.amount or 0)
-            already_closed = tx.status in (
-                ST_CANCELLED,
-                ST_REJECTED,
-                "cancelled",
-                "failed",
-            )
-            if user and not already_closed:
-                # إرجاع كامل المحجوز بدون عمولة
-                user.balance = float(user.balance or 0) + amount
-                user.reserved_balance = max(
-                    0.0, float(user.reserved_balance or 0) - amount
-                )
-            tx.status = ST_REJECTED
-            tx.fee_amount = 0.0
-            tx.net_amount = 0.0
-            _stamp_decision(
-                tx, admin_user, f"رفض السحب قبل التقبيض — إرجاع كامل — {reason}"
-            )
-            new_balance = float(user.balance or 0) if user else 0
-            telegram_id = user.telegram_id if user else None
-            session.commit()
-        finally:
-            session.close()
+    async def admin_reject_withdraw(
+        context, order_id: int, reason: str = "", admin_user=None, reason_code: str = ""
+    ):
+        return await ops.admin_reject_withdraw(
+            context, order_id, reason=reason, admin_user=admin_user, reason_code=reason_code
+        )
 
-        if telegram_id:
-            text = (
-                "❌ ما قدرنا ننفذ طلب السحب\n\n"
-                f"السبب\n{reason or '—'}\n\n"
-                "رجعنا كامل المبلغ المحجوز لمحفظتك بدون عمولة\n\n"
-                f"💰 المبلغ الراجع {format_currency(amount)}\n"
-                f"💎 رصيدك الحالي {format_currency(new_balance)}\n"
-                f"🧾 رقم الطلب {tg_code(order_id)}"
-            )
-            try:
-                await context.bot.send_message(
-                    chat_id=telegram_id,
-                    text=text,
-                    parse_mode="HTML",
-                    reply_markup=Keyboards.withdraw_rejected_menu(),
-                )
-            except TelegramError:
-                pass
-        return True, "مرفوض مع إرجاع الرصيد"
+    @staticmethod
+    async def admin_forward_to_support(context, order_id: int, admin_user=None):
+        return await ops.admin_forward_to_support(context, order_id, admin_user)
 
     # ─── مساعدات ──────────────────────────────────────────
 
     @staticmethod
-    def _get_tx(order_id: int) -> Optional[Transaction]:
-        session = db.get_session()
-        try:
-            tx = session.query(Transaction).filter(Transaction.id == order_id).first()
-            return db._detach(session, tx)
-        finally:
-            session.close()
+    def _get_tx(order_id: int):
+        return ops.get_tx(order_id)
 
     @staticmethod
     def _has_duplicate(user_id: int, amount: float, method: str, dest: str) -> bool:
@@ -1019,7 +844,6 @@ class WithdrawFlow:
         chat_id = update.effective_chat.id if update.effective_chat else None
         msg_id = context.user_data.get("wd_msg_id")
 
-        # كولباك → تعديل رسالة الزر مباشرة
         if update.callback_query and update.callback_query.message:
             await safe_edit_callback_message(
                 update,
@@ -1034,7 +858,6 @@ class WithdrawFlow:
                 pass
             return
 
-        # رد نصي → حاول تعديل شاشة السحب السابقة
         if chat_id and msg_id:
             try:
                 kwargs = {
@@ -1050,7 +873,6 @@ class WithdrawFlow:
             except TelegramError:
                 pass
 
-        # أول رسالة / فشل التعديل → أرسل جديدة واحفظ معرفها
         target = update.effective_message or update.message
         if not target:
             return
@@ -1070,81 +892,8 @@ class WithdrawFlow:
 
     @staticmethod
     async def _notify_admins_new(context, order_id: int):
-        tx = WithdrawFlow._get_tx(order_id)
-        if not tx:
-            return
-        user = db.get_user_by_db_id(tx.user_id) if hasattr(db, "get_user_by_db_id") else None
-        if not user:
-            session = db.get_session()
-            try:
-                user = session.query(User).filter(User.id == tx.user_id).first()
-                user = db._detach(session, user)
-            finally:
-                session.close()
-        fee = float(tx.fee_amount or 0)
-        net = float(tx.net_amount or 0)
-        profit = float(tx.profit_amount or 0)
-        text = (
-            f"🏧 طلب سحب جديد\n"
-            f"🧾 رقم الطلب {order_id}\n\n"
-            f"الحالة: {status_label(tx.status)}\n"
-            f"المستخدم: {get_user_display_name(user)}\n"
-            f"آيدي تليغرام: {getattr(user, 'telegram_id', '')}\n"
-            f"يوزر: @{getattr(user, 'username', None) or '—'}\n"
-            f"المبلغ: {format_currency(tx.amount)}\n"
-            f"الربح: {format_currency(profit)}\n"
-            f"العمولة (متوقعة): {format_currency(fee)}\n"
-            f"الصافي (متوقع): {format_currency(net)}\n"
-            f"الطريقة: {method_label(tx.method)}\n"
-            f"الوجهة: {tx.withdraw_destination}\n"
-            f"وقت الطلب: {tx.created_at}\n"
-        )
-        for admin_id in Config.ADMIN_IDS:
-            try:
-                await context.bot.send_message(
-                    chat_id=admin_id,
-                    text=text,
-                    reply_markup=Keyboards.admin_withdraw_order_menu(order_id),
-                )
-            except TelegramError:
-                pass
+        await ops.notify_admins_new(context, order_id)
 
     @staticmethod
     async def _notify_admins_cancel(context, order_id: int):
-        tx = WithdrawFlow._get_tx(order_id)
-        if not tx:
-            return
-        session = db.get_session()
-        try:
-            user = session.query(User).filter(User.id == tx.user_id).first()
-            user = db._detach(session, user)
-        finally:
-            session.close()
-        fee = float(tx.fee_amount or 0)
-        net = float(tx.net_amount or 0)
-        profit = float(tx.profit_amount or 0)
-        text = (
-            f"↩️ طلب إلغاء سحب\n"
-            f"🧾 رقم الطلب {order_id}\n\n"
-            f"المستخدم: {get_user_display_name(user)}\n"
-            f"آيدي تليغرام: {getattr(user, 'telegram_id', '')}\n"
-            f"يوزر: @{getattr(user, 'username', None) or '—'}\n"
-            f"مبلغ السحب: {format_currency(tx.amount)}\n"
-            f"الربح المحتسب: {format_currency(profit)}\n"
-            f"العمولة: {format_currency(fee)}\n"
-            f"الصافي: {format_currency(net)}\n"
-            f"طريقة الاستلام: {method_label(tx.method)}\n"
-            f"بيانات الاستلام: {tx.withdraw_destination}\n"
-            f"وقت طلب السحب: {tx.created_at}\n"
-            f"وقت طلب الإلغاء: {tx.cancel_requested_at}\n"
-            f"حالة التقبيض: {status_label(tx.status)}\n"
-        )
-        for admin_id in Config.ADMIN_IDS:
-            try:
-                await context.bot.send_message(
-                    chat_id=admin_id,
-                    text=text,
-                    reply_markup=Keyboards.admin_withdraw_cancel_menu(order_id),
-                )
-            except TelegramError:
-                pass
+        await ops.notify_admins_cancel(context, order_id)
