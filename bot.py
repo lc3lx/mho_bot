@@ -17,7 +17,8 @@ from keyboards import Keyboards
 from handlers import (
     start_handler, main_menu_handler, deposit_handler, withdraw_handler,
     referral_handler, gift_handler, admin_handler, transaction_handler,
-    contact_handler, callback_query_handler, message_handler
+    contact_handler, callback_query_handler, message_handler,
+    bind_payout_group_handler, bind_support_group_handler, chatid_handler,
 )
 from contact_handler import ContactHandler
 from payment_handler import PaymentHandler
@@ -81,6 +82,9 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("admin", admin_handler))
         self.application.add_handler(CommandHandler("reply", ContactHandler.admin_reply_to_user))
         self.application.add_handler(CommandHandler("messages", ContactHandler.view_messages))
+        self.application.add_handler(CommandHandler("bind_payout", bind_payout_group_handler))
+        self.application.add_handler(CommandHandler("bind_support", bind_support_group_handler))
+        self.application.add_handler(CommandHandler("chatid", chatid_handler))
         
         # معالج الاستعلامات المضمنة
         self.application.add_handler(CallbackQueryHandler(callback_query_handler))

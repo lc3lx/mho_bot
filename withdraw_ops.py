@@ -205,7 +205,26 @@ async def notify_admins_new(context, order_id: int):
     markup = Keyboards.admin_withdraw_order_menu(order_id, assigned=False)
     primary_chat = None
     primary_msg = None
-    for chat_id in resolve_notify_chat_ids(tx):
+    targets = resolve_notify_chat_ids(tx)
+    # #region agent log
+    try:
+        from _agent_debug import dbg
+        dbg(
+            "A",
+            "withdraw_ops.notify_admins_new",
+            "notify targets resolved",
+            {
+                "order_id": order_id,
+                "targets": targets,
+                "payout_group": ps.get_payout_admin_group_id(),
+                "support_group": ps.get_support_group_id(),
+                "fallback_admins": not bool(ps.get_payout_admin_group_id()),
+            },
+        )
+    except Exception:
+        pass
+    # #endregion
+    for chat_id in targets:
         try:
             sent = await context.bot.send_message(
                 chat_id=chat_id,
@@ -215,8 +234,32 @@ async def notify_admins_new(context, order_id: int):
             if primary_chat is None:
                 primary_chat = chat_id
                 primary_msg = sent.message_id
-        except TelegramError:
+            # #region agent log
+            try:
+                from _agent_debug import dbg
+                dbg(
+                    "C",
+                    "withdraw_ops.notify_admins_new",
+                    "send_message ok",
+                    {"order_id": order_id, "chat_id": chat_id, "msg_id": sent.message_id},
+                )
+            except Exception:
+                pass
+            # #endregion
+        except TelegramError as e:
             logger.exception("فشل إرسال طلب سحب لـ %s", chat_id)
+            # #region agent log
+            try:
+                from _agent_debug import dbg
+                dbg(
+                    "C",
+                    "withdraw_ops.notify_admins_new",
+                    "send_message fail",
+                    {"order_id": order_id, "chat_id": chat_id, "error": str(e)[:200]},
+                )
+            except Exception:
+                pass
+            # #endregion
     if primary_chat is not None:
         session = db.get_session()
         try:
@@ -760,6 +803,24 @@ async def handle_support_message(update, context, text: str):
     )
     support_gid = ps.get_support_group_id()
     targets = [support_gid] if support_gid else list(Config.ADMIN_IDS)
+    # #region agent log
+    try:
+        from _agent_debug import dbg
+        dbg(
+            "A",
+            "withdraw_ops.handle_support_message",
+            "support ticket notify",
+            {
+                "ticket_id": ticket_id,
+                "order_id": order_id,
+                "support_gid": support_gid,
+                "targets": targets,
+                "fallback_admins": support_gid is None,
+            },
+        )
+    except Exception:
+        pass
+    # #endregion
     for chat_id in targets:
         if not chat_id:
             continue
@@ -782,8 +843,32 @@ async def handle_support_message(update, context, text: str):
                     session.commit()
             finally:
                 session.close()
-        except TelegramError:
+            # #region agent log
+            try:
+                from _agent_debug import dbg
+                dbg(
+                    "C",
+                    "withdraw_ops.handle_support_message",
+                    "support send ok",
+                    {"ticket_id": ticket_id, "chat_id": chat_id, "msg_id": sent.message_id},
+                )
+            except Exception:
+                pass
+            # #endregion
+        except TelegramError as e:
             logger.exception("فشل إرسال تذكرة دعم")
+            # #region agent log
+            try:
+                from _agent_debug import dbg
+                dbg(
+                    "C",
+                    "withdraw_ops.handle_support_message",
+                    "support send fail",
+                    {"ticket_id": ticket_id, "chat_id": chat_id, "error": str(e)[:200]},
+                )
+            except Exception:
+                pass
+            # #endregion
 
     await update.message.reply_text(
         "✅ وصلت رسالتك للدعم\nرح يردّوا عليك من البوت",

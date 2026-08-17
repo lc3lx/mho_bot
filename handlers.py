@@ -625,6 +625,75 @@ async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالج لوحة الإدمن"""
     await AdminHandler.admin_panel(update, context)
 
+
+async def _bind_group_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, *, kind: str
+):
+    """ربط كروب التقبيض/الدعم من داخل الكروب نفسه (آيدي تلقائي)."""
+    user = update.effective_user
+    chat = update.effective_chat
+    if not user or user.id not in Config.ADMIN_IDS:
+        return
+    if not chat or chat.type not in ("group", "supergroup"):
+        await update.message.reply_text(
+            "استخدم الأمر داخل كروب التقبيض أو الدعم (مو بالخاص)."
+        )
+        return
+    import payout_service as ps
+
+    key = (
+        ps.SK_PAYOUT_GROUP if kind == "payout" else ps.SK_SUPPORT_GROUP
+    )
+    label = "التقبيض (قبض)" if kind == "payout" else "الدعم"
+    ps.set_withdraw_setting(key, str(chat.id))
+    # #region agent log
+    try:
+        from _agent_debug import dbg
+
+        dbg(
+            "A",
+            "handlers.bind_group",
+            "group bound",
+            {
+                "kind": kind,
+                "chat_id": chat.id,
+                "chat_title": getattr(chat, "title", None),
+                "admin_id": user.id,
+                "setting_key": key,
+            },
+        )
+    except Exception:
+        pass
+    # #endregion
+    await update.message.reply_text(
+        f"✅ تم ربط كروب {label}\n"
+        f"🆔 chat_id = `{chat.id}`\n"
+        f"📌 العنوان: {getattr(chat, 'title', '—')}\n\n"
+        "الطلبات/التذاكر رح توصل لهون بعد إعادة تشغيل البوت إذا لزم.",
+        parse_mode="Markdown",
+    )
+
+
+async def bind_payout_group_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _bind_group_command(update, context, kind="payout")
+
+
+async def bind_support_group_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _bind_group_command(update, context, kind="support")
+
+
+async def chatid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """يعرض آيدي الشات الحالي (للإدمن)."""
+    if not update.effective_user or update.effective_user.id not in Config.ADMIN_IDS:
+        return
+    chat = update.effective_chat
+    await update.message.reply_text(
+        f"chat_id = `{chat.id}`\n"
+        f"type = {chat.type}\n"
+        f"title = {getattr(chat, 'title', None) or '—'}",
+        parse_mode="Markdown",
+    )
+
 async def transaction_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """دفتر الفضايح"""
     await screens.show_ledger(update, context)
@@ -1125,9 +1194,31 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         ticket_id = int(data.replace("sup_ticket_reply_", "", 1))
         context.user_data["admin_state"] = "waiting_support_ticket_reply"
         context.user_data["support_reply_ticket_id"] = ticket_id
+        # #region agent log
+        try:
+            from _agent_debug import dbg
+            dbg(
+                "B",
+                "handlers.sup_ticket_reply",
+                "admin pressed reply",
+                {
+                    "ticket_id": ticket_id,
+                    "chat_id": update.effective_chat.id if update.effective_chat else None,
+                    "chat_type": getattr(update.effective_chat, "type", None),
+                    "admin_id": update.effective_user.id,
+                },
+            )
+        except Exception:
+            pass
+        # #endregion
         await safe_edit_callback_message(
             update,
-            f"💬 رد على التذكرة #{ticket_id}\n\nأرسل نص الرد:",
+            (
+                f"💬 رد على التذكرة #{ticket_id}\n\n"
+                "⚠️ مهم: اعمل Reply على هالرسالة واكتب الرد\n"
+                "(البوت بالكروب غالباً ما بيشوف الرسائل العادية)\n"
+                "أو ابعت الرد برايفت للبوت مباشرة."
+            ),
             reply_markup=Keyboards.cancel_admin_operation(),
             context=context,
         )
@@ -1721,6 +1812,31 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         import withdraw_ops as ops
         ticket_id = int(context.user_data.pop("support_reply_ticket_id", 0) or 0)
         context.user_data.pop("admin_state", None)
+        # #region agent log
+        try:
+            from _agent_debug import dbg
+            chat = update.effective_chat
+            is_reply_to_bot = bool(
+                update.message
+                and update.message.reply_to_message
+                and update.message.reply_to_message.from_user
+                and update.message.reply_to_message.from_user.is_bot
+            )
+            dbg(
+                "B",
+                "handlers.waiting_support_ticket_reply",
+                "admin reply text received",
+                {
+                    "ticket_id": ticket_id,
+                    "chat_id": chat.id if chat else None,
+                    "chat_type": getattr(chat, "type", None),
+                    "is_reply_to_bot": is_reply_to_bot,
+                    "text_len": len((update.message.text or "").strip()),
+                },
+            )
+        except Exception:
+            pass
+        # #endregion
         ok, msg = await ops.support_send_reply(
             context, ticket_id, update.message.text.strip(), update.effective_user
         )
