@@ -147,6 +147,30 @@ def get_support_group_id() -> Optional[int]:
         return None
 
 
+def infer_group_kind(title: str) -> Optional[str]:
+    """دعم / قبض من عنوان الكروب."""
+    t = (title or "").strip()
+    if "دعم" in t:
+        return "support"
+    if "قبض" in t or "تقبيض" in t:
+        return "payout"
+    return None
+
+
+def bind_group_chat(kind: str, chat_id: int) -> None:
+    key = SK_PAYOUT_GROUP if kind == "payout" else SK_SUPPORT_GROUP
+    set_withdraw_setting(key, str(chat_id))
+
+
+def maybe_autolink_group(chat_id: int, title: str) -> Optional[str]:
+    """يربط كروب قبض/دعم تلقائياً من الاسم. يرجع kind أو None."""
+    kind = infer_group_kind(title)
+    if not kind or not chat_id:
+        return None
+    bind_group_chat(kind, int(chat_id))
+    return kind
+
+
 def set_withdraw_setting(key: str, value: str) -> None:
     db.set_setting(key, str(value))
 

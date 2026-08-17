@@ -267,6 +267,22 @@ def get_user_display_name(user: User) -> str:
         return f"مستخدم {tg_id}"
     return "مستخدم غير معروف"
 
+
+def format_user_handle(user: User) -> str:
+    raw = (getattr(user, "username", None) or "").strip().lstrip("@")
+    return f"@{raw}" if raw else "بدون يوزر"
+
+
+def user_identity_block(user: User) -> str:
+    """اسم + يوزر + آيدي للعرض بكروب الدعم/التقبيض."""
+    return "\n".join(
+        [
+            f"👤 الاسم {get_user_display_name(user)}",
+            f"🔖 اليوزر {format_user_handle(user)}",
+            f"🆔 تيليغرام {getattr(user, 'telegram_id', '') or '—'}",
+        ]
+    )
+
 def format_transaction_type(transaction_type: str) -> str:
     """تنسيق نوع المعاملة"""
     types = {

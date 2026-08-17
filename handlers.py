@@ -632,12 +632,22 @@ async def _bind_group_command(
     """ربط كروب التقبيض/الدعم من داخل الكروب نفسه (آيدي تلقائي)."""
     user = update.effective_user
     chat = update.effective_chat
-    if not user or user.id not in Config.ADMIN_IDS:
-        return
     if not chat or chat.type not in ("group", "supergroup"):
-        await update.message.reply_text(
-            "استخدم الأمر داخل كروب التقبيض أو الدعم (مو بالخاص)."
-        )
+        if update.message:
+            await update.message.reply_text(
+                "استخدم الأمر داخل كروب التقبيض أو الدعم (مو بالخاص)."
+            )
+        return
+    allowed = bool(user and user.id in Config.ADMIN_IDS)
+    if not allowed and user:
+        try:
+            member = await context.bot.get_chat_member(chat.id, user.id)
+            allowed = member.status in ("creator", "administrator")
+        except TelegramError:
+            allowed = False
+    if not allowed:
+        if update.message:
+            await update.message.reply_text("هالأمر للمشرفين فقط.")
         return
     import payout_service as ps
 
@@ -645,7 +655,7 @@ async def _bind_group_command(
         ps.SK_PAYOUT_GROUP if kind == "payout" else ps.SK_SUPPORT_GROUP
     )
     label = "التقبيض (قبض)" if kind == "payout" else "الدعم"
-    ps.set_withdraw_setting(key, str(chat.id))
+    ps.bind_group_chat(kind, chat.id)
     # #region agent log
     try:
         from _agent_debug import dbg
@@ -658,9 +668,10 @@ async def _bind_group_command(
                 "kind": kind,
                 "chat_id": chat.id,
                 "chat_title": getattr(chat, "title", None),
-                "admin_id": user.id,
+                "admin_id": user.id if user else None,
                 "setting_key": key,
             },
+            run_id="post-fix",
         )
     except Exception:
         pass
@@ -669,8 +680,65 @@ async def _bind_group_command(
         f"✅ تم ربط كروب {label}\n"
         f"🆔 chat_id = `{chat.id}`\n"
         f"📌 العنوان: {getattr(chat, 'title', '—')}\n\n"
-        "الطلبات/التذاكر رح توصل لهون بعد إعادة تشغيل البوت إذا لزم.",
+        "الطلبات والتذاكر رح توصل لهون.",
         parse_mode="Markdown",
+    )
+
+
+async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ربط تلقائي لكروب دعم/قبض لما البوت ينضاف أو يترقّى مشرف."""
+    chat = update.effective_chat
+    mcm = update.my_chat_member
+    if not chat or not mcm or chat.type not in ("group", "supergroup"):
+        return
+    new_status = getattr(mcm.new_chat_member, "status", "")
+    if new_status not in ("administrator", "member"):
+        return
+    import payout_service as ps
+
+    kind = ps.maybe_autolink_group(chat.id, getattr(chat, "title", "") or "")
+    # #region agent log
+    try:
+        from _agent_debug import dbg
+
+        dbg(
+            "A",
+            "handlers.on_my_chat_member",
+            "autolink attempt",
+            {
+                "chat_id": chat.id,
+                "title": getattr(chat, "title", None),
+                "kind": kind,
+                "status": new_status,
+            },
+            run_id="post-fix",
+        )
+    except Exception:
+        pass
+    # #endregion
+    if not kind:
+        return
+    label = "التقبيض" if kind == "payout" else "الدعم"
+    try:
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text=f"✅ هذا الكروب انربط تلقائياً ككروب {label}.\nالرسائل رح توصل لهون.",
+        )
+    except TelegramError:
+        pass
+
+
+def _is_staff_user(user_id: int, chat) -> bool:
+    if user_id in Config.ADMIN_IDS:
+        return True
+    if not chat or getattr(chat, "type", None) not in ("group", "supergroup"):
+        return False
+    import payout_service as ps
+
+    gid = chat.id
+    return gid in (
+        ps.get_support_group_id(),
+        ps.get_payout_admin_group_id(),
     )
 
 
@@ -683,14 +751,24 @@ async def bind_support_group_handler(update: Update, context: ContextTypes.DEFAU
 
 
 async def chatid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """يعرض آيدي الشات الحالي (للإدمن)."""
+    """يعرض آيدي الشات الحالي ويربط كروب دعم/قبض تلقائياً من الاسم."""
     if not update.effective_user or update.effective_user.id not in Config.ADMIN_IDS:
         return
     chat = update.effective_chat
+    import payout_service as ps
+    kind = None
+    if chat and chat.type in ("group", "supergroup"):
+        kind = ps.maybe_autolink_group(chat.id, getattr(chat, "title", "") or "")
+    extra = ""
+    if kind == "support":
+        extra = "\n✅ انربط ككروب دعم"
+    elif kind == "payout":
+        extra = "\n✅ انربط ككروب تقبيض"
     await update.message.reply_text(
         f"chat_id = `{chat.id}`\n"
         f"type = {chat.type}\n"
-        f"title = {getattr(chat, 'title', None) or '—'}",
+        f"title = {getattr(chat, 'title', None) or '—'}"
+        f"{extra}",
         parse_mode="Markdown",
     )
 
@@ -703,6 +781,14 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     """معالج الاستعلامات المضمنة"""
     query = update.callback_query
     data = query.data
+
+    chat = update.effective_chat
+    if chat and getattr(chat, "type", None) in ("group", "supergroup"):
+        try:
+            import payout_service as ps
+            ps.maybe_autolink_group(chat.id, getattr(chat, "title", "") or "")
+        except Exception:
+            pass
 
     # منع الضغط المتكرر (ثانيتان) — عدا الاشتراك/الموافقة/الزر الممنوع
     if data not in ("accept_side_effects", "check_subscription", "forbidden_press"):
@@ -1007,9 +1093,11 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         order_id = int(data.replace("wd_support_", "", 1))
         await WithdrawFlow.start_support(update, context, order_id)
         return
-    if data.startswith("admin_wd_accept_"):
-        if update.effective_user.id not in Config.ADMIN_IDS:
+    if data.startswith("admin_wd_") or data.startswith("sup_ticket_"):
+        if not _is_staff_user(update.effective_user.id, update.effective_chat):
+            await interactive_answer(query, "هالزر للدعم والإدارة فقط", alert=True)
             return
+    if data.startswith("admin_wd_accept_"):
         from withdraw_flow import WithdrawFlow
         order_id = int(data.replace("admin_wd_accept_", "", 1))
         ok, msg = await WithdrawFlow.admin_accept_order(
@@ -1018,8 +1106,6 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         await interactive_answer(query, msg, alert=True)
         return
     if data.startswith("admin_wd_transfer_"):
-        if update.effective_user.id not in Config.ADMIN_IDS:
-            return
         from withdraw_flow import WithdrawFlow
         order_id = int(data.replace("admin_wd_transfer_", "", 1))
         ok, msg = await WithdrawFlow.admin_transfer_to_me(
@@ -1028,8 +1114,6 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         await interactive_answer(query, msg, alert=True)
         return
     if data.startswith("admin_wd_pay_ask_"):
-        if update.effective_user.id not in Config.ADMIN_IDS:
-            return
         from withdraw_flow import WithdrawFlow
         import payout_service as ps
         order_id = int(data.replace("admin_wd_pay_ask_", "", 1))
@@ -1051,8 +1135,6 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         )
         return
     if data.startswith("admin_wd_pay_yes_"):
-        if update.effective_user.id not in Config.ADMIN_IDS:
-            return
         from withdraw_flow import WithdrawFlow
         order_id = int(data.replace("admin_wd_pay_yes_", "", 1))
         ok, msg = await WithdrawFlow.admin_mark_paid(
@@ -1061,8 +1143,6 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         await interactive_answer(query, msg, alert=True)
         return
     if data.startswith("admin_wd_pay_back_"):
-        if update.effective_user.id not in Config.ADMIN_IDS:
-            return
         from withdraw_flow import WithdrawFlow
         import withdraw_ops as ops
         order_id = int(data.replace("admin_wd_pay_back_", "", 1))
@@ -1084,8 +1164,6 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         )
         return
     if data.startswith("admin_wd_to_support_"):
-        if update.effective_user.id not in Config.ADMIN_IDS:
-            return
         from withdraw_flow import WithdrawFlow
         order_id = int(data.replace("admin_wd_to_support_", "", 1))
         ok, msg = await WithdrawFlow.admin_forward_to_support(
@@ -1094,8 +1172,6 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         await interactive_answer(query, msg, alert=True)
         return
     if data.startswith("admin_wd_paid_"):
-        if update.effective_user.id not in Config.ADMIN_IDS:
-            return
         from withdraw_flow import WithdrawFlow
         order_id = int(data.replace("admin_wd_paid_", "", 1))
         # توافق خلفي — يطلب تأكيد أولاً عبر pay_ask
@@ -1105,8 +1181,6 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         await interactive_answer(query, msg, alert=True)
         return
     if data.startswith("admin_wd_processing_"):
-        if update.effective_user.id not in Config.ADMIN_IDS:
-            return
         from withdraw_flow import WithdrawFlow
         order_id = int(data.replace("admin_wd_processing_", "", 1))
         ok, msg = await WithdrawFlow.admin_mark_processing(
@@ -1115,8 +1189,6 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         await interactive_answer(query, msg, alert=True)
         return
     if data.startswith("admin_wd_rej_"):
-        if update.effective_user.id not in Config.ADMIN_IDS:
-            return
         from withdraw_flow import WithdrawFlow
         import payout_service as ps
         # admin_wd_rej_{code}_{order_id}
@@ -1154,8 +1226,6 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         await interactive_answer(query, msg, alert=True)
         return
     if data.startswith("admin_wd_reject_"):
-        if update.effective_user.id not in Config.ADMIN_IDS:
-            return
         order_id = int(data.replace("admin_wd_reject_", "", 1))
         await safe_edit_callback_message(
             update,
@@ -1165,8 +1235,6 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         )
         return
     if data.startswith("admin_wd_cancel_ok_"):
-        if update.effective_user.id not in Config.ADMIN_IDS:
-            return
         from withdraw_flow import WithdrawFlow
         order_id = int(data.replace("admin_wd_cancel_ok_", "", 1))
         ok, msg = await WithdrawFlow.admin_approve_cancel(
@@ -1175,8 +1243,6 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         await interactive_answer(query, msg, alert=True)
         return
     if data.startswith("admin_wd_cancel_no_"):
-        if update.effective_user.id not in Config.ADMIN_IDS:
-            return
         order_id = int(data.replace("admin_wd_cancel_no_", "", 1))
         context.user_data["admin_state"] = "waiting_wd_cancel_reject_reason"
         context.user_data["admin_wd_cancel_reject_id"] = order_id
@@ -1188,9 +1254,6 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         )
         return
     if data.startswith("sup_ticket_reply_"):
-        if update.effective_user.id not in Config.ADMIN_IDS:
-            return
-        import withdraw_ops as ops
         ticket_id = int(data.replace("sup_ticket_reply_", "", 1))
         context.user_data["admin_state"] = "waiting_support_ticket_reply"
         context.user_data["support_reply_ticket_id"] = ticket_id
@@ -1200,32 +1263,38 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             dbg(
                 "B",
                 "handlers.sup_ticket_reply",
-                "admin pressed reply",
+                "staff pressed reply",
                 {
                     "ticket_id": ticket_id,
                     "chat_id": update.effective_chat.id if update.effective_chat else None,
                     "chat_type": getattr(update.effective_chat, "type", None),
                     "admin_id": update.effective_user.id,
                 },
+                run_id="post-fix",
             )
         except Exception:
             pass
         # #endregion
-        await safe_edit_callback_message(
-            update,
-            (
-                f"💬 رد على التذكرة #{ticket_id}\n\n"
-                "⚠️ مهم: اعمل Reply على هالرسالة واكتب الرد\n"
-                "(البوت بالكروب غالباً ما بيشوف الرسائل العادية)\n"
-                "أو ابعت الرد برايفت للبوت مباشرة."
-            ),
-            reply_markup=Keyboards.cancel_admin_operation(),
-            context=context,
-        )
+        try:
+            await context.bot.send_message(
+                chat_id=update.effective_user.id,
+                text=(
+                    f"💬 رد على التذكرة #{ticket_id}\n\n"
+                    "اكتب الرد هون بالخاص.\n"
+                    "بيوصل للمستخدم من البوت بدون ما ينكشف حسابك."
+                ),
+            )
+            await interactive_answer(
+                query, "ابعت الرد بالخاص للبوت", alert=True
+            )
+        except TelegramError:
+            await interactive_answer(
+                query,
+                "افتح البوت بالخاص (/start) بعدين كبّس رد مرة تانية",
+                alert=True,
+            )
         return
     if data.startswith("sup_ticket_open_wd_"):
-        if update.effective_user.id not in Config.ADMIN_IDS:
-            return
         from withdraw_flow import WithdrawFlow
         import withdraw_ops as ops
         order_id = int(data.replace("sup_ticket_open_wd_", "", 1))
@@ -1247,8 +1316,6 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         )
         return
     if data.startswith("sup_ticket_resolve_"):
-        if update.effective_user.id not in Config.ADMIN_IDS:
-            return
         import withdraw_ops as ops
         ticket_id = int(data.replace("sup_ticket_resolve_", "", 1))
         ok, msg = await ops.support_resolve(
@@ -1257,8 +1324,6 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         await interactive_answer(query, msg, alert=True)
         return
     if data.startswith("sup_ticket_escalate_"):
-        if update.effective_user.id not in Config.ADMIN_IDS:
-            return
         import withdraw_ops as ops
         ticket_id = int(data.replace("sup_ticket_escalate_", "", 1))
         ok, msg = await ops.support_escalate(
@@ -1740,6 +1805,35 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🚫 حسابك محظور من استخدام البوت.")
         return
 
+    if context.user_data.get("admin_state") == "waiting_support_ticket_reply":
+        import withdraw_ops as ops
+        ticket_id = int(context.user_data.pop("support_reply_ticket_id", 0) or 0)
+        context.user_data.pop("admin_state", None)
+        # #region agent log
+        try:
+            from _agent_debug import dbg
+            chat = update.effective_chat
+            dbg(
+                "B",
+                "handlers.waiting_support_ticket_reply",
+                "staff reply text received",
+                {
+                    "ticket_id": ticket_id,
+                    "chat_id": chat.id if chat else None,
+                    "chat_type": getattr(chat, "type", None),
+                    "text_len": len((update.message.text or "").strip()),
+                },
+                run_id="post-fix",
+            )
+        except Exception:
+            pass
+        # #endregion
+        ok, msg = await ops.support_send_reply(
+            context, ticket_id, update.message.text.strip(), update.effective_user
+        )
+        await update.message.reply_text(msg)
+        return
+
     subscribed, reason = await check_channel_subscription(
         context, update.effective_user.id
     )
@@ -1794,41 +1888,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reason = update.message.text.strip()
         ok, msg = await WithdrawFlow.admin_reject_cancel(
             context, order_id, reason=reason, admin_user=update.effective_user
-        )
-        await update.message.reply_text(msg, reply_markup=Keyboards.admin_panel())
-        return
-
-    if is_admin and admin_state == "waiting_support_ticket_reply":
-        import withdraw_ops as ops
-        ticket_id = int(context.user_data.pop("support_reply_ticket_id", 0) or 0)
-        context.user_data.pop("admin_state", None)
-        # #region agent log
-        try:
-            from _agent_debug import dbg
-            chat = update.effective_chat
-            is_reply_to_bot = bool(
-                update.message
-                and update.message.reply_to_message
-                and update.message.reply_to_message.from_user
-                and update.message.reply_to_message.from_user.is_bot
-            )
-            dbg(
-                "B",
-                "handlers.waiting_support_ticket_reply",
-                "admin reply text received",
-                {
-                    "ticket_id": ticket_id,
-                    "chat_id": chat.id if chat else None,
-                    "chat_type": getattr(chat, "type", None),
-                    "is_reply_to_bot": is_reply_to_bot,
-                    "text_len": len((update.message.text or "").strip()),
-                },
-            )
-        except Exception:
-            pass
-        # #endregion
-        ok, msg = await ops.support_send_reply(
-            context, ticket_id, update.message.text.strip(), update.effective_user
         )
         await update.message.reply_text(msg, reply_markup=Keyboards.admin_panel())
         return

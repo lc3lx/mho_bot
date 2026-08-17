@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from telegram import Update, BotCommand
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ChatMemberHandler, filters, ContextTypes
 from telegram.error import TelegramError
 
 from database import DatabaseManager, User
@@ -19,6 +19,7 @@ from handlers import (
     referral_handler, gift_handler, admin_handler, transaction_handler,
     contact_handler, callback_query_handler, message_handler,
     bind_payout_group_handler, bind_support_group_handler, chatid_handler,
+    on_my_chat_member,
 )
 from contact_handler import ContactHandler
 from payment_handler import PaymentHandler
@@ -85,6 +86,9 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("bind_payout", bind_payout_group_handler))
         self.application.add_handler(CommandHandler("bind_support", bind_support_group_handler))
         self.application.add_handler(CommandHandler("chatid", chatid_handler))
+        self.application.add_handler(
+            ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER)
+        )
         
         # معالج الاستعلامات المضمنة
         self.application.add_handler(CallbackQueryHandler(callback_query_handler))

@@ -21,7 +21,12 @@ from database import (
 )
 from keyboards import Keyboards
 import payout_service as ps
-from utils import format_currency, get_user_display_name, tg_code
+from utils import (
+    format_currency,
+    get_user_display_name,
+    tg_code,
+    user_identity_block,
+)
 
 logger = logging.getLogger(__name__)
 db = DatabaseManager()
@@ -139,8 +144,7 @@ def build_admin_order_text(tx: Transaction, user: User, *, full_address: bool = 
         title,
         f"🧾 رقم الطلب {order_ref(tx)} (#{tx.id})",
         "",
-        f"👤 المستخدم {get_user_display_name(user)}",
-        f"🆔 تيليغرام {getattr(user, 'telegram_id', '')}",
+        user_identity_block(user),
         f"🎮 حساب iChancy {ichancy}",
         f"💰 مبلغ السحب {format_currency(tx.amount)}",
         f"📈 الربح المحتسب {format_currency(profit)}",
@@ -224,6 +228,8 @@ async def notify_admins_new(context, order_id: int):
     except Exception:
         pass
     # #endregion
+    sent_ok = False
+    last_error = None
     for chat_id in targets:
         try:
             sent = await context.bot.send_message(
@@ -234,6 +240,7 @@ async def notify_admins_new(context, order_id: int):
             if primary_chat is None:
                 primary_chat = chat_id
                 primary_msg = sent.message_id
+            sent_ok = True
             # #region agent log
             try:
                 from _agent_debug import dbg
@@ -242,11 +249,13 @@ async def notify_admins_new(context, order_id: int):
                     "withdraw_ops.notify_admins_new",
                     "send_message ok",
                     {"order_id": order_id, "chat_id": chat_id, "msg_id": sent.message_id},
+                    run_id="post-fix",
                 )
             except Exception:
                 pass
             # #endregion
         except TelegramError as e:
+            last_error = str(e)[:200]
             logger.exception("فشل إرسال طلب سحب لـ %s", chat_id)
             # #region agent log
             try:
@@ -255,11 +264,14 @@ async def notify_admins_new(context, order_id: int):
                     "C",
                     "withdraw_ops.notify_admins_new",
                     "send_message fail",
-                    {"order_id": order_id, "chat_id": chat_id, "error": str(e)[:200]},
+                    {"order_id": order_id, "chat_id": chat_id, "error": last_error},
+                    run_id="post-fix",
                 )
             except Exception:
                 pass
             # #endregion
+    if not sent_ok:
+        logger.error("طلب سحب %s ما انبعت لأي كروب. last_error=%s targets=%s", order_id, last_error, targets)
     if primary_chat is not None:
         session = db.get_session()
         try:
@@ -739,11 +751,22 @@ async def start_general_support(update, context):
     """دردشة مباشرة عامة → تذكرة مربوطة بكروب الدعم (بدون طلب سحب)."""
     from utils import safe_edit_callback_message
 
-    user = db.get_user(update.effective_user.id)
+    tg_user = update.effective_user
+    user = db.get_user(tg_user.id)
     if not user:
         if update.callback_query:
             await update.callback_query.answer("سجّل أولاً", show_alert=True)
         return
+    try:
+        db.sync_user_profile(
+            tg_user.id,
+            username=tg_user.username,
+            first_name=tg_user.first_name,
+            last_name=tg_user.last_name,
+        )
+        user = db.get_user(tg_user.id) or user
+    except Exception:
+        pass
 
     ticket_id = _open_or_create_ticket(
         user.id, order_id=None, subject="دردشة مباشرة / دعم عام"
@@ -764,7 +787,9 @@ async def start_general_support(update, context):
                 "ticket_id": ticket_id,
                 "user_tg": int(user.telegram_id),
                 "support_gid": ps.get_support_group_id(),
+                "username": tg_user.username,
             },
+            run_id="post-fix",
         )
     except Exception:
         pass
@@ -774,7 +799,8 @@ async def start_general_support(update, context):
         "🚑 فتحتلك تذكرة دعم\n\n"
         f"🧾 رقم التذكرة {ticket_id}\n\n"
         "اكتب شو المشكلة برسالة وحدة\n"
-        "والدعم بيشوفها بكروب الدعم"
+        "بتوصل لكروب الدعم مع اسمك واليوزر\n"
+        "ويردّوا عليك هون بالخاص"
     )
     markup = Keyboards.support_menu()
     if update.callback_query:
@@ -853,24 +879,25 @@ async def handle_support_message(update, context, text: str):
 
     if tx:
         group_text = (
-            "🚑 تذكرة جديدة\n\n"
+            "🚑 تذكرة جديدة — طلب سحب\n\n"
             f"🧾 رقم التذكرة {ticket_id}\n"
             f"🧾 طلب السحب {order_ref(tx)}\n"
-            f"👤 المستخدم {get_user_display_name(user)}\n"
+            f"{user_identity_block(user)}\n"
             f"💰 المبلغ {format_currency(tx.amount)}\n"
             f"📌 حالة الطلب {status_label(tx.status)}\n\n"
-            f"💬 رسالة المستخدم\n{msg}"
+            f"💬 المشكلة\n{msg}\n\n"
+            "ردّوا من الزر — الرد بيوصل للمستخدم بالخاص من البوت"
         )
     else:
         group_text = (
-            "🚑 تذكرة دعم جديدة (دردشة مباشرة)\n\n"
+            "🚑 تذكرة دعم جديدة\n\n"
             f"🧾 رقم التذكرة {ticket_id}\n"
-            f"👤 المستخدم {get_user_display_name(user)}\n"
-            f"🆔 تيليغرام {user.telegram_id}\n\n"
-            f"💬 رسالة المستخدم\n{msg}"
+            f"{user_identity_block(user)}\n\n"
+            f"💬 المشكلة\n{msg}\n\n"
+            "ردّوا من الزر — الرد بيوصل للمستخدم بالخاص من البوت"
         )
     support_gid = ps.get_support_group_id()
-    targets = [support_gid] if support_gid else list(Config.ADMIN_IDS)
+    targets = [support_gid] if support_gid else []
     # #region agent log
     try:
         from _agent_debug import dbg
@@ -885,10 +912,28 @@ async def handle_support_message(update, context, text: str):
                 "targets": targets,
                 "fallback_admins": support_gid is None,
             },
+            run_id="post-fix",
         )
     except Exception:
         pass
     # #endregion
+    sent_ok = False
+    last_error = None
+    if not targets:
+        last_error = "كروب الدعم مو مربوط"
+        for admin_id in Config.ADMIN_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=(
+                        "⚠️ تذكرة دعم ما وصلت للكروب — الكروب مو مربوط.\n"
+                        "داخل كروب دعم أرسل /bind_support\n\n"
+                        + group_text
+                    ),
+                    reply_markup=Keyboards.support_ticket_admin_menu(ticket_id, order_id),
+                )
+            except TelegramError:
+                pass
     for chat_id in targets:
         if not chat_id:
             continue
@@ -898,6 +943,7 @@ async def handle_support_message(update, context, text: str):
                 text=group_text,
                 reply_markup=Keyboards.support_ticket_admin_menu(ticket_id, order_id),
             )
+            sent_ok = True
             session = db.get_session()
             try:
                 t = (
@@ -919,11 +965,13 @@ async def handle_support_message(update, context, text: str):
                     "withdraw_ops.handle_support_message",
                     "support send ok",
                     {"ticket_id": ticket_id, "chat_id": chat_id, "msg_id": sent.message_id},
+                    run_id="post-fix",
                 )
             except Exception:
                 pass
             # #endregion
         except TelegramError as e:
+            last_error = str(e)[:200]
             logger.exception("فشل إرسال تذكرة دعم")
             # #region agent log
             try:
@@ -932,22 +980,30 @@ async def handle_support_message(update, context, text: str):
                     "C",
                     "withdraw_ops.handle_support_message",
                     "support send fail",
-                    {"ticket_id": ticket_id, "chat_id": chat_id, "error": str(e)[:200]},
+                    {"ticket_id": ticket_id, "chat_id": chat_id, "error": last_error},
+                    run_id="post-fix",
                 )
             except Exception:
                 pass
             # #endregion
 
-    await update.message.reply_text(
-        "✅ وصلت رسالتك للدعم\nرح يردّوا عليك من البوت",
-        reply_markup=(
-            Keyboards.withdraw_submitted_menu(
-                order_id, can_cancel=bool(tx and tx.status in ACTIVE_CANCELLABLE)
-            )
-            if order_id and tx
-            else Keyboards.support_menu()
-        ),
-    )
+    if sent_ok:
+        await update.message.reply_text(
+            "✅ وصلت رسالتك لكروب الدعم\nرح يردّوا عليك هون بالخاص من البوت",
+            reply_markup=(
+                Keyboards.withdraw_submitted_menu(
+                    order_id, can_cancel=bool(tx and tx.status in ACTIVE_CANCELLABLE)
+                )
+                if order_id and tx
+                else Keyboards.support_menu()
+            ),
+        )
+    else:
+        await update.message.reply_text(
+            "⚠️ وصلت رسالتك، بس ما قدرت أرسلها لكروب الدعم.\n"
+            "الإدارة لازم تربط الكروب بأمر /bind_support داخل كروب دعم.",
+            reply_markup=Keyboards.support_menu(),
+        )
 
 
 async def support_send_reply(context, ticket_id: int, reply_text: str, admin_user):
