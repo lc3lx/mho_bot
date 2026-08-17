@@ -706,6 +706,85 @@ async def admin_forward_to_support(context, order_id: int, admin_user=None):
 
 # ─── دعم ─────────────────────────────────────────────────
 
+def _open_or_create_ticket(
+    user_id: int, *, order_id: Optional[int] = None, subject: str
+) -> int:
+    session = db.get_session()
+    try:
+        q = session.query(SupportTicket).filter(
+            SupportTicket.user_id == user_id,
+            SupportTicket.status.in_(["open", "escalated"]),
+        )
+        if order_id:
+            q = q.filter(SupportTicket.order_id == order_id)
+        else:
+            q = q.filter(SupportTicket.order_id.is_(None))
+        ticket = q.order_by(SupportTicket.id.desc()).first()
+        if not ticket:
+            ticket = SupportTicket(
+                user_id=user_id,
+                order_id=order_id,
+                status="open",
+                subject=subject,
+            )
+            session.add(ticket)
+            session.commit()
+            session.refresh(ticket)
+        return int(ticket.id)
+    finally:
+        session.close()
+
+
+async def start_general_support(update, context):
+    """دردشة مباشرة عامة → تذكرة مربوطة بكروب الدعم (بدون طلب سحب)."""
+    from utils import safe_edit_callback_message
+
+    user = db.get_user(update.effective_user.id)
+    if not user:
+        if update.callback_query:
+            await update.callback_query.answer("سجّل أولاً", show_alert=True)
+        return
+
+    ticket_id = _open_or_create_ticket(
+        user.id, order_id=None, subject="دردشة مباشرة / دعم عام"
+    )
+    context.user_data["state"] = "waiting_payout_support_msg"
+    context.user_data["support_ticket_id"] = ticket_id
+    context.user_data["support_order_id"] = 0
+
+    # #region agent log
+    try:
+        from _agent_debug import dbg
+
+        dbg(
+            "A",
+            "withdraw_ops.start_general_support",
+            "live chat ticket opened",
+            {
+                "ticket_id": ticket_id,
+                "user_tg": int(user.telegram_id),
+                "support_gid": ps.get_support_group_id(),
+            },
+        )
+    except Exception:
+        pass
+    # #endregion
+
+    text = (
+        "🚑 فتحتلك تذكرة دعم\n\n"
+        f"🧾 رقم التذكرة {ticket_id}\n\n"
+        "اكتب شو المشكلة برسالة وحدة\n"
+        "والدعم بيشوفها بكروب الدعم"
+    )
+    markup = Keyboards.support_menu()
+    if update.callback_query:
+        await safe_edit_callback_message(
+            update, text, reply_markup=markup, context=context
+        )
+    else:
+        await update.message.reply_text(text, reply_markup=markup)
+
+
 async def start_support(update, context, order_id: int):
     from withdraw_flow import WithdrawFlow
 
@@ -715,31 +794,11 @@ async def start_support(update, context, order_id: int):
         await update.callback_query.answer("الطلب غير موجود", show_alert=True)
         return
 
-    session = db.get_session()
-    try:
-        ticket = (
-            session.query(SupportTicket)
-            .filter(
-                SupportTicket.order_id == order_id,
-                SupportTicket.user_id == user.id,
-                SupportTicket.status.in_(["open", "escalated"]),
-            )
-            .order_by(SupportTicket.id.desc())
-            .first()
-        )
-        if not ticket:
-            ticket = SupportTicket(
-                user_id=user.id,
-                order_id=order_id,
-                status="open",
-                subject=f"دعم طلب سحب {order_ref(tx)}",
-            )
-            session.add(ticket)
-            session.commit()
-            session.refresh(ticket)
-        ticket_id = ticket.id
-    finally:
-        session.close()
+    ticket_id = _open_or_create_ticket(
+        user.id,
+        order_id=order_id,
+        subject=f"دعم طلب سحب {order_ref(tx)}",
+    )
 
     context.user_data["state"] = "waiting_payout_support_msg"
     context.user_data["support_ticket_id"] = ticket_id
@@ -792,15 +851,24 @@ async def handle_support_message(update, context, text: str):
 
     context.user_data.pop("state", None)
 
-    group_text = (
-        "🚑 تذكرة جديدة\n\n"
-        f"🧾 رقم التذكرة {ticket_id}\n"
-        f"🧾 طلب السحب {order_ref(tx) if tx else order_id}\n"
-        f"👤 المستخدم {get_user_display_name(user)}\n"
-        f"💰 المبلغ {format_currency(tx.amount) if tx else '—'}\n"
-        f"📌 حالة الطلب {status_label(tx.status) if tx else '—'}\n\n"
-        f"💬 رسالة المستخدم\n{msg}"
-    )
+    if tx:
+        group_text = (
+            "🚑 تذكرة جديدة\n\n"
+            f"🧾 رقم التذكرة {ticket_id}\n"
+            f"🧾 طلب السحب {order_ref(tx)}\n"
+            f"👤 المستخدم {get_user_display_name(user)}\n"
+            f"💰 المبلغ {format_currency(tx.amount)}\n"
+            f"📌 حالة الطلب {status_label(tx.status)}\n\n"
+            f"💬 رسالة المستخدم\n{msg}"
+        )
+    else:
+        group_text = (
+            "🚑 تذكرة دعم جديدة (دردشة مباشرة)\n\n"
+            f"🧾 رقم التذكرة {ticket_id}\n"
+            f"👤 المستخدم {get_user_display_name(user)}\n"
+            f"🆔 تيليغرام {user.telegram_id}\n\n"
+            f"💬 رسالة المستخدم\n{msg}"
+        )
     support_gid = ps.get_support_group_id()
     targets = [support_gid] if support_gid else list(Config.ADMIN_IDS)
     # #region agent log
@@ -872,8 +940,12 @@ async def handle_support_message(update, context, text: str):
 
     await update.message.reply_text(
         "✅ وصلت رسالتك للدعم\nرح يردّوا عليك من البوت",
-        reply_markup=Keyboards.withdraw_submitted_menu(
-            order_id, can_cancel=bool(tx and tx.status in ACTIVE_CANCELLABLE)
+        reply_markup=(
+            Keyboards.withdraw_submitted_menu(
+                order_id, can_cancel=bool(tx and tx.status in ACTIVE_CANCELLABLE)
+            )
+            if order_id and tx
+            else Keyboards.support_menu()
         ),
     )
 
@@ -909,7 +981,7 @@ async def support_send_reply(context, ticket_id: int, reply_text: str, admin_use
             text=user_text,
             reply_markup=Keyboards.withdraw_submitted_menu(order_id or 0)
             if order_id
-            else Keyboards.start_menu(),
+            else Keyboards.support_menu(),
         )
     except TelegramError:
         return False, "فشل إرسال الرد للمستخدم"

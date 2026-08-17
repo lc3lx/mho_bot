@@ -1342,15 +1342,9 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             context=context,
         )
         return
-    if data in ("support_photo", "support_tx_issue"):
-        context.user_data["state"] = WAITING_FOR_MESSAGE
-        context.user_data["operation"] = "message_admin"
-        await safe_edit_callback_message(
-            update,
-            "📝 اكتب مشكلتك برسالة واحدة واضحة.\nإذا صورة، أرسلها مع تعليق قصير.",
-            reply_markup=Keyboards.cancel_operation(),
-            context=context,
-        )
+    if data in ("live_chat", "message_admin", "support_photo", "support_tx_issue"):
+        import withdraw_ops as ops
+        await ops.start_general_support(update, context)
         return
     if data == "referral_recruits" or data == "army_recruits":
         await ReferralHandler.show_recruits(update, context)
@@ -1622,10 +1616,6 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     # التواصل
     elif data == "contact":
         await contact_handler(update, context)
-    
-    # رسالة للإدمن
-    elif data == "message_admin":
-        await handle_message_admin(update, context)
     
     # سجل المعاملات
     elif data == "transactions":

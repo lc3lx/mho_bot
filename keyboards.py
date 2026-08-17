@@ -667,8 +667,7 @@ class Keyboards:
     @staticmethod
     def support_menu():
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("📝 عندي مشكلة", callback_data="message_admin")],
-            [InlineKeyboardButton("📸 إرسال صورة", callback_data="support_photo")],
+            [InlineKeyboardButton("💬 الدردشة المباشرة", callback_data="live_chat")],
             [InlineKeyboardButton("🧾 مشكلة بعملية", callback_data="support_tx_issue")],
             [Keyboards.home_btn()],
         ])
@@ -1065,18 +1064,6 @@ class Keyboards:
             [InlineKeyboardButton("🎁 مزايا VIP", callback_data="vip_benefits")],
             [InlineKeyboardButton("📈 كيفية الترقية", callback_data="vip_upgrade")],
             [InlineKeyboardButton("🌐 ارتقِ بمستواك", callback_data="open_ichancy")],
-            [InlineKeyboardButton("🔙 العودة للقائمة الرئيسية", callback_data="main_menu")]
-        ]
-        return InlineKeyboardMarkup(keyboard)
-    
-    @staticmethod
-    def support_menu():
-        """قائمة الدعم"""
-        keyboard = [
-            [InlineKeyboardButton("💬 الدردشة المباشرة", callback_data="live_chat")],
-            [InlineKeyboardButton("📧 البريد الإلكتروني", callback_data="email_support")],
-            [InlineKeyboardButton("❓ الأسئلة الشائعة", callback_data="faq_support")],
-            [InlineKeyboardButton("🌐 الدعم على الموقع", callback_data="open_ichancy")],
             [InlineKeyboardButton("🔙 العودة للقائمة الرئيسية", callback_data="main_menu")]
         ]
         return InlineKeyboardMarkup(keyboard)

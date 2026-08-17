@@ -215,7 +215,8 @@ async def show_card(update, context, user, tg_user=None):
 async def show_support(update, context):
     text = (
         "🚑 تم إيقاظ الدعم من الاستراحة.\n\n"
-        "اكتب مشكلتك برسالة وحدة واضحة،\n"
+        "كبس الدردشة المباشرة واكتب مشكلتك برسالة وحدة،\n"
+        "بتوصل مباشرة لكروب الدعم.\n"
         "وممنوع تقول «مرحبا» وتختفي ساعتين 😂"
     )
     await show_screen(update, context, text, Keyboards.support_menu())
