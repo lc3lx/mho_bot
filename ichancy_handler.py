@@ -851,6 +851,9 @@ class IchancyHandler:
                     {"error": exc.message, "status_code": getattr(exc, "status_code", None), "amount": amount, "player_id": player_id},
                 )
                 # #endregion
+                from agent_balance_monitor import maybe_alert_after_deposit_failure
+
+                await maybe_alert_after_deposit_failure(context, exc.message)
                 # إرجاع الرصيد
                 db_user.balance += amount
                 transaction.status = "failed"

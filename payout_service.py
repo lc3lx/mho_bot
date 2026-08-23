@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -25,6 +26,9 @@ SK_FEE_PERCENT = "withdraw_fee_percent"
 SK_FEE_METHOD = "withdraw_fee_method"  # percent_of_withdraw
 SK_PAYOUT_GROUP = "payout_admin_group_id"
 SK_SUPPORT_GROUP = "support_group_id"
+SK_AGENT_LOW_THRESHOLD = "ichancy_agent_low_balance_threshold"
+SK_AGENT_ALERT_COOLDOWN = "ichancy_agent_alert_cooldown_seconds"
+SK_AGENT_POLL_INTERVAL = "ichancy_agent_balance_poll_seconds"
 
 FEE_METHOD_PERCENT_WITHDRAW = "percent_of_withdraw"
 
@@ -145,6 +149,25 @@ def get_support_group_id() -> Optional[int]:
         return int(str(raw).strip())
     except (TypeError, ValueError):
         return None
+
+
+def get_agent_low_balance_threshold() -> float:
+    """حد تنبيه رصيد كاشير الوكيل (وحدة البوت)."""
+    min_topup = float(Config.ICHANCY_CONFIG.get("min_topup") or 200)
+    env_default = float(os.getenv("ICHANCY_AGENT_LOW_BALANCE", "0") or 0)
+    if env_default <= 0:
+        env_default = max(min_topup * 5, 1000)
+    return _setting_float(SK_AGENT_LOW_THRESHOLD, env_default)
+
+
+def get_agent_balance_alert_cooldown_seconds() -> int:
+    default = int(os.getenv("ICHANCY_AGENT_ALERT_COOLDOWN", "21600") or 21600)
+    return max(300, _setting_int(SK_AGENT_ALERT_COOLDOWN, default))
+
+
+def get_agent_balance_poll_seconds() -> int:
+    default = int(os.getenv("ICHANCY_AGENT_BALANCE_POLL_SECONDS", "600") or 600)
+    return max(60, _setting_int(SK_AGENT_POLL_INTERVAL, default))
 
 
 def infer_group_kind(title: str) -> Optional[str]:

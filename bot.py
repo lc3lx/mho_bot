@@ -144,6 +144,22 @@ class TelegramBot:
         )
         logger.info("Army referral daily maintenance scheduled at 03:15 UTC")
 
+        from agent_balance_monitor import poll_agent_balance
+        import payout_service as ps
+
+        agent_interval = ps.get_agent_balance_poll_seconds()
+        self.application.job_queue.run_repeating(
+            poll_agent_balance,
+            interval=agent_interval,
+            first=45,
+            name="ichancy_agent_balance_poll",
+        )
+        logger.info(
+            "Ichancy agent balance polling every %s seconds (threshold=%s)",
+            agent_interval,
+            ps.get_agent_low_balance_threshold(),
+        )
+
     async def balance_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """أمر عرض الرصيد"""
         from handlers import user_accepted_terms, send_consent_gate

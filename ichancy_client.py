@@ -93,6 +93,7 @@ class IchancyClient:
 
         self._access_token: Optional[str] = None
         self._refresh_token: Optional[str] = None
+        self._last_signin_result: Optional[Dict[str, Any]] = None
         self._lock = threading.Lock()
         self._warmed_up = False
         self._player_warmed_up = False
@@ -858,6 +859,7 @@ class IchancyClient:
         with self._lock:
             self._access_token = result["accessToken"]
             self._refresh_token = result.get("refreshToken")
+            self._last_signin_result = dict(result)
 
         logger.info("Ichancy agent signed in successfully")
         return {
@@ -1556,6 +1558,117 @@ class IchancyClient:
             return 0.0
         scale = max(1, int(self.amount_scale or 1))
         return val / scale
+
+    def _extract_agent_balance(self, obj: Any, *, depth: int = 0) -> Optional[float]:
+        """استخراج رصيد الوكيل/الكاشير من استجابة API."""
+        if obj is None or depth > 6:
+            return None
+        if isinstance(obj, dict):
+            for key in (
+                "balance",
+                "Balance",
+                "agentBalance",
+                "AgentBalance",
+                "availableBalance",
+                "AvailableBalance",
+                "credit",
+                "Credit",
+                "walletBalance",
+                "cashierBalance",
+                "remainingBalance",
+                "availableCredit",
+                "totalBalance",
+            ):
+                if key in obj and obj[key] is not None:
+                    try:
+                        return self._from_api_amount(obj[key])
+                    except (TypeError, ValueError):
+                        continue
+            for nested in ("user", "agent", "data", "result", "agentInfo", "profile"):
+                if nested in obj:
+                    bal = self._extract_agent_balance(obj[nested], depth=depth + 1)
+                    if bal is not None:
+                        return bal
+        if isinstance(obj, list):
+            if len(obj) == 1:
+                return self._extract_agent_balance(obj[0], depth=depth + 1)
+            for item in obj:
+                if isinstance(item, dict):
+                    code = str(
+                        item.get("currencyCode")
+                        or item.get("currency")
+                        or item.get("CurrencyCode")
+                        or ""
+                    ).strip().upper()
+                    if code and code not in ("NSP", "SYP", "SYL", "SY"):
+                        continue
+                    bal = self._extract_agent_balance(item, depth=depth + 1)
+                    if bal is not None:
+                        return bal
+        return None
+
+    def get_agent_balance(self) -> float:
+        """رصيد كاشير الوكيل (حساب الشحن) بوحدة البوت."""
+        if not self.is_configured:
+            raise IchancyError(
+                "إعدادات ichancy غير مكتملة. أضف ICHANCY_USERNAME و ICHANCY_PASSWORD في .env"
+            )
+
+        if not self._access_token:
+            self.sign_in()
+
+        with self._lock:
+            cached = dict(self._last_signin_result) if self._last_signin_result else None
+        if cached:
+            bal = self._extract_agent_balance(cached)
+            if bal is not None:
+                return bal
+
+        endpoints: list[tuple[str, Dict[str, Any]]] = [
+            ("global/api/UserApi/getCurrentUser", {}),
+            ("global/api/UserApi/getUserInfo", {}),
+            ("global/api/UserApi/getBalance", {}),
+            ("global/api/UserApi/getAgentBalance", {}),
+            ("global/api/AgentApi/getAgentBalance", {}),
+        ]
+        parent = str(self.parent_id or "").strip()
+        if parent.isdigit():
+            pid = int(parent)
+            endpoints.extend(
+                [
+                    ("global/api/UserApi/getPlayerBalanceById", {"playerId": pid}),
+                    ("global/api/UserApi/getUserBalance", {"userId": pid}),
+                ]
+            )
+
+        last_err: Optional[IchancyError] = None
+        for endpoint, payload in endpoints:
+            try:
+                result = self._request(
+                    endpoint,
+                    payload,
+                    timeout=30,
+                    retry_on_ex=False,
+                )
+            except IchancyError as exc:
+                last_err = exc
+                continue
+            bal = self._extract_agent_balance(result)
+            if bal is not None:
+                return bal
+
+        self.sign_in()
+        with self._lock:
+            cached = dict(self._last_signin_result) if self._last_signin_result else None
+        if cached:
+            bal = self._extract_agent_balance(cached)
+            if bal is not None:
+                return bal
+
+        msg = "تعذر قراءة رصيد حساب الوكيل من ichancy"
+        if last_err:
+            msg += f" ({last_err.message})"
+        raise IchancyError(msg)
 
     def _transfer_amount(self, amount: float, *, negative: bool = False):
         """
