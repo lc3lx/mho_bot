@@ -626,6 +626,77 @@ class WithdrawFlow:
     # ─── إلغاء من المستخدم ────────────────────────────────
 
     @staticmethod
+    async def start_refund_holds(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """استرداد مبلغ قيد السحب — طلب للإدارة، مو إرجاع فوري."""
+        user = db.get_user(update.effective_user.id)
+        if not user:
+            return
+        holds = ops.list_user_holds(user.id)
+        reserved = float(getattr(user, "reserved_balance", 0) or 0)
+        # #region agent log
+        try:
+            from _agent_debug import dbg
+            dbg(
+                "D",
+                "withdraw_flow.start_refund_holds",
+                "user opened refund holds",
+                {
+                    "holds": len(holds),
+                    "reserved": reserved,
+                    "ids": [h.id for h in holds],
+                },
+                run_id="post-fix",
+            )
+        except Exception:
+            pass
+        # #endregion
+        if not holds:
+            await WithdrawFlow._show(
+                update,
+                context,
+                "↩️ استرداد مبلغ قيد السحب\n\n"
+                "ما في مبلغ محجوز حالياً.\n"
+                f"📤 قيد السحب {format_currency(reserved)}\n\n"
+                "إذا في طلب تقبيض خلص، الاسترداد ما بيصير.",
+                Keyboards.wallet_menu(),
+            )
+            return
+        if len(holds) == 1:
+            tx = holds[0]
+            if tx.status == ST_CANCEL_REQUESTED:
+                await WithdrawFlow._show(
+                    update,
+                    context,
+                    "⏳ طلب الاسترداد عند الإدارة\n\n"
+                    f"💰 المبلغ {format_currency(tx.amount)}\n"
+                    f"🧾 رقم الطلب {tg_code(_order_ref(tx))}\n\n"
+                    "الرصيد ما بيرجع إلا بعد موافقتهم\n"
+                    "مشان ما يتقبض ويتسترد بنفس الوقت.",
+                    Keyboards.withdraw_submitted_menu(tx.id, can_cancel=False),
+                    parse_mode="HTML",
+                )
+                return
+            await WithdrawFlow.ask_cancel(update, context, tx.id)
+            return
+        lines = [
+            "↩️ استرداد مبلغ قيد السحب\n",
+            "اختار الطلب اللي بدك تسترده.",
+            "طلبك بروح للإدارة — الرصيد ما بيرجع لحاله.\n",
+        ]
+        for tx in holds:
+            lines.append(
+                f"• {tg_code(_order_ref(tx))} — "
+                f"{format_currency(tx.amount)} — {status_label(tx.status)}"
+            )
+        await WithdrawFlow._show(
+            update,
+            context,
+            "\n".join(lines),
+            Keyboards.wallet_hold_list_menu(holds),
+            parse_mode="HTML",
+        )
+
+    @staticmethod
     async def ask_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE, order_id: int):
         user = db.get_user(update.effective_user.id)
         tx = WithdrawFlow._get_tx(order_id)
@@ -645,11 +716,13 @@ class WithdrawFlow:
             return
 
         text = (
-            "↩️ طلب إلغاء السحب\n\n"
-            "رح نبعت طلبك للإدارة\n\n"
-            "إذا المبلغ لسا ما اتقبض منرجعلك كامل المبلغ المحجوز\n"
-            "بدون أي عمولة\n\n"
-            "إذا التقبيض تم ما عاد فينا نرجع العملية"
+            "↩️ طلب استرداد مبلغ قيد السحب\n\n"
+            "رح ينبعت لكروب التقبيض:\n"
+            "فلان طلب استرداد لمبلغه.\n\n"
+            "الرصيد المحجوز ما بيرجع لمحفظتك\n"
+            "إلا بعد موافقة الإدارة.\n\n"
+            "إذا المبلغ اتقبض — الاسترداد بينرفض\n"
+            "مشان ما يتقبض ويتسترد بنفس الوقت."
         )
         await WithdrawFlow._show(
             update, context, text, Keyboards.withdraw_cancel_confirm_menu(order_id)
@@ -696,9 +769,11 @@ class WithdrawFlow:
             session.close()
 
         text = (
-            "⏳ وصل طلب الإلغاء\n\n"
-            "الإدارة رح تتأكد اذا المبلغ لسا ما اتقبض\n"
-            "اذا لسا معنا بيرجع كامل الرصيد لمحفظتك\n\n"
+            "⏳ وصل طلب الاسترداد للإدارة\n\n"
+            "المبلغ لسا محجوز قيد السحب.\n"
+            "ما تحول ولا رجع لمحفظتك.\n\n"
+            "إذا وافقوا ولمّا يكون ما اتقبض\n"
+            "برجع كامل الرصيد بدون عمولة.\n\n"
             f"🧾 رقم الطلب {tg_code(public_id)}"
         )
         await WithdrawFlow._show(
@@ -799,6 +874,12 @@ class WithdrawFlow:
     @staticmethod
     async def admin_mark_paid(context, order_id: int, admin_user=None):
         return await ops.admin_mark_paid(context, order_id, admin_user)
+
+    @staticmethod
+    async def send_payout_receipt_photo(context, order_id: int, message, admin_user=None):
+        return await ops.send_payout_receipt_photo(
+            context, order_id, message, admin_user=admin_user
+        )
 
     @staticmethod
     async def admin_reject_withdraw(

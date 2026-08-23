@@ -1030,6 +1030,10 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         except Exception:
             pass
         return
+    if data == "wallet_refund_hold":
+        from withdraw_flow import WithdrawFlow
+        await WithdrawFlow.start_refund_holds(update, context)
+        return
     if data == "deposit_other":
         await safe_edit_callback_message(
             update,
@@ -1140,7 +1144,32 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         ok, msg = await WithdrawFlow.admin_mark_paid(
             context, order_id, admin_user=update.effective_user
         )
-        await interactive_answer(query, msg, alert=True)
+        if not ok:
+            await interactive_answer(query, msg, alert=True)
+            return
+        context.user_data["admin_state"] = "waiting_wd_receipt_photo"
+        context.user_data["wd_receipt_order_id"] = order_id
+        try:
+            await query.answer("تم التقبيض — ابعت صورة الإشعار")
+        except TelegramError:
+            pass
+        await safe_edit_callback_message(
+            update,
+            (
+                "✅ تم التقبيض\n\n"
+                "📸 ابعت صورة إشعار الحوالة هون أو بالخاص للبوت\n"
+                "رح توصل للزبون من البوت بدون ما ينكشف حسابك\n\n"
+                f"🧾 طلب #{order_id}"
+            ),
+            reply_markup=Keyboards.admin_wd_receipt_prompt_menu(order_id),
+            context=context,
+        )
+        return
+    if data.startswith("admin_wd_receipt_skip_"):
+        order_id = int(data.replace("admin_wd_receipt_skip_", "", 1))
+        context.user_data.pop("admin_state", None)
+        context.user_data.pop("wd_receipt_order_id", None)
+        await interactive_answer(query, "تم — بدون صورة إشعار", alert=True)
         return
     if data.startswith("admin_wd_pay_back_"):
         from withdraw_flow import WithdrawFlow
@@ -1791,6 +1820,34 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         except Exception:
             pass
         await show_user_home(update, context, user)
+
+async def payout_receipt_photo_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+):
+    """صورة إشعار حوالة بعد التقبيض — من كروب قبض أو الخاص."""
+    if not update.message:
+        return
+    if context.user_data.get("admin_state") != "waiting_wd_receipt_photo":
+        return
+    order_id = int(context.user_data.get("wd_receipt_order_id") or 0)
+    if not order_id:
+        return
+
+    uid = update.effective_user.id
+    chat = update.effective_chat
+    in_private = getattr(chat, "type", None) == "private"
+    if not in_private and not _is_staff_user(uid, chat) and uid not in Config.ADMIN_IDS:
+        return
+
+    from withdraw_flow import WithdrawFlow
+
+    ok, msg = await WithdrawFlow.send_payout_receipt_photo(
+        context, order_id, update.message, admin_user=update.effective_user
+    )
+    context.user_data.pop("admin_state", None)
+    context.user_data.pop("wd_receipt_order_id", None)
+    await update.message.reply_text(msg)
+
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالج الرسائل النصية"""

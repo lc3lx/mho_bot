@@ -39,6 +39,13 @@ ST_PAID = "paid"
 ST_CANCELLED = "cancelled"
 ST_REJECTED = "rejected"
 
+HOLD_STATUSES = {
+    ST_PENDING_REVIEW,
+    ST_AWAITING_PAYOUT,
+    ST_PROCESSING,
+    ST_CANCEL_REQUESTED,
+    "pending",
+}
 ACTIVE_CANCELLABLE = {
     ST_PENDING_REVIEW,
     ST_AWAITING_PAYOUT,
@@ -101,6 +108,46 @@ def stamp_decision(tx: Transaction, admin_user, note: str = ""):
 
 def order_ref(tx: Transaction) -> str:
     return getattr(tx, "public_id", None) or str(tx.id)
+
+
+def list_user_holds(user_id: int) -> list:
+    """طلبات سحب لسا محجوزة (ما اتقبضت وما انلغت)."""
+    session = db.get_session()
+    try:
+        rows = (
+            session.query(Transaction)
+            .filter(
+                Transaction.user_id == user_id,
+                Transaction.transaction_type.in_(["withdraw", "ichancy_withdraw"]),
+                Transaction.status.in_(list(HOLD_STATUSES)),
+            )
+            .order_by(Transaction.id.desc())
+            .all()
+        )
+        return [db._detach(session, r) for r in rows]
+    finally:
+        session.close()
+
+
+def pending_withdraw_totals(user_id: int) -> tuple[float, float, int]:
+    """(مجموع من الطلبات, reserved_balance, عدد الطلبات)"""
+    session = db.get_session()
+    try:
+        user = session.query(User).filter(User.id == user_id).first()
+        reserved = float(user.reserved_balance or 0) if user else 0.0
+        rows = (
+            session.query(Transaction)
+            .filter(
+                Transaction.user_id == user_id,
+                Transaction.transaction_type.in_(["withdraw", "ichancy_withdraw"]),
+                Transaction.status.in_(list(HOLD_STATUSES)),
+            )
+            .all()
+        )
+        tx_sum = sum(float(t.amount or 0) for t in rows)
+        return tx_sum, reserved, len(rows)
+    finally:
+        session.close()
 
 
 def get_tx(order_id: int) -> Optional[Transaction]:
@@ -167,9 +214,11 @@ def build_admin_order_text(tx: Transaction, user: User, *, full_address: bool = 
         lines.append(f"🕒 {tx.paid_at}")
     if tx.status == ST_CANCEL_REQUESTED:
         lines.append("")
-        lines.append("🚨 المستخدم طلب إلغاء السحب")
+        lines.append("🚨 المستخدم طلب استرداد مبلغ قيد السحب")
+        lines.append("⚠️ ممنوع التقبيض والإرجاع بنفس الوقت")
+        lines.append("وافق على الإلغاء فقط إذا المبلغ لسا ما اتقبض")
         if tx.cancel_requested_at:
-            lines.append(f"🕒 طلب الإلغاء {tx.cancel_requested_at}")
+            lines.append(f"🕒 طلب الاسترداد {tx.cancel_requested_at}")
     return "\n".join(lines)
 
 
@@ -285,23 +334,47 @@ async def notify_admins_new(context, order_id: int):
 
 
 async def notify_admins_cancel(context, order_id: int):
-    edited = await refresh_admin_group_message(context, order_id)
-    if edited:
-        return
     tx = get_tx(order_id)
     if not tx:
         return
     user = db.get_user_by_db_id(tx.user_id)
-    text = build_admin_order_text(tx, user, full_address=True)
+    edited = await refresh_admin_group_message(context, order_id)
+    alert = (
+        "🚨 طلب استرداد مبلغ قيد السحب\n\n"
+        f"{user_identity_block(user)}\n"
+        f"🧾 رقم الطلب {order_ref(tx)}\n"
+        f"💰 المبلغ المحجوز {format_currency(tx.amount)}\n"
+        f"📌 الحالة {status_label(tx.status)}\n\n"
+        "المبلغ ما بيرجع للمحفظة إلا بعد موافقتكم.\n"
+        "اذا التقبيض تم — ارفضوا الاسترداد."
+    )
     markup = Keyboards.admin_withdraw_order_menu(
         order_id,
         assigned=bool(getattr(tx, "assigned_admin_telegram_id", None)),
         cancel_req=True,
     )
+    # #region agent log
+    try:
+        from _agent_debug import dbg
+        dbg(
+            "D",
+            "withdraw_ops.notify_admins_cancel",
+            "refund request to group",
+            {
+                "order_id": order_id,
+                "edited_existing": edited,
+                "targets": resolve_notify_chat_ids(tx),
+                "amount": float(tx.amount or 0),
+            },
+            run_id="post-fix",
+        )
+    except Exception:
+        pass
+    # #endregion
     for chat_id in resolve_notify_chat_ids(tx):
         try:
             await context.bot.send_message(
-                chat_id=chat_id, text=text, reply_markup=markup
+                chat_id=chat_id, text=alert, reply_markup=markup
             )
         except TelegramError:
             pass
@@ -500,6 +573,90 @@ async def admin_mark_paid(context, order_id: int, admin_user=None):
 
     await refresh_admin_group_message(context, order_id)
     return True, "تم التقبيض"
+
+
+def _extract_image_file_id(message) -> Optional[str]:
+    if not message:
+        return None
+    if message.photo:
+        return message.photo[-1].file_id
+    doc = message.document
+    if doc and (doc.mime_type or "").startswith("image/"):
+        return doc.file_id
+    return None
+
+
+async def send_payout_receipt_photo(
+    context, order_id: int, message, admin_user=None
+) -> tuple[bool, str]:
+    """إرسال صورة إشعار الحوالة للزبون بالخاص."""
+    file_id = _extract_image_file_id(message)
+    if not file_id:
+        return False, "ابعت صورة إشعار الحوالة (صورة فقط)"
+
+    tx = get_tx(order_id)
+    if not tx:
+        return False, "الطلب غير موجود"
+    if tx.status not in (ST_PAID, "completed"):
+        return False, "لازم يكون الطلب متقبض قبل إرسال الإشعار"
+
+    user = db.get_user_by_db_id(tx.user_id)
+    if not user or not user.telegram_id:
+        return False, "المستخدم غير موجود"
+
+    amount = float(tx.amount or 0)
+    net = float(tx.net_amount or 0)
+    public_id = order_ref(tx)
+    caption = (
+        "📸 إشعار التقبيض\n\n"
+        f"🧾 رقم الطلب {public_id}\n"
+        f"💰 مبلغ السحب {format_currency(amount)}\n"
+        f"✅ الصافي المقبوض {format_currency(net)}\n\n"
+        "صورة إشعار الحوالة من المحاسب"
+    )
+
+    # #region agent log
+    try:
+        from _agent_debug import dbg
+
+        dbg(
+            "F",
+            "withdraw_ops.send_payout_receipt_photo",
+            "sending receipt to user",
+            {
+                "order_id": order_id,
+                "user_tg": str(user.telegram_id),
+                "admin_id": getattr(admin_user, "id", None),
+            },
+            run_id="post-fix",
+        )
+    except Exception:
+        pass
+    # #endregion
+
+    try:
+        await context.bot.send_photo(
+            chat_id=int(user.telegram_id),
+            photo=file_id,
+            caption=caption,
+            reply_markup=Keyboards.withdraw_paid_menu(order_id),
+        )
+    except TelegramError as e:
+        logger.exception("فشل إرسال إشعار التقبيض للزبون")
+        return False, f"فشل الإرسال: {str(e)[:120]}"
+
+    session = db.get_session()
+    try:
+        row = session.query(Transaction).filter(Transaction.id == order_id).first()
+        if row:
+            who = admin_name(admin_user)
+            stamp = f"[{datetime.utcnow().isoformat()} | {who}] أُرسل إشعار حوالة للزبون"
+            row.admin_notes = ((row.admin_notes or "").rstrip() + "\n" + stamp).strip()
+            session.commit()
+    finally:
+        session.close()
+
+    return True, "✅ وصل إشعار الحوالة للزبون بالخاص"
 
 
 async def admin_reject_withdraw(

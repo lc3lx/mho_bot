@@ -19,7 +19,7 @@ from handlers import (
     referral_handler, gift_handler, admin_handler, transaction_handler,
     contact_handler, callback_query_handler, message_handler,
     bind_payout_group_handler, bind_support_group_handler, chatid_handler,
-    on_my_chat_member,
+    on_my_chat_member, payout_receipt_photo_handler,
 )
 from contact_handler import ContactHandler
 from payment_handler import PaymentHandler
@@ -95,6 +95,14 @@ class TelegramBot:
         
         # معالج الرسائل النصية
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+
+        # صورة إشعار التقبيض من كروب قبض / الخاص
+        self.application.add_handler(
+            MessageHandler(
+                filters.PHOTO | filters.Document.IMAGE,
+                payout_receipt_photo_handler,
+            )
+        )
 
         # التقاط file_id لأي GIF/فيديو يرسله الإدمن — لضبط بانر القوائم
         self.application.add_handler(

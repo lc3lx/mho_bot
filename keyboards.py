@@ -4,6 +4,7 @@
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from config import Config
+from utils import format_currency
 
 class Keyboards:
     """فئة لوحات المفاتيح"""
@@ -379,10 +380,30 @@ class Keyboards:
         return InlineKeyboardMarkup(rows)
 
     @staticmethod
+    def wallet_hold_list_menu(orders):
+        rows = []
+        for tx in orders[:8]:
+            amt = format_currency(getattr(tx, "amount", 0) or 0)
+            ref = getattr(tx, "public_id", None) or tx.id
+            st = getattr(tx, "status", "") or ""
+            if st == "cancel_requested":
+                label = f"⏳ بانتظار الموافقة — {amt}"
+            else:
+                label = f"↩️ استرداد {amt} — {ref}"
+            rows.append([
+                InlineKeyboardButton(
+                    label,
+                    callback_data=f"wd_cancel_ask_{tx.id}",
+                )
+            ])
+        rows.append([Keyboards.home_btn()])
+        return InlineKeyboardMarkup(rows)
+
+    @staticmethod
     def withdraw_cancel_confirm_menu(order_id: int):
         return InlineKeyboardMarkup([
             [InlineKeyboardButton(
-                "✅ ابعت طلب الإلغاء",
+                "✅ ابعت طلب الاسترداد",
                 callback_data=f"wd_cancel_send_{order_id}",
             )],
             [InlineKeyboardButton(
@@ -493,6 +514,15 @@ class Keyboards:
             [InlineKeyboardButton(
                 "❌ رجوع",
                 callback_data=f"admin_wd_pay_back_{order_id}",
+            )],
+        ])
+
+    @staticmethod
+    def admin_wd_receipt_prompt_menu(order_id: int):
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                "⏭️ تخطي — بدون صورة إشعار",
+                callback_data=f"admin_wd_receipt_skip_{order_id}",
             )],
         ])
 
@@ -634,10 +664,14 @@ class Keyboards:
         """جيبتي"""
         return InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("⚡ عبّيها", callback_data="deposit"),
                 InlineKeyboardButton("🏧 فضّيها", callback_data="withdraw"),
+                InlineKeyboardButton("⚡ عبّيها", callback_data="deposit"),
             ],
             [InlineKeyboardButton("🔄 حدّث الرصيد", callback_data="wallet_refresh")],
+            [InlineKeyboardButton(
+                "↩️ استرداد مبلغ قيد السحب",
+                callback_data="wallet_refund_hold",
+            )],
             [Keyboards.home_btn()],
         ])
 

@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from sqlalchemy import and_, or_
+
 import ui
 from config import Config
 from database import DatabaseManager, Transaction, User
@@ -13,6 +15,10 @@ from keyboards import Keyboards
 from utils import format_currency, safe_edit_callback_message, tg_code
 
 db = DatabaseManager()
+
+DEPOSIT_PENDING_STATUSES = ("pending", "pending_review")
+WITHDRAW_TYPES = ("withdraw", "ichancy_withdraw")
+DEPOSIT_TYPES = ("deposit", "ichancy_topup")
 
 
 async def show_screen(update, context, text: str, markup, parse_mode="HTML"):
@@ -138,22 +144,23 @@ async def show_withdraw_hub(update, context, user):
 
 
 def _pending_sums(user_id: int):
+    import withdraw_ops as ops
+
     session = db.get_session()
     try:
-        rows = (
-            session.query(Transaction)
-            .filter(Transaction.user_id == user_id, Transaction.status == "pending")
-            .all()
-        )
+        rows = session.query(Transaction).filter(Transaction.user_id == user_id).all()
+        hold_set = set(ops.HOLD_STATUSES)
         pending_in = sum(
             float(t.amount or 0)
             for t in rows
-            if t.transaction_type in ("deposit", "ichancy_topup")
+            if t.transaction_type in DEPOSIT_TYPES
+            and (t.status or "") in DEPOSIT_PENDING_STATUSES
         )
         pending_out = sum(
             float(t.amount or 0)
             for t in rows
-            if t.transaction_type in ("withdraw", "ichancy_withdraw")
+            if t.transaction_type in WITHDRAW_TYPES
+            and (t.status or "") in hold_set
         )
         return pending_in, pending_out
     finally:
@@ -161,12 +168,48 @@ def _pending_sums(user_id: int):
 
 
 async def show_pocket(update, context, user):
+    import withdraw_ops as ops
+
+    fresh = db.get_user_by_db_id(user.id) or db.get_user(user.telegram_id) or user
+    user = fresh
     pending_in, pending_out = _pending_sums(user.id)
+    tx_sum, reserved, hold_count = ops.pending_withdraw_totals(user.id)
+    held = max(reserved, pending_out, tx_sum)
+    available = float(user.balance or 0)
+    # #region agent log
+    try:
+        from _agent_debug import dbg
+
+        dbg(
+            "E",
+            "screens.show_pocket",
+            "wallet hold totals",
+            {
+                "user_id": user.id,
+                "balance": available,
+                "reserved": reserved,
+                "tx_sum": tx_sum,
+                "pending_out": pending_out,
+                "held": held,
+                "hold_count": hold_count,
+            },
+            run_id="post-fix",
+        )
+    except Exception:
+        pass
+    # #endregion
     text = (
         "👛 هاي جيبتك الإلكترونية\n\n"
-        f"💎 الرصيد: <b>{format_currency(user.balance or 0)}</b>\n"
-        f"📥 قيد الإضافة: <b>{format_currency(pending_in)}</b>\n"
-        f"📤 قيد السحب: <b>{format_currency(pending_out)}</b>\n\n"
+        f"💎 الرصيد: <b>{format_currency(available)}</b>\n"
+        f"📤 قيد السحب: <b>{format_currency(held)}</b>\n"
+    )
+    if hold_count:
+        text += f"🧾 طلبات تقبيض معلقة: <b>{hold_count}</b>\n"
+    if pending_in > 0:
+        text += f"📥 قيد الإضافة: <b>{format_currency(pending_in)}</b>\n"
+    text += (
+        "\nالمبلغ قيد السحب محجوز عند الإدارة.\n"
+        "ما بيرجع لمحفظتك إلا بعد موافقة الأدمن على الاسترداد.\n\n"
         "المحفظة بخير...\n"
         "بس بتحب الزيارات والدعم المعنوي 😂"
     )
@@ -239,39 +282,73 @@ async def show_guide(update, context):
 def format_tx_list(rows, empty="ما في شي هون حالياً.") -> str:
     if not rows:
         return empty
+    try:
+        import withdraw_ops as ops
+
+        status_label = ops.status_label
+    except Exception:
+        status_label = lambda s: s or "—"
     lines = []
     for t in rows[:20]:
-        st = {
-            "pending": "🟡",
-            "completed": "🟢",
-            "failed": "🔴",
-            "cancelled": "⚪",
-        }.get(t.status, "•")
+        st = status_label(t.status)
+        ref = getattr(t, "public_id", None) or t.id
         when = t.created_at.strftime("%m-%d %H:%M") if t.created_at else "—"
         lines.append(
-            f"{st} #{t.id} | {t.transaction_type} | "
-            f"{format_currency(t.amount or 0)} | {when}"
+            f"• {ref} | {t.transaction_type} | "
+            f"{format_currency(t.amount or 0)} | {st} | {when}"
         )
     return "\n".join(lines)
 
 
 async def show_history(update, context, user, kind: str):
+    import withdraw_ops as ops
+
     session = db.get_session()
     try:
         q = session.query(Transaction).filter(Transaction.user_id == user.id)
         title = "السجل"
         if kind == "deposits":
-            q = q.filter(Transaction.transaction_type.in_(["deposit", "ichancy_topup"]))
+            q = q.filter(Transaction.transaction_type.in_(DEPOSIT_TYPES))
             title = "💸 عمليات التعبئة"
         elif kind == "withdrawals":
-            q = q.filter(
-                Transaction.transaction_type.in_(["withdraw", "ichancy_withdraw"])
-            )
+            q = q.filter(Transaction.transaction_type.in_(WITHDRAW_TYPES))
             title = "💰 عمليات السحب"
         elif kind == "pending":
-            q = q.filter(Transaction.status == "pending")
+            hold = list(ops.HOLD_STATUSES)
+            q = q.filter(
+                or_(
+                    and_(
+                        Transaction.transaction_type.in_(DEPOSIT_TYPES),
+                        Transaction.status.in_(list(DEPOSIT_PENDING_STATUSES)),
+                    ),
+                    and_(
+                        Transaction.transaction_type.in_(WITHDRAW_TYPES),
+                        Transaction.status.in_(hold),
+                    ),
+                )
+            )
             title = "⏳ العمليات المعلقة"
         rows = q.order_by(Transaction.created_at.desc()).limit(20).all()
+        # #region agent log
+        try:
+            from _agent_debug import dbg
+
+            dbg(
+                "E",
+                "screens.show_history",
+                "pending history query",
+                {
+                    "kind": kind,
+                    "user_id": user.id,
+                    "count": len(rows),
+                    "statuses": [r.status for r in rows[:5]],
+                    "types": [r.transaction_type for r in rows[:5]],
+                },
+                run_id="post-fix",
+            )
+        except Exception:
+            pass
+        # #endregion
         body = format_tx_list(rows)
         text = f"<b>{title}</b>\n\n{body}"
     finally:
