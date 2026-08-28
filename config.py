@@ -37,6 +37,10 @@ class Config:
     TELEGRAM_CHANNEL_URL = os.getenv("TELEGRAM_CHANNEL_URL", "https://t.me/ESRteam")
     REQUIRED_CHANNEL_ID = os.getenv("REQUIRED_CHANNEL_ID", "@ESRteam").strip()
     TELEGRAM_SUPPORT_URL = os.getenv("TELEGRAM_SUPPORT_URL", "https://t.me/NapoleonSupport")
+    # يوزر الإدارة العليا لتصعيد تذاكر الدعم (بدون @)
+    SUPPORT_ESCALATION_USERNAME = os.getenv(
+        "SUPPORT_ESCALATION_USERNAME", "NapoleonRobert"
+    ).strip().lstrip("@")
     # كروب إدارة التقبيض (فضي محفظتي) — رقم سالب للكروب
     _payout_gid = os.getenv("PAYOUT_ADMIN_GROUP_ID", "").strip()
     PAYOUT_ADMIN_GROUP_ID = int(_payout_gid) if _payout_gid.lstrip("-").isdigit() else None

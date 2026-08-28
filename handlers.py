@@ -1344,13 +1344,51 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             context=context,
         )
         return
-    if data.startswith("sup_ticket_resolve_"):
+    if data.startswith("sup_ticket_resolve_ok_"):
         import withdraw_ops as ops
-        ticket_id = int(data.replace("sup_ticket_resolve_", "", 1))
+        ticket_id = int(data.replace("sup_ticket_resolve_ok_", "", 1))
+        msg_text = (query.message.text or "").strip()
         ok, msg = await ops.support_resolve(
-            context, ticket_id, update.effective_user
+            context,
+            ticket_id,
+            update.effective_user,
+            group_message_text=msg_text,
         )
-        await interactive_answer(query, msg, alert=True)
+        if ok:
+            resolved_text = msg_text
+            if "تم الرد و نحلت" not in resolved_text:
+                resolved_text = f"{resolved_text}\n\n✅ تم الرد و نحلت"
+            await safe_edit_callback_message(
+                update,
+                resolved_text,
+                reply_markup=None,
+                context=context,
+            )
+        await interactive_answer(query, msg, alert=not ok)
+        return
+    if data.startswith("sup_ticket_resolve_no_"):
+        import withdraw_ops as ops
+        ticket_id = int(data.replace("sup_ticket_resolve_no_", "", 1))
+        order_id = ops.get_ticket_order_id(ticket_id)
+        await safe_edit_callback_message(
+            update,
+            query.message.text or "",
+            reply_markup=Keyboards.support_ticket_admin_menu(
+                ticket_id, order_id, simple=True
+            ),
+            context=context,
+        )
+        await interactive_answer(query, "رجّعنا الأزرار", alert=False)
+        return
+    if data.startswith("sup_ticket_resolve_"):
+        ticket_id = int(data.replace("sup_ticket_resolve_", "", 1))
+        await safe_edit_callback_message(
+            update,
+            query.message.text or "",
+            reply_markup=Keyboards.support_ticket_resolve_confirm_menu(ticket_id),
+            context=context,
+        )
+        await interactive_answer(query, "تأكيد الحل؟", alert=False)
         return
     if data.startswith("sup_ticket_escalate_"):
         import withdraw_ops as ops

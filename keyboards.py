@@ -569,13 +569,21 @@ class Keyboards:
         ])
 
     @staticmethod
-    def support_ticket_admin_menu(ticket_id: int, order_id: int = 0):
+    def support_ticket_admin_menu(ticket_id: int, order_id: int = 0, *, simple: bool = False):
         rows = [
-            [InlineKeyboardButton(
-                "💬 رد على المستخدم",
-                callback_data=f"sup_ticket_reply_{ticket_id}",
-            )],
+            [
+                InlineKeyboardButton(
+                    "رد",
+                    callback_data=f"sup_ticket_reply_{ticket_id}",
+                ),
+                InlineKeyboardButton(
+                    "حل",
+                    callback_data=f"sup_ticket_resolve_{ticket_id}",
+                ),
+            ],
         ]
+        if simple:
+            return InlineKeyboardMarkup(rows)
         if order_id:
             rows.append([
                 InlineKeyboardButton(
@@ -585,17 +593,26 @@ class Keyboards:
             ])
         rows.append([
             InlineKeyboardButton(
-                "✅ حل المشكلة",
-                callback_data=f"sup_ticket_resolve_{ticket_id}",
-            )
-        ])
-        rows.append([
-            InlineKeyboardButton(
                 "🚨 تصعيد للإدارة",
                 callback_data=f"sup_ticket_escalate_{ticket_id}",
             )
         ])
         return InlineKeyboardMarkup(rows)
+
+    @staticmethod
+    def support_ticket_resolve_confirm_menu(ticket_id: int):
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "نكمل ✅",
+                    callback_data=f"sup_ticket_resolve_ok_{ticket_id}",
+                ),
+                InlineKeyboardButton(
+                    "بالغلط ❌",
+                    callback_data=f"sup_ticket_resolve_no_{ticket_id}",
+                ),
+            ],
+        ])
 
     @staticmethod
     def admin_withdraw_settings_menu():

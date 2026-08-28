@@ -1201,7 +1201,13 @@ async def support_send_reply(context, ticket_id: int, reply_text: str, admin_use
     return True, "تم إرسال الرد"
 
 
-async def support_resolve(context, ticket_id: int, admin_user):
+async def support_resolve(
+    context,
+    ticket_id: int,
+    admin_user,
+    *,
+    group_message_text: str | None = None,
+):
     session = db.get_session()
     try:
         ticket = session.query(SupportTicket).filter(SupportTicket.id == ticket_id).first()
@@ -1212,6 +1218,9 @@ async def support_resolve(context, ticket_id: int, admin_user):
         ticket.resolved_by_name = admin_name(admin_user)
         user = session.query(User).filter(User.id == ticket.user_id).first()
         telegram_id = user.telegram_id if user else None
+        order_id = int(ticket.order_id or 0)
+        group_chat_id = ticket.support_group_chat_id
+        group_message_id = ticket.support_group_message_id
         session.commit()
     finally:
         session.close()
@@ -1220,13 +1229,50 @@ async def support_resolve(context, ticket_id: int, admin_user):
             await context.bot.send_message(
                 chat_id=telegram_id,
                 text=(
-                    f"✅ تذكرة الدعم #{ticket_id} اتحلّت.\n"
+                    f"✅ تذكرة الدعم #{ticket_id}\n"
+                    "تم الرد و نحلت.\n"
                     "إذا احتجت شي تاني افتح تذكرة جديدة."
                 ),
             )
         except TelegramError:
             pass
-    return True, "تم حل التذكرة"
+    if group_chat_id and group_message_id:
+        base = (group_message_text or "").strip()
+        if base and "تم الرد و نحلت" not in base:
+            base = f"{base}\n\n✅ تم الرد و نحلت"
+        elif not base:
+            base = f"🧾 تذكرة #{ticket_id}\n\n✅ تم الرد و نحلت"
+        try:
+            await context.bot.edit_message_text(
+                chat_id=int(group_chat_id),
+                message_id=int(group_message_id),
+                text=base,
+                reply_markup=None,
+            )
+        except TelegramError:
+            pass
+    return True, "تم الرد و نحلت"
+
+
+async def _escalation_target_ids(context) -> list[int]:
+    username = (Config.SUPPORT_ESCALATION_USERNAME or "NapoleonRobert").strip().lstrip("@")
+    if username:
+        try:
+            chat = await context.bot.get_chat(f"@{username}")
+            if chat and chat.id:
+                return [int(chat.id)]
+        except TelegramError:
+            pass
+    return [int(x) for x in (Config.ADMIN_IDS or []) if x]
+
+
+def get_ticket_order_id(ticket_id: int) -> int:
+    session = db.get_session()
+    try:
+        ticket = session.query(SupportTicket).filter(SupportTicket.id == ticket_id).first()
+        return int(ticket.order_id or 0) if ticket else 0
+    finally:
+        session.close()
 
 
 async def support_escalate(context, ticket_id: int, admin_user):
@@ -1237,21 +1283,44 @@ async def support_escalate(context, ticket_id: int, admin_user):
             return False, "غير موجودة"
         ticket.status = "escalated"
         ticket.escalated_at = datetime.utcnow()
-        order_id = ticket.order_id
+        order_id = int(ticket.order_id or 0)
+        user = session.query(User).filter(User.id == ticket.user_id).first()
+        last_msg = (
+            session.query(SupportTicketMessage)
+            .filter(SupportTicketMessage.ticket_id == ticket_id)
+            .order_by(SupportTicketMessage.id.desc())
+            .first()
+        )
         session.commit()
     finally:
         session.close()
+
+    problem = (last_msg.content if last_msg else "").strip() or "—"
     note = (
-        f"🚨 تصعيد تذكرة #{ticket_id}\n"
-        f"طلب سحب: {order_id}\n"
-        f"من: {admin_name(admin_user)}"
+        f"🚨 تصعيد تذكرة #{ticket_id}\n\n"
+        f"{user_identity_block(user) if user else '—'}\n"
     )
-    for admin_id in Config.ADMIN_IDS:
+    if order_id:
+        note += f"🧾 طلب السحب: {order_id}\n"
+    note += (
+        f"\n💬 المشكلة:\n{problem}\n\n"
+        f"👤 من موظف الدعم: {admin_name(admin_user)}"
+    )
+    targets = await _escalation_target_ids(context)
+    sent = 0
+    for admin_id in targets:
         try:
-            await context.bot.send_message(chat_id=admin_id, text=note)
+            await context.bot.send_message(
+                chat_id=admin_id,
+                text=note,
+                reply_markup=Keyboards.support_ticket_admin_menu(ticket_id, order_id),
+            )
+            sent += 1
         except TelegramError:
             pass
-    return True, "تم التصعيد للإدارة"
+    if not sent:
+        return False, "تعذر إرسال التصعيد — تأكد أن @NapoleonRobert فتح البوت (/start)"
+    return True, f"تم التصعيد لـ @{Config.SUPPORT_ESCALATION_USERNAME}"
 
 
 def check_user_limits(user: User, amount: float) -> Optional[str]:
