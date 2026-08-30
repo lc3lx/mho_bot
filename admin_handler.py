@@ -543,23 +543,28 @@ class AdminHandler:
     async def proxy_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """شاشة حالة بروكسي Ichancy"""
         status = ichancy_client.get_proxy_status()
-        source_label = {
-            "admin": "لوحة الأدمن",
-            "env": "ملف .env",
-        }.get(status["source"], status["source"])
+        source_label = "لوحة الأدmin (فوري — بدون .env)"
         enabled = status["enabled"]
         message = f"""
 🌐 بروكسي Ichancy
 
-الحالة: {"✅ مفعّل" if enabled else "⏹ معطّل / اتصال مباشر"}
+الحالة: {"✅ مفعّل" if enabled else "⏹ معطّل"}
 الرابط: <code>{_html.escape(status["masked"])}</code>
-المصدر: {source_label}
+الإدارة: {source_label}
 المحرك: {status["backend"]}
 يوزر مضبوط: {"نعم" if status["user_set"] else "لا"}
 
-• التعيين يختبر البروكسي أولاً ثم يحفظه ويطبّقه فوراً
-• إذا فشل الاختبار يبقى البروكسي الحالي كما هو
-• التعطيل قرار صريح ولن يرجع تلقائياً لـ .env
+✨ <b>كل شي من هون</b> — غيّر البروكسي متى ما بدك:
+• ما بتحتاج تعدّل السيرفر
+• ما بتحتاج pm2 restart
+• ما بتحتاج تتواصل مع المبرمج
+
+💡 أي بروكسي تشتري؟
+• الأفضل: <b>Static Residential (ISP) IPv4</b>
+• تجنّب: Datacenter و IPv6
+
+• التعيين يختبر على Ichancy قبل الحفظ
+• إذا فشل الاختبار يبقى القديم كما هو
         """
         await _admin_edit(
             update,
@@ -576,12 +581,14 @@ class AdminHandler:
         await _admin_edit(
             update,
             "🌐 تعيين بروكسي Ichancy\n\n"
-            "أرسل الرابط بسطر واحد:\n"
-            "<code>socks5h://user:pass@host:port</code>\n"
-            "أو\n"
-            "<code>http://host:port</code>\n\n"
-            "الأنواع المسموحة: http / https / socks5 / socks5h\n"
-            "⚠️ سيتم اختباره على Ichancy قبل الحفظ.",
+            "أرسل البروكسي بأي صيغة من هدول:\n"
+            "1️⃣ <code>socks5h://user:pass@host:port</code>\n"
+            "2️⃣ <code>http://host:port</code>\n"
+            "3️⃣ <code>host:port:user:pass</code> (من Proxy-Seller)\n"
+            "4️⃣ <code>user:pass@host:port</code>\n\n"
+            "الأنواع: http / https / socks5 / socks5h\n"
+            "💡 من Proxy-Seller اختر <b>Static Residential (ISP) IPv4</b>\n"
+            "⚠️ سيتم اختباره على Ichancy قبل الحفظ — ما بينحفظ إذا فشل.",
             reply_markup=Keyboards.cancel_admin_operation(),
             context=context,
             parse_mode="HTML",
@@ -628,10 +635,11 @@ class AdminHandler:
             return True
 
         await update.message.reply_text(
-            f"✅ تم اعتماد البروكسي وتطبيقه فوراً\n"
+            f"✅ تم اعتماد البروكسي وتطبيقه <b>فوراً</b>\n"
             f"<code>{_html.escape(result.masked_proxy)}</code>\n"
             f"{_html.escape(result.message)}\n"
-            f"المدة: {result.elapsed_ms}ms",
+            f"المدة: {result.elapsed_ms}ms\n\n"
+            "🔄 ما بتحتاج إعادة تشغيل البوت.",
             reply_markup=Keyboards.admin_proxy_menu(enabled=True),
             parse_mode="HTML",
         )
@@ -684,7 +692,7 @@ class AdminHandler:
             update,
             "⏹ تم تعطيل بروكسي Ichancy.\n"
             "الطلبات الآن مباشرة من السيرفر.\n"
-            "لن يرجع تلقائياً لبروكسي .env."
+            "تقدر ترجّع تفعّل بروكسي جديد من هون بأي وقت."
             + warn,
             reply_markup=Keyboards.admin_proxy_menu(enabled=False),
             context=context,

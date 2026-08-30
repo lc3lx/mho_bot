@@ -367,10 +367,7 @@ class Config:
         "withdraw_cooldown_minutes": int(os.getenv("ICHANCY_WITHDRAW_COOLDOWN", "30")),
         # الحد الأدنى لشحن حساب ichancy من رصيد البوت
         "min_topup": float(os.getenv("ICHANCY_MIN_TOPUP", "200")),
-        # بروكسي لطلبات Ichancy فقط (لتجاوز Cloudflare على IP السيرفر)
-        "proxy_url": os.getenv("ICHANCY_PROXY", "").strip(),
-        "proxy_user": os.getenv("ICHANCY_PROXY_USER", "").strip(),
-        "proxy_pass": os.getenv("ICHANCY_PROXY_PASS", "").strip(),
+        # البروكسي يُدار من لوحة الأدmin فقط (DB) — لا تضبطه هنا
         "request_timeout": int(os.getenv("ICHANCY_TIMEOUT", "60")),
     }
     
@@ -532,48 +529,42 @@ class Config:
     @classmethod
     def get_ichancy_proxy_config(cls) -> dict:
         """
-        إعداد بروكسي Ichancy الفعّال.
-        إذا ضبط الأدمن override من اللوحة → يُستخدم DB (حتى لو فارغ = معطّل).
-        وإلا → قيم .env الافتراضية.
+        إعداد بروكسي Ichancy — من لوحة الأدmin فقط (قاعدة البيانات).
+        لا يُقرأ من .env؛ الأدمن يغيّره ويطبّقه فوراً من البوت.
         """
-        env_cfg = {
-            "proxy_url": (cls.ICHANCY_CONFIG.get("proxy_url") or "").strip(),
-            "proxy_user": (cls.ICHANCY_CONFIG.get("proxy_user") or "").strip(),
-            "proxy_pass": (cls.ICHANCY_CONFIG.get("proxy_pass") or "").strip(),
-            "source": "env",
+        empty = {
+            "proxy_url": "",
+            "proxy_user": "",
+            "proxy_pass": "",
+            "source": "admin",
         }
         try:
             from database import DatabaseManager
 
             db = DatabaseManager()
-            override = db.get_setting("ichancy_proxy_override")
-        except Exception:
-            return env_cfg
-
-        if override == "1":
             return {
                 "proxy_url": (db.get_setting("ichancy_proxy_url", "") or "").strip(),
                 "proxy_user": (db.get_setting("ichancy_proxy_user", "") or "").strip(),
                 "proxy_pass": (db.get_setting("ichancy_proxy_pass", "") or "").strip(),
                 "source": "admin",
             }
-        return env_cfg
+        except Exception:
+            return empty
 
     @classmethod
     def save_ichancy_proxy_config(
         cls, proxy_url: str = "", proxy_user: str = "", proxy_pass: str = ""
     ) -> None:
-        """حفظ بروكسي من لوحة الأدمن (override صريح)."""
+        """حفظ بروكسي من لوحة الأدmin."""
         from database import DatabaseManager
 
         db = DatabaseManager()
-        db.set_setting("ichancy_proxy_override", "1")
         db.set_setting("ichancy_proxy_url", (proxy_url or "").strip())
         db.set_setting("ichancy_proxy_user", (proxy_user or "").strip())
         db.set_setting("ichancy_proxy_pass", (proxy_pass or "").strip())
 
     @classmethod
     def disable_ichancy_proxy_config(cls) -> None:
-        """تعطيل البروكسي من الأدمن بشكل صريح (لا يرجع لـ .env)."""
+        """تعطيل البروكسي من الأدmin."""
         cls.save_ichancy_proxy_config("", "", "")
 

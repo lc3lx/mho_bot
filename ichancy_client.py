@@ -53,6 +53,39 @@ ALLOWED_PROXY_SCHEMES = ("http", "https", "socks5", "socks5h")
 PROXY_TEST_TIMEOUT = 25
 
 
+def normalize_proxy_input(raw: str, default_scheme: str = "http") -> str:
+    """
+    يحوّل صيغ شائعة من مزوّدي البروكسي إلى URL كامل.
+    يدعم: scheme://... | host:port:user:pass | user:pass@host:port | host:port
+    """
+    text = (raw or "").strip()
+    if not text:
+        return text
+    if "://" in text:
+        return text
+
+    scheme = (default_scheme or "http").lower()
+    if scheme not in ALLOWED_PROXY_SCHEMES:
+        scheme = "http"
+
+    if "@" in text:
+        return f"{scheme}://{text}"
+
+    parts = text.split(":")
+    if len(parts) >= 4 and parts[1].isdigit():
+        host, port, user = parts[0], parts[1], parts[2]
+        password = ":".join(parts[3:])
+        return (
+            f"{scheme}://{quote(user, safe='')}:{quote(password, safe='')}"
+            f"@{host}:{port}"
+        )
+
+    if len(parts) == 2 and parts[1].isdigit():
+        return f"{scheme}://{parts[0]}:{parts[1]}"
+
+    return text
+
+
 class IchancyError(Exception):
     def __init__(self, message: str, status_code: Optional[int] = None):
         self.message = message
@@ -148,6 +181,8 @@ class IchancyClient:
         raw = (raw_url or "").strip()
         user = (user or "").strip()
         password = (password or "").strip()
+
+        raw = normalize_proxy_input(raw)
 
         if not raw:
             raise ValueError("الرابط فارغ. أرسل بروكسي بصيغة scheme://host:port")
@@ -742,8 +777,8 @@ class IchancyClient:
                 hint = ""
                 if not self._proxies:
                     hint = (
-                        "\nفعّل بروكسي Ichancy من لوحة الأدمن "
-                        "أو ICHANCY_PROXY في .env."
+                        "\nفعّل بروكسي Ichancy من لوحة الأدmin "
+                        "→ 🌐 بروكسي Ichancy → تعيين / تغيير."
                     )
                 raise IchancyError(
                     "منصة Ichancy حجب الاتصال (Cloudflare 403)."
