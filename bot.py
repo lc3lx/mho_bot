@@ -160,6 +160,17 @@ class TelegramBot:
             ps.get_agent_low_balance_threshold(),
         )
 
+        from ichancy_handler import ichancy_client
+
+        px = ichancy_client.get_proxy_status()
+        if px.get("enabled"):
+            logger.info("Ichancy proxy active: %s", px.get("masked"))
+        else:
+            logger.warning(
+                "Ichancy proxy OFF — iChancy لن يعمل من IP السيرفر. "
+                "فعّله من لوحة الأدmin → 🌐 بروكسي Ichancy"
+            )
+
     async def balance_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """أمر عرض الرصيد"""
         from handlers import user_accepted_terms, send_consent_gate

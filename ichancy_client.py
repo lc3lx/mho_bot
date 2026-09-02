@@ -316,14 +316,27 @@ class IchancyClient:
         active = None
         if self._proxies:
             active = self._proxies.get("https") or self._proxies.get("http")
+        db_url = (cfg.get("proxy_url") or "").strip()
         return {
             "enabled": bool(self._proxies),
             "masked": self._mask_proxy(active),
-            "source": cfg.get("source", "env"),
+            "source": cfg.get("source", "admin"),
             "backend": "curl_cffi" if curl_requests is not None else "requests",
             "configured_agent": self.is_configured,
             "user_set": bool(cfg.get("proxy_user")),
+            "db_configured": bool(db_url),
         }
+
+    def _sync_proxy_from_db(self) -> None:
+        """يطبّق بروكسي DB إذا تغيّر (بعد restart أو تعديل من لوحة الأدmin)."""
+        cfg = Config.get_ichancy_proxy_config()
+        new_proxies = self._build_proxies(cfg)
+        old = self._proxies or {}
+        new_url = (new_proxies or {}).get("https") or (new_proxies or {}).get("http")
+        old_url = old.get("https") or old.get("http")
+        if new_url == old_url:
+            return
+        self.apply_proxy_config(cfg, reauth=False)
 
     def test_proxy_config(
         self,
@@ -459,10 +472,34 @@ class IchancyClient:
             logger.warning(
                 "Proxy test failed (%s): %s", masked, type(exc).__name__
             )
+            err = str(exc)
+            low = err.lower()
+            if "407" in err or "proxy authentication" in low:
+                msg = (
+                    "البروكسي رفض المصادقة (HTTP 407).\n"
+                    "تأكد من اليوزر/الباسورد، وأن IP السيرفر مسموح "
+                    "عند مزوّد البروكسي (whitelist) إن كان مطلوب."
+                )
+                code = "auth"
+            elif "socks5" in low and (
+                "rejected" in low or "authentication" in low or "(1 1)" in err
+            ):
+                msg = (
+                    "خادم SOCKS5 رفض اليوزر/الباسورد.\n"
+                    "جرّب صيغة http://user:pass@ip:port أو فعّل "
+                    "الـ whitelist لـ IP السيرفر عند المزوّد."
+                )
+                code = "auth"
+            elif "timed out" in low or "timeout" in low:
+                msg = "انتهت مهلة الاتصال بالبروكسي (timeout)."
+                code = "proxy_error"
+            else:
+                msg = f"فشل الاتصال عبر البروكسي: {exc}"
+                code = "proxy_error"
             return ProxyTestResult(
                 ok=False,
-                code="proxy_error",
-                message=f"فشل الاتصال عبر البروكسي: {exc}",
+                code=code,
+                message=msg,
                 masked_proxy=masked,
                 elapsed_ms=elapsed,
             )
@@ -730,6 +767,7 @@ class IchancyClient:
         timeout: int = None,
         _auth_retried: bool = False,
     ) -> Dict[str, Any]:
+        self._sync_proxy_from_db()
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json, text/plain, */*",

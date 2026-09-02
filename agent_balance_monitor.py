@@ -137,6 +137,21 @@ async def check_agent_balance(
         dbg("H1", "agent_balance_monitor:check", "not configured", {})
         return None
 
+    proxy_status = ichancy_client.get_proxy_status()
+    if not proxy_status.get("enabled"):
+        dbg(
+            "H1",
+            "agent_balance_monitor:check",
+            "skipped no proxy",
+            {"db_configured": proxy_status.get("db_configured")},
+        )
+        if reason == "scheduled_poll":
+            logger.info(
+                "تخطي فحص رصيد الكاشير — البروكسي غير مفعّل. "
+                "فعّله من لوحة الأدmin → 🌐 بروكسي Ichancy"
+            )
+        return None
+
     threshold = ps.get_agent_low_balance_threshold()
     try:
         balance = await asyncio.to_thread(ichancy_client.get_agent_balance)
