@@ -23,6 +23,39 @@ from ichancy_client import IchancyClient
 import html as _html
 
 logger = logging.getLogger(__name__)
+
+
+async def _fetch_server_public_ip() -> str:
+    """IP الخارجي للسيرفر — لإضافته بـ whitelist عند مزوّد البروكسي."""
+    def _get():
+        import requests
+
+        for url in ("https://api.ipify.org", "https://ifconfig.me/ip"):
+            try:
+                r = requests.get(url, timeout=8)
+                if r.ok and r.text.strip():
+                    return r.text.strip()
+            except Exception:
+                continue
+        return ""
+
+    try:
+        return await asyncio.to_thread(_get)
+    except Exception:
+        return ""
+
+
+def _proxy_whitelist_hint(server_ip: str) -> str:
+    ip = (server_ip or "").strip() or "—"
+    return (
+        f"\n\n🖥 <b>IP السيرفر</b> (لازم تضيفه بـ whitelist عند Proxy-Seller):\n"
+        f"<code>{_html.escape(ip)}</code>\n\n"
+        "خطوات Proxy-Seller:\n"
+        "1️⃣ My Proxies → اختر البروكسي\n"
+        "2️⃣ IP Authorization / Whitelist\n"
+        "3️⃣ أضف IP السيرفر فوق واحفظ\n"
+        "4️⃣ انتظر 1–2 دقيقة وجرب من اللوحة مرة تانية"
+    )
 db = DatabaseManager()
 
 
@@ -543,6 +576,7 @@ class AdminHandler:
     async def proxy_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """شاشة حالة بروكسي Ichancy"""
         status = ichancy_client.get_proxy_status()
+        server_ip = await _fetch_server_public_ip()
         source_label = "لوحة الأدmin (فوري — بدون .env)"
         enabled = status["enabled"]
         message = f"""
@@ -553,6 +587,7 @@ class AdminHandler:
 الإدارة: {source_label}
 المحرك: {status["backend"]}
 يوزر مضبوط: {"نعم" if status["user_set"] else "لا"}
+🖥 IP السيرفر للـ whitelist: <code>{_html.escape(server_ip or "—")}</code>
 
 ✨ <b>كل شي من هون</b> — غيّر البروكسي متى ما بدك:
 • ما بتحتاج تعدّل السيرفر
@@ -562,6 +597,8 @@ class AdminHandler:
 💡 أي بروكسي تشتري؟
 • الأفضل: <b>Static Residential (ISP) IPv4</b>
 • تجنّب: Datacenter و IPv6
+
+⚠️ خطأ 407؟ → أضف IP السيرفر فوق بـ whitelist عند Proxy-Seller
 
 • التعيين يختبر على Ichancy قبل الحفظ
 • إذا فشل الاختبار يبقى القديم كما هو
@@ -622,11 +659,16 @@ class AdminHandler:
             pass
 
         if not result.ok:
+            extra = ""
+            if result.code == "auth" or "407" in (result.message or ""):
+                server_ip = await _fetch_server_public_ip()
+                extra = _proxy_whitelist_hint(server_ip)
             await update.message.reply_text(
                 f"❌ فشل الاختبار — لم يُحفظ شيء\n"
                 f"السبب: {_html.escape(result.message)}\n"
                 f"البروكسي: <code>{_html.escape(result.masked_proxy)}</code>\n"
-                f"المدة: {result.elapsed_ms}ms",
+                f"المدة: {result.elapsed_ms}ms"
+                + extra,
                 reply_markup=Keyboards.admin_proxy_menu(
                     enabled=ichancy_client.get_proxy_status()["enabled"]
                 ),
