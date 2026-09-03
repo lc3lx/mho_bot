@@ -573,11 +573,11 @@ class Keyboards:
         rows = [
             [
                 InlineKeyboardButton(
-                    "رد",
+                    "رد على المستخدم ✉",
                     callback_data=f"sup_ticket_reply_{ticket_id}",
                 ),
                 InlineKeyboardButton(
-                    "حل",
+                    "تم حل المشكلة ✅ ",
                     callback_data=f"sup_ticket_resolve_{ticket_id}",
                 ),
             ],
@@ -604,11 +604,11 @@ class Keyboards:
         return InlineKeyboardMarkup([
             [
                 InlineKeyboardButton(
-                    "نكمل ✅",
+                    "نحلت نظامي ✅",
                     callback_data=f"sup_ticket_resolve_ok_{ticket_id}",
                 ),
                 InlineKeyboardButton(
-                    "بالغلط ❌",
+                    "بالغلط رجعني  ❌",
                     callback_data=f"sup_ticket_resolve_no_{ticket_id}",
                 ),
             ],

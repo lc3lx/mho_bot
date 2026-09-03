@@ -955,9 +955,9 @@ async def start_general_support(update, context):
     text = (
         "🚑 فتحتلك تذكرة دعم\n\n"
         f"🧾 رقم التذكرة {ticket_id}\n\n"
-        "اكتب شو المشكلة برسالة وحدة\n"
-        "بتوصل لكروب الدعم مع اسمك واليوزر\n"
-        "ويردّوا عليك هون بالخاص"
+        "اكتب مشكلتك برسالة واحدة\n"
+        "وبتوصل لكروب الدعم مباشرة\n"
+        "ورح يتم الرد عليك هون بالخاص"
     )
     markup = Keyboards.support_menu()
     if update.callback_query:
