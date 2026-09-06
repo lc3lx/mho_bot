@@ -686,14 +686,16 @@ class IchancyHandler:
         text = (
             "💸 شحن حساب iChancy\n\n"
             f"الحساب: {tg_code(user.ichancy_username)}\n\n"
-            "هلق ابعت مبلغ التعبئة كتابه فقط\n\n"
-            "اكتب المبلغ العمله الجديده يا ملك\n\n"
+            "هلق ابعت مبلغ التعبئة بالليرة <b>الجديدة</b> فقط\n\n"
             "مثال:\n"
-            f"{tg_code('250')}\n\n"
+            f"{tg_code('250')}\n"
+            "→ على iChancy بيوصل "
+            f"{tg_code(str(int(Config.ichancy_old_amount(250))))} "
+            "(عملة قديمة ×100)\n\n"
             "بلا فواصل\n"
             "المحاسب ما ناقصه ألغاز اليوم 😂\n\n"
             f"💵 رصيد البوت: {format_currency(user.balance)}\n"
-            f"اقل مبلغ ايداع : {format_currency(min_topup)} ل.س\n\n"
+            f"اقل مبلغ ايداع : {format_currency(min_topup)} ل.س جديدة\n\n"
             "اكتبه بالليره الجديده وبتلاقيه بحسابك بالليره القديمه"
         )
         context.user_data["state"] = "waiting_for_amount"
@@ -837,8 +839,11 @@ class IchancyHandler:
                 except Exception:
                     pass
 
+                old_amt = Config.ichancy_old_amount(amount)
                 await update.message.reply_text(
-                    f"✅ تم شحن الحساب بمبلغ {format_currency(amount)}",
+                    f"✅ تم شحن الحساب\n\n"
+                    f"💰 من محفظة البوت: {format_currency(amount)} (ليرة جديدة)\n"
+                    f"🎰 على iChancy: {format_currency(old_amt)} (ليرة قديمة)",
                     reply_markup=Keyboards.ichancy_account_menu(),
                 )
 
@@ -974,7 +979,10 @@ class IchancyHandler:
             "⬇️ سحب رصيد الحساب إلى محفظة البوت\n\n"
             f"الحساب: {tg_code(user.ichancy_username)}\n"
             f"⏱ بعد السحب: انتظار {cooldown_minutes} دقيقة قبل سحب آخر\n\n"
-            f"أرسل المبلغ الذي تريد سحبه من ichancy ({currency}):"
+            "اكتب المبلغ بالليرة <b>الجديدة</b> (نفس وحدة محفظة البوت)\n\n"
+            f"مثال: {tg_code('250')} جديدة → نسحب "
+            f"{tg_code(str(int(Config.ichancy_old_amount(250))))} قديمة من iChancy\n\n"
+            "أرسل المبلغ:"
         )
         context.user_data["state"] = "waiting_for_amount"
         context.user_data["operation"] = "ichancy_withdraw"
@@ -1114,11 +1122,13 @@ class IchancyHandler:
                 session.commit()
 
                 context.user_data.clear()
+                old_amt = Config.ichancy_old_amount(validated_amount)
                 await update.message.reply_text(
                     f"✅ تم سحب الرصيد من ichancy بنجاح!\n\n"
-                    f"💸 المبلغ: {format_currency(validated_amount)}\n"
+                    f"💸 من iChancy: {format_currency(old_amt)} (ليرة قديمة)\n"
+                    f"💰 لمحفظة البوت: {format_currency(validated_amount)} (ليرة جديدة)\n"
                     f"💵 رصيد محفظة البوت: {format_currency(db_user.balance)}\n"
-                    f"🎰 رصيد المنصة: {format_currency(float(new_platform_balance or 0))}\n\n"
+                    f"🎰 رصيد المنصة: {format_currency(float(new_platform_balance or 0))} (جديدة)\n\n"
                     f"⏱ السحب التالي بعد {cooldown_minutes} دقيقة.",
                     reply_markup=Keyboards.ichancy_account_menu(),
                 )

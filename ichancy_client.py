@@ -1745,8 +1745,8 @@ class IchancyClient:
 
     def _transfer_amount(self, amount: float, *, negative: bool = False):
         """
-        مبلغ البوت → مبلغ API.
-        مثال: الزبون يكتب 20 → نرسل 2000 (scale=100).
+        مبلغ البوت (ليرة جديدة) → مبلغ API iChancy (ليرة قديمة).
+        مثال: الزبون يكتب 250 → نرسل 25000 (scale=100).
         """
         val = abs(float(amount)) * max(1, int(self.amount_scale or 1))
         if abs(val - round(val)) < 1e-9:

@@ -113,7 +113,7 @@ class Config:
         ),
         "trongrid_url": os.getenv("TRONGRID_URL", "https://api.trongrid.io"),
         "trongrid_api_key": os.getenv("TRONGRID_API_KEY", ""),
-        "syp_rate": float(os.getenv("USDT_SYP_RATE", "15000")),
+        "syp_rate": float(os.getenv("USDT_SYP_RATE", "150")),
         "min_usdt": float(os.getenv("USDT_MIN_DEPOSIT", "2")),
         "deposit_timeout_minutes": int(os.getenv("USDT_DEPOSIT_TIMEOUT", "30")),
         "poll_interval_seconds": int(os.getenv("USDT_POLL_INTERVAL", "30")),
@@ -297,7 +297,7 @@ class Config:
     SHAMCASH_DEPOSIT = {
         "min_syp": float(os.getenv("SHAMCASH_MIN_SYP", "200")),
         "min_usd": float(os.getenv("SHAMCASH_MIN_USD", "2")),
-        "usd_rate": float(os.getenv("SHAMCASH_USD_RATE", os.getenv("USDT_SYP_RATE", "13125"))),
+        "usd_rate": float(os.getenv("SHAMCASH_USD_RATE", os.getenv("USDT_SYP_RATE", "131.25"))),
         "account_syp": os.getenv(
             "APISYRIA_SHAMCASH_ACCOUNT_SYP",
             os.getenv("APISYRIA_SHAMCASH_ACCOUNT", ""),
@@ -492,39 +492,62 @@ class Config:
 
     @classmethod
     def get_shamcash_usd_rate(cls) -> float:
-        """سعر صرف شام كاش دولار → ل.س (من DB أو .env)"""
-        default = float(cls.SHAMCASH_DEPOSIT.get("usd_rate", 13125))
+        """سعر صرف شام كاش دولار → ل.س الجديدة (من DB أو .env)"""
+        default = float(cls.SHAMCASH_DEPOSIT.get("usd_rate", 131.25))
         try:
             from database import DatabaseManager
 
             db = DatabaseManager()
             raw = db.get_setting("shamcash_usd_rate", str(default))
-            return float(raw)
+            return cls.normalize_syp_rate(float(raw), default=default)
         except Exception:
             return default
 
     @classmethod
     def get_usdt_syp_rate(cls) -> float:
-        """سعر صرف USDT/دولار → ل.س (من لوحة الأدمن أو .env)"""
-        default = float(cls.USDT_CONFIG.get("syp_rate", 15000))
+        """سعر صرف USDT/دولار → ل.س الجديدة (من لوحة الأدمن أو .env)"""
+        default = float(cls.USDT_CONFIG.get("syp_rate", 150))
         try:
             from database import DatabaseManager
 
             db = DatabaseManager()
             raw = db.get_setting("usdt_syp_rate", str(default))
-            return float(raw)
+            return cls.normalize_syp_rate(float(raw), default=default)
         except Exception:
             return default
 
     @classmethod
+    def normalize_syp_rate(cls, rate: float, default: float = 130.0) -> float:
+        """
+        أسعار الصرف داخل البوت بالليرة الجديدة (محذوف منها صفرين).
+        إذا الأدمن كتب سعر قديم مثل 13000 → نحوّله تلقائياً لـ 130.
+        """
+        try:
+            val = float(rate)
+        except (TypeError, ValueError):
+            return float(default)
+        if val <= 0:
+            return float(default)
+        # عتبة واضحة: سعر دولار بالعملة القديمة كان بالآلاف
+        if val >= 1000:
+            return round(val / 100.0, 4)
+        return val
+
+    @classmethod
     def usd_to_syp(cls, usd_amount: float, source: str = "usdt") -> float:
-        """تحويل دولار/USDT إلى ليرة حسب سعر الأدمن."""
+        """تحويل دولار/USDT إلى ليرة جديدة حسب سعر الأدمن."""
         rate = (
             cls.get_shamcash_usd_rate()
             if source == "shamcash"
             else cls.get_usdt_syp_rate()
         )
         return round(float(usd_amount) * float(rate), 2)
+
+    @classmethod
+    def ichancy_old_amount(cls, new_amount: float) -> float:
+        """ليرة جديدة (بوت) → ليرة قديمة (iChancy). مثال: 250 → 25000"""
+        scale = max(1, int(cls.ICHANCY_CONFIG.get("amount_scale", 100) or 100))
+        return round(float(new_amount) * scale, 2)
 
     @classmethod
     def get_ichancy_proxy_config(cls) -> dict:

@@ -141,17 +141,19 @@ class PaymentHandler:
 
     @staticmethod
     def _shamcash_currency_text() -> str:
+        rate = Config.get_shamcash_usd_rate()
         return (
             "💠 شام كاش\n\n"
-            "اختار العملة اللي بدك تشحن فيها محفظة البوت\n\n"
-            "💵 دولار\n"
-            "🇸🇾 ليرة سورية\n\n"
+            "اختار العملة اللي بدك تحوّل فيها\n\n"
+            "💵 دولار → بتحوّل دولار على محفظة شام كاش دولار\n"
+            f"   وبنضيف لمحفظة البوت بالليرة (سعر الصرف: 1$ = {format_currency(rate)})\n\n"
+            "🇸🇾 ليرة سورية → بتحوّل ليرة وبتوصل ليرة\n\n"
             "اختار الصح من اول مرة\n"
             "المحاسب ما ناقصه مفاجآت اليوم 😂"
         )
 
     @staticmethod
-    def _shamcash_pay_text(currency: str, amount: float) -> str:
+    def _shamcash_pay_text(currency: str, amount: float, credit_syp: float = None) -> str:
         timeout = Config.APISYRIA_CONFIG.get("deposit_timeout_minutes", 15)
         account = PaymentHandler._shamcash_account(currency)
         cfg = Config.SHAMCASH_DEPOSIT
@@ -159,15 +161,24 @@ class PaymentHandler:
             min_amount = cfg["min_usd"]
             min_label = f"{min_amount:.2f} $"
             amount_label = f"{float(amount):.2f} $"
+            rate = Config.get_shamcash_usd_rate()
+            if credit_syp is None:
+                credit_syp = Config.usd_to_syp(amount, source="shamcash")
+            convert_block = (
+                f"💱 سعر الصرف: 1 $ = {format_currency(rate)}\n"
+                f"💰 يُضاف لمحفظة البوت: {format_currency(credit_syp)}\n\n"
+            )
         else:
             min_amount = cfg["min_syp"]
             min_label = format_currency(min_amount)
             amount_label = format_currency(amount)
+            convert_block = ""
         return (
             "💠 شحن المحفظة عن طريق شام كاش\n\n"
             "حوّل المبلغ على العنوان الموجود تحت\n\n"
             f"{tg_code(account)}\n\n"
-            f"💰 المبلغ: {amount_label}\n"
+            f"💰 المبلغ للتحويل: {amount_label}\n"
+            f"{convert_block}"
             f"بعد ما تحول ابعت رقم العملية فقط\n\n"
             f"⏰ المهلة {timeout} دقيقة\n\n"
             f"📌 اقل مبلغ للشحن {min_label}\n\n"
@@ -217,7 +228,10 @@ class PaymentHandler:
             await PaymentHandler.start_deposit_ask_amount(update, context)
             return
         context.user_data["state"] = "waiting_for_shamcash_tx"
-        text = PaymentHandler._shamcash_pay_text(currency, float(amount))
+        credit_syp = context.user_data.get("credit_amount_syp")
+        text = PaymentHandler._shamcash_pay_text(
+            currency, float(amount), float(credit_syp) if credit_syp is not None else None
+        )
         await safe_edit_callback_message(
             update,
             text,
@@ -277,49 +291,58 @@ class PaymentHandler:
         update: Update, context: ContextTypes.DEFAULT_TYPE, currency: str
     ):
         """تعليمات الشحن حسب العملة — نص فقط، بدون شعار/دليل."""
+        currency = (currency or "syp").lower()
+        cfg = Config.SHAMCASH_DEPOSIT
+        context.user_data["method"] = "shamcash"
+        context.user_data["operation"] = "shamcash_deposit"
+        context.user_data["shamcash_currency"] = currency
+        context.user_data.pop("shamcash_tx", None)
+        context.user_data.pop("shamcash_confirm_lock", None)
+
+        # دولار: نطلب مبلغ التحويل بالدولار ثم نضربه بسعر الأدمن → ل.س
+        if currency == "usd":
+            rate = Config.get_shamcash_usd_rate()
+            min_a = float(cfg["min_usd"])
+            context.user_data.pop("amount", None)
+            context.user_data.pop("credit_amount_syp", None)
+            context.user_data["state"] = "waiting_for_shamcash_amount"
+            context.user_data["deposit_started_at"] = datetime.utcnow().isoformat()
+            await safe_edit_callback_message(
+                update,
+                "💵 شام كاش — دولار\n\n"
+                "حوّل دولار على محفظة شام كاش الدولار،\n"
+                "ونضيف الرصيد لمحفظة البوت بالليرة <b>الجديدة</b>.\n\n"
+                f"💱 سعر الصرف الحالي: 1 $ = {format_currency(rate)} ل.س جديدة\n"
+                f"📌 الحد الأدنى: {min_a:.2f} $\n\n"
+                f"مثال: إذا حوّلت 5$ وبسعر {format_currency(rate)}\n"
+                f"→ يُضاف لمحفظتك {format_currency(5 * rate)} (ليرة جديدة)\n\n"
+                "ابعت مبلغ التحويل بالدولار (رقم فقط):",
+                reply_markup=Keyboards.cancel_operation(),
+                context=context,
+            )
+            return
+
         amount = context.user_data.get("amount")
         if not amount:
             await PaymentHandler.start_deposit_ask_amount(update, context)
             return
 
-        currency = (currency or "syp").lower()
-        cfg = Config.SHAMCASH_DEPOSIT
         amount = float(amount)
-        if currency == "usd":
-            min_a = float(cfg["min_usd"])
-            if amount < min_a:
-                await safe_edit_callback_message(
-                    update,
-                    f"❌ الحد الأدنى لشام كاش بالدولار هو {min_a:.2f} $\n"
-                    "رجع واكتب مبلغ مناسب.",
-                    reply_markup=Keyboards.shamcash_currency_menu(),
-                    context=context,
-                )
-                return
-            credit_syp = Config.usd_to_syp(amount, source="shamcash")
-        else:
-            min_a = float(cfg["min_syp"])
-            if amount < min_a:
-                await safe_edit_callback_message(
-                    update,
-                    f"❌ الحد الأدنى لشام كاش بالليرة هو {format_currency(min_a)}\n"
-                    "رجع واكتب مبلغ مناسب.",
-                    reply_markup=Keyboards.shamcash_currency_menu(),
-                    context=context,
-                )
-                return
-            credit_syp = amount
+        min_a = float(cfg["min_syp"])
+        if amount < min_a:
+            await safe_edit_callback_message(
+                update,
+                f"❌ الحد الأدنى لشام كاش بالليرة هو {format_currency(min_a)}\n"
+                "رجع واكتب مبلغ مناسب.",
+                reply_markup=Keyboards.shamcash_currency_menu(),
+                context=context,
+            )
+            return
 
-        context.user_data["shamcash_currency"] = currency
-        context.user_data["credit_amount_syp"] = credit_syp
+        context.user_data["credit_amount_syp"] = amount
         context.user_data["amount"] = amount
-        context.user_data["method"] = "shamcash"
-        context.user_data["operation"] = "shamcash_deposit"
         context.user_data["state"] = "waiting_for_shamcash_tx"
         context.user_data["deposit_started_at"] = datetime.utcnow().isoformat()
-        context.user_data.pop("shamcash_tx", None)
-        context.user_data.pop("shamcash_confirm_lock", None)
-
         await PaymentHandler.show_shamcash_pay_screen(update, context)
 
     @staticmethod
@@ -461,12 +484,51 @@ class PaymentHandler:
     async def handle_shamcash_amount_input(
         update: Update, context: ContextTypes.DEFAULT_TYPE, amount_text: str
     ):
-        """توافق خلفي — المبلغ صار يُطلب في البداية."""
-        await update.message.reply_text(
-            "المبلغ مكتوب أصلاً.\nابعت رقم العملية فقط.",
-            reply_markup=Keyboards.shamcash_pay_menu(),
-        )
+        """مبلغ التحويل بالدولار لشام كاش → رصيد ل.س بسعر الأدمن."""
+        currency = (context.user_data.get("shamcash_currency") or "usd").lower()
+        if currency != "usd":
+            await update.message.reply_text(
+                "المبلغ مكتوب أصلاً.\nابعت رقم العملية فقط.",
+                reply_markup=Keyboards.shamcash_pay_menu(),
+            )
+            context.user_data["state"] = "waiting_for_shamcash_tx"
+            return
+
+        try:
+            usd_amount = float(
+                str(amount_text or "").replace(",", "").replace("$", "").strip()
+            )
+        except (TypeError, ValueError):
+            usd_amount = 0.0
+
+        min_a = float(Config.SHAMCASH_DEPOSIT.get("min_usd") or 2)
+        if usd_amount < min_a:
+            await update.message.reply_text(
+                f"❌ الحد الأدنى {min_a:.2f} $\n"
+                "ابعت مبلغ التحويل بالدولار من جديد:",
+                reply_markup=Keyboards.cancel_operation(),
+            )
+            context.user_data["state"] = "waiting_for_shamcash_amount"
+            return
+
+        rate = Config.get_shamcash_usd_rate()
+        credit_syp = Config.usd_to_syp(usd_amount, source="shamcash")
+        context.user_data["amount"] = usd_amount
+        context.user_data["credit_amount_syp"] = credit_syp
+        context.user_data["shamcash_usd_rate"] = rate
+        context.user_data["method"] = "shamcash"
+        context.user_data["operation"] = "shamcash_deposit"
         context.user_data["state"] = "waiting_for_shamcash_tx"
+        context.user_data["deposit_started_at"] = datetime.utcnow().isoformat()
+        context.user_data.pop("shamcash_tx", None)
+        context.user_data.pop("shamcash_confirm_lock", None)
+
+        text = PaymentHandler._shamcash_pay_text("usd", usd_amount, credit_syp)
+        await update.message.reply_text(
+            text,
+            reply_markup=Keyboards.shamcash_pay_menu(),
+            parse_mode="HTML",
+        )
 
     @staticmethod
     async def confirm_shamcash_deposit(
@@ -619,6 +681,26 @@ class PaymentHandler:
                 )
                 return
 
+            # دولار → ل.س بسعر الأدمن الحالي (من لوحة التحكم)
+            if str(currency).lower() == "usd":
+                rate = Config.get_shamcash_usd_rate()
+                credit_syp = Config.usd_to_syp(float(actual_amount), source="shamcash")
+                session = db.get_session()
+                try:
+                    transaction = session.query(Transaction).filter(
+                        Transaction.id == transaction_id
+                    ).first()
+                    if transaction:
+                        transaction.amount = credit_syp
+                        transaction.description = (
+                            f"إيداع شام كاش USD — "
+                            f"{float(actual_amount):.2f}$ × {rate:g} = "
+                            f"{credit_syp:g} ل.س — رقم العملية {external_id}"
+                        )
+                        session.commit()
+                finally:
+                    session.close()
+
             if db.is_external_transaction_used(external_id, "shamcash"):
                 PaymentHandler._fail_pending_deposit(transaction_id, "عملية مكررة")
                 context.user_data.clear()
@@ -635,7 +717,8 @@ class PaymentHandler:
                 ).first()
                 if transaction:
                     transaction.external_transaction_id = external_id
-                    transaction.description += f"\nتحقق تلقائي — {external_id}"
+                    if str(currency).lower() != "usd":
+                        transaction.description += f"\nتحقق تلقائي — {external_id}"
                     session.commit()
             finally:
                 session.close()

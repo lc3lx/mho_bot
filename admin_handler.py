@@ -517,14 +517,20 @@ class AdminHandler:
         message = f"""
 💱 أسعار الصرف
 
-💵 شام كاش: 1 $ = {format_currency(sham)}
-🟢 USDT: 1 USDT = {format_currency(usdt)}
+⚠️ كل الأسعار بالليرة <b>الجديدة</b> (محذوف منها صفرين)
+مثال: القديم كان 13000 → هلق 130
+
+💵 شام كاش دولار → ل.س جديدة: 1 $ = {format_currency(sham)}
+🟢 USDT → ل.س جديدة: 1 USDT = {format_currency(usdt)}
+
+مثال شام كاش: تحويل 5$ → يُضاف {format_currency(5 * sham)} لمحفظة البوت
 
 اختر السعر الذي تريد تعديله:
         """
         await update.callback_query.edit_message_text(
             message,
             reply_markup=Keyboards.admin_exchange_rates(),
+            parse_mode="HTML",
         )
 
     @staticmethod
@@ -542,9 +548,12 @@ class AdminHandler:
 
         await update.callback_query.edit_message_text(
             f"💱 تعديل سعر {label}\n\n"
-            f"السعر الحالي: {format_currency(current)}\n\n"
-            f"أرسل السعر الجديد (رقم فقط، مثال: 13500):",
+            f"السعر الحالي: {format_currency(current)} ل.س <b>جديدة</b>\n\n"
+            "⚠️ اكتب السعر بالعملة الجديدة (بدون صفرين)\n"
+            "مثال: 130 أو 150 — مو 13000\n\n"
+            "أرسل السعر الجديد (رقم فقط):",
             reply_markup=Keyboards.cancel_admin_operation(),
+            parse_mode="HTML",
         )
 
     @staticmethod
@@ -557,18 +566,31 @@ class AdminHandler:
                 raise ValueError("rate must be positive")
         except ValueError:
             await update.message.reply_text(
-                "❌ أدخل رقماً صحيحاً أكبر من صفر.",
+                "❌ أدخل رقماً صحيحاً أكبر من صفر.\n"
+                "⚠️ السعر بالليرة الجديدة (مثال: 130 مو 13000).",
                 reply_markup=Keyboards.cancel_admin_operation(),
             )
             return False
+
+        raw_rate = rate
+        rate = Config.normalize_syp_rate(rate, default=rate)
+        note = ""
+        if abs(raw_rate - rate) > 1e-9:
+            note = (
+                f"\n\nℹ️ كتبت {format_currency(raw_rate)} (عملة قديمة)\n"
+                f"حوّلناه تلقائياً لـ {format_currency(rate)} بالليرة الجديدة."
+            )
 
         db.set_setting(setting_key, str(rate))
         label = "شام كاش" if setting_key == "shamcash_usd_rate" else "USDT"
         await update.message.reply_text(
             f"✅ تم تحديث سعر {label}:\n"
-            f"1 = {format_currency(rate)} ل.س\n\n"
-            f"يُطبَّق فوراً على طلبات الشحن الجديدة.",
+            f"1 $ = {format_currency(rate)} ل.س <b>جديدة</b>\n\n"
+            f"مثال: 5$ → {format_currency(5 * rate)} لمحفظة البوت\n"
+            f"يُطبَّق فوراً على الشحن الجديد."
+            + note,
             reply_markup=Keyboards.admin_panel(),
+            parse_mode="HTML",
         )
         return True
 
