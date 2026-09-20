@@ -1859,37 +1859,225 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             pass
         await show_user_home(update, context, user)
 
+async def _handle_user_support_photo(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, file_id: str
+):
+    """معالجة صورة مرسلة من المستخدم أثناء محادثة الدعم."""
+    import payout_service as ps
+    from database import SupportTicket, SupportTicketMessage
+
+    user = db.get_user(update.effective_user.id)
+    ticket_id = int(context.user_data.get("support_ticket_id") or 0)
+    order_id = int(context.user_data.get("support_order_id") or 0)
+    caption_txt = (update.message.caption or "").strip()
+    if not user or not ticket_id:
+        return
+
+    session = db.get_session()
+    try:
+        session.add(
+            SupportTicketMessage(
+                ticket_id=ticket_id,
+                direction="user_to_support",
+                content=f"[صورة] {caption_txt}".strip(),
+                sender_telegram_id=int(user.telegram_id),
+                sender_name=get_user_display_name(user),
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    context.user_data.pop("state", None)
+
+    group_caption = (
+        "🚑 صورة من المستخدم — تذكرة دعم\n\n"
+        f"🧾 رقم التذكرة {ticket_id}\n"
+        f"{user_identity_block(user)}\n"
+    )
+    if caption_txt:
+        group_caption += f"💬 توضيح الزبون:\n{caption_txt}\n\n"
+    group_caption += "ردّوا من الزر أو بالرد المباشر على هذه الرسالة"
+
+    support_gid = ps.get_support_group_id()
+    targets = [support_gid] if support_gid else Config.ADMIN_IDS
+    for chat_id in targets:
+        if not chat_id:
+            continue
+        try:
+            sent = await context.bot.send_photo(
+                chat_id=chat_id,
+                photo=file_id,
+                caption=group_caption,
+                reply_markup=Keyboards.support_ticket_admin_menu(ticket_id, order_id),
+            )
+            session = db.get_session()
+            try:
+                t = (
+                    session.query(SupportTicket)
+                    .filter(SupportTicket.id == ticket_id)
+                    .first()
+                )
+                if t:
+                    t.support_group_chat_id = str(chat_id)
+                    t.support_group_message_id = sent.message_id
+                    session.commit()
+            finally:
+                session.close()
+        except TelegramError:
+            pass
+
+    await update.message.reply_text(
+        "✅ تم إرسال الصورة لكروب الدعم بنجاح!\nسيقوم فريق الدعم بمراجعتها والرد عليك هنا بالخاص.",
+        reply_markup=Keyboards.support_menu(),
+    )
+
+
 async def payout_receipt_photo_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ):
-    """صورة إشعار حوالة بعد التقبيض — من كروب قبض أو الخاص."""
+    """معالج الصور من كروب التقبيض، كروب الدعم، أو الخاص."""
     if not update.message:
         return
-    if context.user_data.get("admin_state") != "waiting_wd_receipt_photo":
-        return
-    order_id = int(context.user_data.get("wd_receipt_order_id") or 0)
-    if not order_id:
+
+    import payout_service as ps
+    import withdraw_ops as ops
+
+    file_id = ops._extract_image_file_id(update.message)
+    if not file_id:
         return
 
     uid = update.effective_user.id
     chat = update.effective_chat
     in_private = getattr(chat, "type", None) == "private"
-    if not in_private and not _is_staff_user(uid, chat) and uid not in Config.ADMIN_IDS:
+    is_staff = _is_staff_user(uid, chat) or (uid in Config.ADMIN_IDS)
+
+    # 1. الرسائل في الخاص
+    if in_private:
+        # حالة مشرف ينتظر إرسال إشعار حوالة
+        if context.user_data.get("admin_state") == "waiting_wd_receipt_photo" and is_staff:
+            order_id = int(context.user_data.get("wd_receipt_order_id") or 0)
+            if order_id:
+                ok, msg = await ops.send_payout_receipt_photo(
+                    context, order_id, update.message, admin_user=update.effective_user
+                )
+                context.user_data.pop("admin_state", None)
+                context.user_data.pop("wd_receipt_order_id", None)
+                await update.message.reply_text(msg)
+                return
+
+        # حالة مشرف ينتظر الرد على تذكرة دعم بصورة
+        if context.user_data.get("admin_state") == "waiting_support_ticket_reply" and is_staff:
+            ticket_id = int(context.user_data.get("support_reply_ticket_id") or 0)
+            if ticket_id:
+                caption = (update.message.caption or "").strip()
+                ok, msg = await ops.support_send_photo_reply(
+                    context, ticket_id, file_id, caption, update.effective_user
+                )
+                context.user_data.pop("admin_state", None)
+                context.user_data.pop("support_reply_ticket_id", None)
+                await update.message.reply_text(msg)
+                return
+
+        # حالة مستخدم يرسل صورة لدعم تذكرة
+        if context.user_data.get("state") == "waiting_payout_support_msg":
+            await _handle_user_support_photo(update, context, file_id)
+            return
+
         return
 
-    from withdraw_flow import WithdrawFlow
+    # 2. الرسائل في الكروبات
+    if not is_staff:
+        return
 
-    ok, msg = await WithdrawFlow.send_payout_receipt_photo(
-        context, order_id, update.message, admin_user=update.effective_user
-    )
-    context.user_data.pop("admin_state", None)
-    context.user_data.pop("wd_receipt_order_id", None)
-    await update.message.reply_text(msg)
+    payout_gid = ps.get_payout_admin_group_id()
+    support_gid = ps.get_support_group_id()
+    chat_title = getattr(chat, "title", "") or ""
+
+    is_payout_grp = (payout_gid and chat.id == payout_gid) or ("قبض" in chat_title or "تقبيض" in chat_title)
+    is_support_grp = (support_gid and chat.id == support_gid) or ("دعم" in chat_title)
+
+    # محاولة مطابقة التذكرة أو طلب السحب من محتوى الرسالة أو الرد
+    ticket = ops.find_ticket_from_message(update.message, chat.id)
+    tx = ops.find_transaction_from_message(update.message, chat.id)
+
+    # أولوية كروب الدعم
+    if is_support_grp and not tx:
+        if not ticket:
+            await update.message.reply_text(
+                "⚠️ لإرسال الصورة للمستخدم في الخاص:\n"
+                "يرجى الرد (Reply) بالصورة على رسالة تذكرة الدعم، أو كتابة رقم التذكرة في وصف الصورة (مثال: #12)."
+            )
+            return
+        caption = (update.message.caption or "").strip()
+        ok, msg = await ops.support_send_photo_reply(
+            context, ticket.id, file_id, caption, update.effective_user
+        )
+        await update.message.reply_text(msg)
+        return
+
+    # أولوية كروب التقبيض
+    if is_payout_grp and not ticket:
+        if not tx:
+            order_id = int(context.user_data.get("wd_receipt_order_id") or 0)
+            if order_id:
+                tx = ops.get_tx(order_id)
+        if not tx:
+            await update.message.reply_text(
+                "⚠️ لتسليم صورة إشعار الحوالة للزبون بالخاص:\n"
+                "يرجى الرد (Reply) بالصورة على رسالة طلب السحب، أو كتابة رقم الطلب في وصف الصورة (مثال: #123 أو WD...)."
+            )
+            return
+        ok, msg = await ops.send_payout_receipt_photo(
+            context, tx.id, update.message, admin_user=update.effective_user
+        )
+        context.user_data.pop("admin_state", None)
+        context.user_data.pop("wd_receipt_order_id", None)
+        await update.message.reply_text(msg)
+        return
+
+    # إذا تم العثور على تذكرة صريحة (حتى لو لم يكن الكروب معرّفاً)
+    if ticket:
+        caption = (update.message.caption or "").strip()
+        ok, msg = await ops.support_send_photo_reply(
+            context, ticket.id, file_id, caption, update.effective_user
+        )
+        await update.message.reply_text(msg)
+        return
+
+    # إذا تم العثور على طلب سحب صريح
+    if tx:
+        ok, msg = await ops.send_payout_receipt_photo(
+            context, tx.id, update.message, admin_user=update.effective_user
+        )
+        await update.message.reply_text(msg)
+        return
 
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالج الرسائل النصية"""
     is_admin = update.effective_user.id in Config.ADMIN_IDS
+    chat = update.effective_chat
+    in_group = chat and getattr(chat, "type", None) in ("group", "supergroup")
+    is_staff = _is_staff_user(update.effective_user.id, chat) or is_admin
+
+    # رد المشرفين في كروب الدعم بنص مباشر بالرد على رسالة التذكرة
+    if in_group and is_staff and update.message and update.message.text:
+        import payout_service as ps
+        import withdraw_ops as ops
+
+        support_gid = ps.get_support_group_id()
+        chat_title = getattr(chat, "title", "") or ""
+        is_support_grp = (support_gid and chat.id == support_gid) or ("دعم" in chat_title)
+
+        ticket = ops.find_ticket_from_message(update.message, chat.id)
+        if ticket and (is_support_grp or update.message.reply_to_message):
+            msg_text = update.message.text.strip()
+            ok, msg = await ops.support_send_reply(
+                context, ticket.id, msg_text, update.effective_user
+            )
+            await update.message.reply_text(f"{msg} (تذكرة #{ticket.id})")
+            return
 
     if context.user_data.get("admin_operation") and is_admin:
         await AdminHandler.handle_admin_input(update, context)

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -589,7 +590,7 @@ def _extract_image_file_id(message) -> Optional[str]:
 async def send_payout_receipt_photo(
     context, order_id: int, message, admin_user=None
 ) -> tuple[bool, str]:
-    """إرسال صورة إشعار الحوالة للزبون بالخاص."""
+    """إرسال صورة إشعار الحوالة للزبون بالخاص، واعتماد التقبيض إن لم يكن معتمداً."""
     file_id = _extract_image_file_id(message)
     if not file_id:
         return False, "ابعت صورة إشعار الحوالة (صورة فقط)"
@@ -597,8 +598,16 @@ async def send_payout_receipt_photo(
     tx = get_tx(order_id)
     if not tx:
         return False, "الطلب غير موجود"
+
+    # إذا لم يكن الطلب معلماً كـ paid بعد، نعتمد التقبيض تلقائياً
     if tx.status not in (ST_PAID, "completed"):
-        return False, "لازم يكون الطلب متقبض قبل إرسال الإشعار"
+        if tx.status in (ST_PENDING_REVIEW, ST_AWAITING_PAYOUT, ST_PROCESSING, ST_CANCEL_REQUESTED, "pending"):
+            ok_paid, msg_paid = await admin_mark_paid(context, order_id, admin_user=admin_user)
+            if not ok_paid and tx.status not in (ST_PAID, "completed"):
+                return False, f"تعذر اعتماد التقبيض: {msg_paid}"
+            tx = get_tx(order_id)
+        else:
+            return False, f"حالة الطلب لا تسمح بالتقبيض ({status_label(tx.status)})"
 
     user = db.get_user_by_db_id(tx.user_id)
     if not user or not user.telegram_id:
@@ -607,12 +616,15 @@ async def send_payout_receipt_photo(
     amount = float(tx.amount or 0)
     net = float(tx.net_amount or 0)
     public_id = order_ref(tx)
+    custom_caption = (message.caption or "").strip()
+
     caption = (
         "📸 إشعار التقبيض\n\n"
         f"🧾 رقم الطلب {public_id}\n"
         f"💰 مبلغ السحب {format_currency(amount)}\n"
         f"✅ الصافي المقبوض {format_currency(net)}\n\n"
-        "صورة إشعار الحوالة من المحاسب"
+        + (f"💬 ملاحظة المحاسب: {custom_caption}\n\n" if custom_caption else "")
+        + "صورة إشعار الحوالة من المحاسب"
     )
 
     # #region agent log
@@ -656,7 +668,171 @@ async def send_payout_receipt_photo(
     finally:
         session.close()
 
-    return True, "✅ وصل إشعار الحوالة للزبون بالخاص"
+    return True, f"✅ وصل إشعار الحوالة للزبون بالخاص (طلب {public_id})"
+
+
+def find_transaction_from_message(message, chat_id: Optional[int] = None) -> Optional[Transaction]:
+    """البحث عن طلب السحب المرتبط بالرسالة (عبر الرد، الكابشن، أو النص)."""
+    if not message:
+        return None
+
+    session = db.get_session()
+    try:
+        # 1. فحص إذا كانت الرسالة رداً على رسالة أخرى
+        reply = message.reply_to_message
+        if reply:
+            # مطابقة message_id في الكروب
+            tx = session.query(Transaction).filter(
+                Transaction.admin_group_message_id == reply.message_id
+            ).first()
+            if tx:
+                return tx
+
+            reply_text = (reply.text or reply.caption or "")
+            # البحث عن كود الطلب WD...
+            m_wd = re.search(r"\b(WD[A-F0-9]{6,16})\b", reply_text, re.IGNORECASE)
+            if m_wd:
+                tx = session.query(Transaction).filter(
+                    Transaction.public_order_id == m_wd.group(1).upper()
+                ).first()
+                if tx:
+                    return tx
+
+            # البحث عن رقم الطلب (#123)
+            m_id = re.search(r"(?:رقم الطلب|طلب سحب|#)\s*[:#\s]?\s*(\d+)", reply_text)
+            if m_id:
+                tx = session.query(Transaction).filter(
+                    Transaction.id == int(m_id.group(1))
+                ).first()
+                if tx:
+                    return tx
+
+        # 2. فحص نص أو كابشن الرسالة الحالية
+        curr_text = (message.caption or message.text or "").strip()
+        if curr_text:
+            m_wd = re.search(r"\b(WD[A-F0-9]{6,16})\b", curr_text, re.IGNORECASE)
+            if m_wd:
+                tx = session.query(Transaction).filter(
+                    Transaction.public_order_id == m_wd.group(1).upper()
+                ).first()
+                if tx:
+                    return tx
+
+            m_id = re.search(r"(?:رقم الطلب|طلب|#)\s*[:#\s]?\s*(\d+)", curr_text)
+            if m_id:
+                tx = session.query(Transaction).filter(
+                    Transaction.id == int(m_id.group(1))
+                ).first()
+                if tx:
+                    return tx
+
+            if curr_text.isdigit():
+                tx = session.query(Transaction).filter(
+                    Transaction.id == int(curr_text)
+                ).first()
+                if tx:
+                    return tx
+
+        return None
+    finally:
+        session.close()
+
+
+def find_ticket_from_message(message, chat_id: Optional[int] = None) -> Optional[SupportTicket]:
+    """البحث عن تذكرة الدعم المرتبطة بالرسالة (عبر الرد، الكابشن، أو النص)."""
+    if not message:
+        return None
+
+    session = db.get_session()
+    try:
+        reply = message.reply_to_message
+        if reply:
+            # مطابقة رقم رسالة الكروب
+            ticket = session.query(SupportTicket).filter(
+                SupportTicket.support_group_message_id == reply.message_id
+            ).first()
+            if ticket:
+                return ticket
+
+            reply_text = (reply.text or reply.caption or "")
+            m = re.search(r"(?:رقم التذكرة|تذكرة|#)\s*[:#\s]?\s*(\d+)", reply_text)
+            if m:
+                ticket = session.query(SupportTicket).filter(
+                    SupportTicket.id == int(m.group(1))
+                ).first()
+                if ticket:
+                    return ticket
+
+        curr_text = (message.caption or message.text or "").strip()
+        if curr_text:
+            m = re.search(r"(?:رقم التذكرة|تذكرة|#)\s*[:#\s]?\s*(\d+)", curr_text)
+            if m:
+                ticket = session.query(SupportTicket).filter(
+                    SupportTicket.id == int(m.group(1))
+                ).first()
+                if ticket:
+                    return ticket
+            if curr_text.isdigit():
+                ticket = session.query(SupportTicket).filter(
+                    SupportTicket.id == int(curr_text)
+                ).first()
+                if ticket:
+                    return ticket
+
+        return None
+    finally:
+        session.close()
+
+
+async def support_send_photo_reply(
+    context, ticket_id: int, photo_file_id: str, caption: str, admin_user
+) -> tuple[bool, str]:
+    """إرسال صورة رد من فريق الدعم للمستخدم بالخاص."""
+    session = db.get_session()
+    try:
+        ticket = session.query(SupportTicket).filter(SupportTicket.id == ticket_id).first()
+        if not ticket:
+            return False, "التذكرة غير موجودة"
+        user = session.query(User).filter(User.id == ticket.user_id).first()
+        if not user or not user.telegram_id:
+            return False, "المستخدم غير موجود"
+
+        who = admin_name(admin_user)
+        session.add(
+            SupportTicketMessage(
+                ticket_id=ticket_id,
+                direction="support_to_user",
+                content=f"[صورة] {caption}".strip(),
+                sender_telegram_id=int(getattr(admin_user, "id", 0) or 0) or None,
+                sender_name=who,
+            )
+        )
+        session.commit()
+        telegram_id = user.telegram_id
+        order_id = ticket.order_id
+    finally:
+        session.close()
+
+    user_caption = "🚑 رد من فريق الدعم الفني\n\n"
+    if caption:
+        user_caption += f"{caption}\n\n"
+    user_caption += f"🧾 تذكرة #{ticket_id}"
+
+    try:
+        await context.bot.send_photo(
+            chat_id=telegram_id,
+            photo=photo_file_id,
+            caption=user_caption,
+            reply_markup=Keyboards.withdraw_submitted_menu(order_id or 0)
+            if order_id
+            else Keyboards.support_menu(),
+        )
+    except TelegramError as e:
+        logger.exception("فشل إرسال صورة الدعم للمستخدم")
+        return False, f"فشل إرسال الصورة: {str(e)[:120]}"
+
+    return True, f"✅ تم إرسال الصورة للمستخدم بالخاص بنجاح (تذكرة #{ticket_id})"
+
 
 
 async def admin_reject_withdraw(
