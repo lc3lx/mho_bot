@@ -1724,24 +1724,68 @@ class IchancyClient:
                     retry_on_ex=False,
                 )
             except IchancyError as exc:
+                print(f"[AGENT_BAL] endpoint {endpoint} error: {exc.message}", flush=True)
                 last_err = exc
                 continue
+            print(f"[AGENT_BAL] endpoint {endpoint} result type={type(result).__name__} keys={list(result.keys()) if isinstance(result, dict) else 'N/A'} preview={str(result)[:200]}", flush=True)
             bal = self._extract_agent_balance(result)
             if bal is not None:
+                print(f"[AGENT_BAL] extracted balance={bal} from {endpoint}", flush=True)
                 return bal
+            print(f"[AGENT_BAL] could not extract balance from {endpoint}", flush=True)
 
         self.sign_in()
         with self._lock:
             cached = dict(self._last_signin_result) if self._last_signin_result else None
         if cached:
+            print(f"[AGENT_BAL] cached signin keys={list(cached.keys())} preview={str(cached)[:300]}", flush=True)
             bal = self._extract_agent_balance(cached)
             if bal is not None:
+                print(f"[AGENT_BAL] extracted balance={bal} from cached signin", flush=True)
                 return bal
 
         msg = "تعذر قراءة رصيد حساب الوكيل من ichancy"
         if last_err:
             msg += f" ({last_err.message})"
-        raise IchancyError(msg)
+
+        with self._lock:
+            if getattr(self, "_last_agent_balance", None) is not None:
+                print(f"[AGENT_BAL] using in-memory last agent balance={self._last_agent_balance}", flush=True)
+                return self._last_agent_balance
+
+        from database import DatabaseManager
+        db_bal = DatabaseManager().get_setting("ichancy_agent_last_balance", "")
+        if db_bal and str(db_bal).strip():
+            try:
+                bal = float(db_bal)
+                with self._lock:
+                    self._last_agent_balance = bal
+                print(f"[AGENT_BAL] using database last agent balance={bal}", flush=True)
+                return bal
+            except (TypeError, ValueError):
+                pass
+
+        # إذا لم يكن هناك رصيد مسجل بعد، نعتبر الرصيد 0 أو منخفض حتى يتم التنبيه
+        print("[AGENT_BAL] no balance record found, defaulting to 0.0 to trigger safety alert", flush=True)
+        return 0.0
+
+    def _update_last_agent_balance(self, result: Any) -> Optional[float]:
+        """تحديث رصيد الكاشير المحفوظ بعد كل عملية شحن أو سحب ناجحة."""
+        if not isinstance(result, dict):
+            return None
+        raw_bal = result.get("availability") or result.get("balance")
+        if raw_bal is not None:
+            try:
+                bal = self._from_api_amount(raw_bal)
+                with self._lock:
+                    self._last_agent_balance = bal
+                from database import DatabaseManager
+                DatabaseManager().set_setting("ichancy_agent_last_balance", str(bal))
+                print(f"[AGENT_BAL] updated last agent balance={bal} from transaction result", flush=True)
+                return bal
+            except Exception as e:
+                logger.warning("Failed to update last agent balance: %s", e)
+        return None
 
     def _transfer_amount(self, amount: float, *, negative: bool = False):
         """
@@ -1857,6 +1901,7 @@ class IchancyClient:
             raise
         print(f"[ICHANCY withdraw] OK result={result!r}", flush=True)
         logger.info("withdraw OK playerId=%s", payload["playerId"])
+        self._update_last_agent_balance(result)
         if not isinstance(result, dict):
             raise IchancyError("استجابة سحب غير متوقعة من ichancy")
         return result
@@ -1946,6 +1991,7 @@ class IchancyClient:
             raise
         print(f"[ICHANCY deposit] OK result={result!r}", flush=True)
         logger.info("deposit OK playerId=%s result=%s", payload["playerId"], result)
+        self._update_last_agent_balance(result)
         if not isinstance(result, dict):
             raise IchancyError("استجابة إيداع غير متوقعة من ichancy")
         return result

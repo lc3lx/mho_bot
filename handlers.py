@@ -1952,12 +1952,15 @@ async def payout_receipt_photo_handler(
     in_private = getattr(chat, "type", None) == "private"
     is_staff = _is_staff_user(uid, chat) or (uid in Config.ADMIN_IDS)
 
+    print(f"[PHOTO_HANDLER] uid={uid} chat_id={chat.id} chat_type={getattr(chat, 'type', '?')} is_staff={is_staff} in_private={in_private} file_id={file_id[:30]}...", flush=True)
+
     # 1. الرسائل في الخاص
     if in_private:
         # حالة مشرف ينتظر إرسال إشعار حوالة
         if context.user_data.get("admin_state") == "waiting_wd_receipt_photo" and is_staff:
             order_id = int(context.user_data.get("wd_receipt_order_id") or 0)
             if order_id:
+                print(f"[PHOTO_HANDLER] private admin receipt photo, order_id={order_id}", flush=True)
                 ok, msg = await ops.send_payout_receipt_photo(
                     context, order_id, update.message, admin_user=update.effective_user
                 )
@@ -1970,6 +1973,7 @@ async def payout_receipt_photo_handler(
         if context.user_data.get("admin_state") == "waiting_support_ticket_reply" and is_staff:
             ticket_id = int(context.user_data.get("support_reply_ticket_id") or 0)
             if ticket_id:
+                print(f"[PHOTO_HANDLER] private admin support photo, ticket_id={ticket_id}", flush=True)
                 caption = (update.message.caption or "").strip()
                 ok, msg = await ops.support_send_photo_reply(
                     context, ticket_id, file_id, caption, update.effective_user
@@ -1981,13 +1985,16 @@ async def payout_receipt_photo_handler(
 
         # حالة مستخدم يرسل صورة لدعم تذكرة
         if context.user_data.get("state") == "waiting_payout_support_msg":
+            print(f"[PHOTO_HANDLER] user support photo", flush=True)
             await _handle_user_support_photo(update, context, file_id)
             return
 
+        print(f"[PHOTO_HANDLER] private photo ignored (no matching state)", flush=True)
         return
 
     # 2. الرسائل في الكروبات
     if not is_staff:
+        print(f"[PHOTO_HANDLER] non-staff in group, ignoring", flush=True)
         return
 
     payout_gid = ps.get_payout_admin_group_id()
@@ -1997,19 +2004,34 @@ async def payout_receipt_photo_handler(
     is_payout_grp = (payout_gid and chat.id == payout_gid) or ("قبض" in chat_title or "تقبيض" in chat_title)
     is_support_grp = (support_gid and chat.id == support_gid) or ("دعم" in chat_title)
 
+    print(f"[PHOTO_HANDLER] group photo: payout_gid={payout_gid} support_gid={support_gid} chat_title='{chat_title}' is_payout={is_payout_grp} is_support={is_support_grp}", flush=True)
+    print(f"[PHOTO_HANDLER] reply_to={getattr(update.message.reply_to_message, 'message_id', None)} caption='{(update.message.caption or '')[:50]}'", flush=True)
+
     # محاولة مطابقة التذكرة أو طلب السحب من محتوى الرسالة أو الرد
-    ticket = ops.find_ticket_from_message(update.message, chat.id)
-    tx = ops.find_transaction_from_message(update.message, chat.id)
+    try:
+        ticket = ops.find_ticket_from_message(update.message, chat.id)
+    except Exception as e:
+        print(f"[PHOTO_HANDLER] find_ticket error: {e}", flush=True)
+        ticket = None
+    try:
+        tx = ops.find_transaction_from_message(update.message, chat.id)
+    except Exception as e:
+        print(f"[PHOTO_HANDLER] find_transaction error: {e}", flush=True)
+        tx = None
+
+    print(f"[PHOTO_HANDLER] ticket={getattr(ticket, 'id', None)} tx={getattr(tx, 'id', None)}", flush=True)
 
     # أولوية كروب الدعم
     if is_support_grp and not tx:
         if not ticket:
+            print(f"[PHOTO_HANDLER] support group: no ticket found, asking for reply", flush=True)
             await update.message.reply_text(
                 "⚠️ لإرسال الصورة للمستخدم في الخاص:\n"
                 "يرجى الرد (Reply) بالصورة على رسالة تذكرة الدعم، أو كتابة رقم التذكرة في وصف الصورة (مثال: #12)."
             )
             return
         caption = (update.message.caption or "").strip()
+        print(f"[PHOTO_HANDLER] support group: sending photo for ticket #{ticket.id}", flush=True)
         ok, msg = await ops.support_send_photo_reply(
             context, ticket.id, file_id, caption, update.effective_user
         )
@@ -2022,12 +2044,15 @@ async def payout_receipt_photo_handler(
             order_id = int(context.user_data.get("wd_receipt_order_id") or 0)
             if order_id:
                 tx = ops.get_tx(order_id)
+                print(f"[PHOTO_HANDLER] payout group: fallback to user_data order_id={order_id}", flush=True)
         if not tx:
+            print(f"[PHOTO_HANDLER] payout group: no tx found, asking for reply", flush=True)
             await update.message.reply_text(
                 "⚠️ لتسليم صورة إشعار الحوالة للزبون بالخاص:\n"
                 "يرجى الرد (Reply) بالصورة على رسالة طلب السحب، أو كتابة رقم الطلب في وصف الصورة (مثال: #123 أو WD...)."
             )
             return
+        print(f"[PHOTO_HANDLER] payout group: sending receipt for tx #{tx.id}", flush=True)
         ok, msg = await ops.send_payout_receipt_photo(
             context, tx.id, update.message, admin_user=update.effective_user
         )
@@ -2039,6 +2064,7 @@ async def payout_receipt_photo_handler(
     # إذا تم العثور على تذكرة صريحة (حتى لو لم يكن الكروب معرّفاً)
     if ticket:
         caption = (update.message.caption or "").strip()
+        print(f"[PHOTO_HANDLER] fallback: sending photo for ticket #{ticket.id}", flush=True)
         ok, msg = await ops.support_send_photo_reply(
             context, ticket.id, file_id, caption, update.effective_user
         )
@@ -2047,11 +2073,14 @@ async def payout_receipt_photo_handler(
 
     # إذا تم العثور على طلب سحب صريح
     if tx:
+        print(f"[PHOTO_HANDLER] fallback: sending receipt for tx #{tx.id}", flush=True)
         ok, msg = await ops.send_payout_receipt_photo(
             context, tx.id, update.message, admin_user=update.effective_user
         )
         await update.message.reply_text(msg)
         return
+
+    print(f"[PHOTO_HANDLER] group photo: nothing matched, ignored", flush=True)
 
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

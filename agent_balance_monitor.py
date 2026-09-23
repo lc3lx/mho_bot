@@ -46,12 +46,18 @@ def _looks_like_agent_insufficient(msg: str) -> bool:
 
 def build_alert_text(balance: float, threshold: float) -> str:
     agent_user = (Config.ICHANCY_CONFIG.get("username") or "").strip() or "—"
+    scale = max(1, int(Config.ICHANCY_CONFIG.get("amount_scale", 100) or 100))
+    bal_old = int(round(balance * scale))
+    thresh_old = int(round(threshold * scale))
     return (
-        "🚨 *تنبيه: رصيد الكاشير منخفض*\n\n"
-        f"💰 الرصيد الحالي: *{format_currency(balance)}*\n"
-        f"⚠️ الحد التحذيري: *{format_currency(threshold)}*\n"
+        "🚨 *تنبيه عاجل: رصيد الكاشير فارغ أو منخفض!*\n\n"
+        f"💰 *الرصيد الحالي للكاشير:*\n"
+        f"▫️ بالقديم: *{bal_old:,} ل.س*\n"
+        f"▫️ بوحدة البوت: *{format_currency(balance)}*\n\n"
+        f"⚠️ *حد التنبيه المطلوب:*\n"
+        f"▫️ بالقديم: *{thresh_old:,} ل.س* (مليون ليرة)\n\n"
         f"👤 حساب الوكيل: `{agent_user}`\n\n"
-        "يرجى شحن حساب الوكيل (الكاشير) فوراً حتى لا تتوقف عمليات الشحن للزبائن."
+        "⚡️ *يرجى تعبئة وشحن حساب الكاشير فوراً حتى لا تتوقف عمليات الشحن للزبائن!*"
     )
 
 
@@ -66,8 +72,9 @@ async def notify_low_balance(
     targets: list[int] = []
     if chat_id:
         targets.append(int(chat_id))
-    else:
-        targets.extend(Config.ADMIN_IDS or [])
+    for aid in (Config.ADMIN_IDS or []):
+        if aid and int(aid) not in targets:
+            targets.append(int(aid))
 
     if not targets:
         dbg(

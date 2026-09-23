@@ -647,13 +647,16 @@ async def send_payout_receipt_photo(
     # #endregion
 
     try:
+        print(f"[RECEIPT_SEND] calling send_photo chat_id={int(user.telegram_id)} file_id={file_id[:30]}... caption_len={len(caption)}", flush=True)
         await context.bot.send_photo(
             chat_id=int(user.telegram_id),
             photo=file_id,
             caption=caption,
             reply_markup=Keyboards.withdraw_paid_menu(order_id),
         )
+        print(f"[RECEIPT_SEND] send_photo SUCCESS for order {order_id} to user {user.telegram_id}", flush=True)
     except TelegramError as e:
+        print(f"[RECEIPT_SEND] send_photo FAILED for order {order_id} to user {user.telegram_id}: {e}", flush=True)
         logger.exception("فشل إرسال إشعار التقبيض للزبون")
         return False, f"فشل الإرسال: {str(e)[:120]}"
 
@@ -677,6 +680,7 @@ def find_transaction_from_message(message, chat_id: Optional[int] = None) -> Opt
         return None
 
     session = db.get_session()
+    tx = None
     try:
         # 1. فحص إذا كانت الرسالة رداً على رسالة أخرى
         reply = message.reply_to_message
@@ -686,17 +690,17 @@ def find_transaction_from_message(message, chat_id: Optional[int] = None) -> Opt
                 Transaction.admin_group_message_id == reply.message_id
             ).first()
             if tx:
-                return tx
+                return db._detach(session, tx)
 
             reply_text = (reply.text or reply.caption or "")
             # البحث عن كود الطلب WD...
             m_wd = re.search(r"\b(WD[A-F0-9]{6,16})\b", reply_text, re.IGNORECASE)
             if m_wd:
                 tx = session.query(Transaction).filter(
-                    Transaction.public_order_id == m_wd.group(1).upper()
+                    Transaction.public_id == m_wd.group(1).upper()
                 ).first()
                 if tx:
-                    return tx
+                    return db._detach(session, tx)
 
             # البحث عن رقم الطلب (#123)
             m_id = re.search(r"(?:رقم الطلب|طلب سحب|#)\s*[:#\s]?\s*(\d+)", reply_text)
@@ -705,7 +709,7 @@ def find_transaction_from_message(message, chat_id: Optional[int] = None) -> Opt
                     Transaction.id == int(m_id.group(1))
                 ).first()
                 if tx:
-                    return tx
+                    return db._detach(session, tx)
 
         # 2. فحص نص أو كابشن الرسالة الحالية
         curr_text = (message.caption or message.text or "").strip()
@@ -713,10 +717,10 @@ def find_transaction_from_message(message, chat_id: Optional[int] = None) -> Opt
             m_wd = re.search(r"\b(WD[A-F0-9]{6,16})\b", curr_text, re.IGNORECASE)
             if m_wd:
                 tx = session.query(Transaction).filter(
-                    Transaction.public_order_id == m_wd.group(1).upper()
+                    Transaction.public_id == m_wd.group(1).upper()
                 ).first()
                 if tx:
-                    return tx
+                    return db._detach(session, tx)
 
             m_id = re.search(r"(?:رقم الطلب|طلب|#)\s*[:#\s]?\s*(\d+)", curr_text)
             if m_id:
@@ -724,14 +728,14 @@ def find_transaction_from_message(message, chat_id: Optional[int] = None) -> Opt
                     Transaction.id == int(m_id.group(1))
                 ).first()
                 if tx:
-                    return tx
+                    return db._detach(session, tx)
 
             if curr_text.isdigit():
                 tx = session.query(Transaction).filter(
                     Transaction.id == int(curr_text)
                 ).first()
                 if tx:
-                    return tx
+                    return db._detach(session, tx)
 
         return None
     finally:
@@ -752,7 +756,7 @@ def find_ticket_from_message(message, chat_id: Optional[int] = None) -> Optional
                 SupportTicket.support_group_message_id == reply.message_id
             ).first()
             if ticket:
-                return ticket
+                return db._detach(session, ticket)
 
             reply_text = (reply.text or reply.caption or "")
             m = re.search(r"(?:رقم التذكرة|تذكرة|#)\s*[:#\s]?\s*(\d+)", reply_text)
@@ -761,7 +765,7 @@ def find_ticket_from_message(message, chat_id: Optional[int] = None) -> Optional
                     SupportTicket.id == int(m.group(1))
                 ).first()
                 if ticket:
-                    return ticket
+                    return db._detach(session, ticket)
 
         curr_text = (message.caption or message.text or "").strip()
         if curr_text:
@@ -771,13 +775,13 @@ def find_ticket_from_message(message, chat_id: Optional[int] = None) -> Optional
                     SupportTicket.id == int(m.group(1))
                 ).first()
                 if ticket:
-                    return ticket
+                    return db._detach(session, ticket)
             if curr_text.isdigit():
                 ticket = session.query(SupportTicket).filter(
                     SupportTicket.id == int(curr_text)
                 ).first()
                 if ticket:
-                    return ticket
+                    return db._detach(session, ticket)
 
         return None
     finally:
@@ -820,7 +824,7 @@ async def support_send_photo_reply(
 
     try:
         await context.bot.send_photo(
-            chat_id=telegram_id,
+            chat_id=int(telegram_id),
             photo=photo_file_id,
             caption=user_caption,
             reply_markup=Keyboards.withdraw_submitted_menu(order_id or 0)
