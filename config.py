@@ -4,6 +4,11 @@
 
 import os
 from typing import Dict, Any
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 class Config:
     """إعدادات البوت"""
