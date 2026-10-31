@@ -107,7 +107,7 @@ class ApiSyriaClient:
         return self._request("GET", {"resource": "accounts", "action": "list"})
 
     def syriatel_find_transaction(self, tx: str, gsm: Optional[str] = None) -> Dict[str, Any]:
-        gsm = gsm or self.syriatel_gsm
+        gsm = gsm or self.syriatel_gsm or (Config.get_syriatel_codes()[0] if Config.get_syriatel_codes() else None)
         return self._request(
             "GET",
             {
@@ -120,7 +120,7 @@ class ApiSyriaClient:
         )
 
     def shamcash_find_transaction(self, tx: str, account_address: Optional[str] = None) -> Dict[str, Any]:
-        account_address = account_address or self.shamcash_account
+        account_address = account_address or self.shamcash_account or Config.SHAMCASH_DEPOSIT.get("account_syp")
         return self._request(
             "GET",
             {
@@ -190,7 +190,13 @@ class ApiSyriaClient:
 
     @staticmethod
     def amounts_match(expected: float, actual: float, tolerance: float = 0.01) -> bool:
-        return abs(expected - actual) <= tolerance
+        if abs(expected - actual) <= tolerance:
+            return True
+        if abs(expected * 100 - actual) <= tolerance:
+            return True
+        if abs(expected / 100 - actual) <= tolerance:
+            return True
+        return False
 
     @staticmethod
     def parse_tx_datetime(transaction: Dict[str, Any]):
