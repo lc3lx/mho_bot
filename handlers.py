@@ -1831,15 +1831,19 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         user = db.get_user(update.effective_user.id)
         await show_user_home(update, context, user)
 
-    # سيريتل كاش — شحن متوقف حالياً
+    # سيريتل كاش — تحويل يدوي
     elif data == "syriatel_manual_auto":
-        await PaymentHandler.notify_syriatel_deposit_suspended(update, context)
+        await PaymentHandler.start_syriatel_manual_intro(update, context)
     elif data == "syriatel_continue":
-        await PaymentHandler.notify_syriatel_deposit_suspended(update, context)
+        if context.user_data.get("amount"):
+            await PaymentHandler.handle_syriatel_amount(update, context, str(context.user_data["amount"]))
+        else:
+            await PaymentHandler.start_syriatel_amount(update, context)
     elif data == "syriatel_prev_code":
-        await PaymentHandler.notify_syriatel_deposit_suspended(update, context)
+        await PaymentHandler.start_syriatel_amount(update, context, use_previous=True)
     elif data.startswith("syriatel_pick_"):
-        await PaymentHandler.notify_syriatel_deposit_suspended(update, context)
+        code = data.replace("syriatel_pick_", "")
+        await PaymentHandler.pick_syriatel_code(update, context, code)
     
     # معالجة طرق الدفع
     elif data.startswith("deposit_") or data.startswith("withdraw_"):

@@ -360,8 +360,8 @@ class Config:
         "parent_id": os.getenv("ICHANCY_PARENT_ID", ""),
         "currency": os.getenv("ICHANCY_CURRENCY", "NSP"),
         "currency_code": os.getenv("ICHANCY_CURRENCY_CODE", os.getenv("ICHANCY_CURRENCY", "NSP")),
-        # البوت بالليرة الجديدة — API ايشانسي غالباً بالوحدة القديمة (×100)
-        "amount_scale": int(os.getenv("ICHANCY_AMOUNT_SCALE", "100")),
+        # البوت بالليرة الجديدة — والكاشيرة الجديدة بنظام NSP (المقياس 1:1)
+        "amount_scale": int(os.getenv("ICHANCY_AMOUNT_SCALE", "1")),
         "money_status": int(os.getenv("ICHANCY_MONEY_STATUS", "5")),
         # كل زبون يسحب من المنصة للبوت مرة واحدة كل نصف ساعة
         "withdraw_cooldown_minutes": int(os.getenv("ICHANCY_WITHDRAW_COOLDOWN", "30")),
@@ -545,8 +545,8 @@ class Config:
 
     @classmethod
     def ichancy_old_amount(cls, new_amount: float) -> float:
-        """ليرة جديدة (بوت) → ليرة قديمة (iChancy). مثال: 250 → 25000"""
-        scale = max(1, int(cls.ICHANCY_CONFIG.get("amount_scale", 100) or 100))
+        """ليرة جديدة (بوت) → حساب iChancy. الكاشيرة الجديدة 1:1"""
+        scale = max(1, int(cls.ICHANCY_CONFIG.get("amount_scale", 1) or 1))
         return round(float(new_amount) * scale, 2)
 
     @classmethod

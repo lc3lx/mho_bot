@@ -248,9 +248,7 @@ class PaymentHandler:
         text = (
             "💳 تعبئة محفظة البوت\n\n"
             "ابعت المبلغ كتابه فقط 👇\n\n"
-            "اكتب المبلغ العمله الجديده يا ملك\n\n"
             f"اقل مبلغ ايداع : {format_currency(min_dep)} ل.س\n\n"
-            "اكتبه بالليره الجديده وبتلاقيه بحسابك بالليره القديمه\n\n"
             "المحاسب جاهز… بس خلّي الرقم واضح من أول مرة 😂"
         )
         context.user_data.clear()
@@ -267,9 +265,7 @@ class PaymentHandler:
         amt = format_currency(amount)
         text = (
             "💳 تعبئة محفظة البوت\n\n"
-            f"المبلغ {amt}\n\n"
-            f"مبلغك {amt} ل.س جديد بس جوا الحساب بتلاقيهن بالعمله القديمه ياملك\n"
-            "اكتبه بالليره الجديده وبتلاقيه بحسابك بالليره القديمه\n\n"
+            f"المبلغ: {amt} ل.س\n\n"
             "هلق اختار طريقة الدفع المناسبة 👇\n\n"
             "المحاسب جاهز\n"
             "بس لا تغير رأيك كل شوي 😂"
@@ -311,11 +307,11 @@ class PaymentHandler:
                 update,
                 "💵 شام كاش — دولار\n\n"
                 "حوّل دولار على محفظة شام كاش الدولار،\n"
-                "ونضيف الرصيد لمحفظة البوت بالليرة <b>الجديدة</b>.\n\n"
-                f"💱 سعر الصرف الحالي: 1 $ = {format_currency(rate)} ل.س جديدة\n"
+                "ونضيف الرصيد لمحفظة البوت بالليرة.\n\n"
+                f"💱 سعر الصرف الحالي: 1 $ = {format_currency(rate)} ل.س\n"
                 f"📌 الحد الأدنى: {min_a:.2f} $\n\n"
                 f"مثال: إذا حوّلت 5$ وبسعر {format_currency(rate)}\n"
-                f"→ يُضاف لمحفظتك {format_currency(5 * rate)} (ليرة جديدة)\n\n"
+                f"→ يُضاف لمحفظتك {format_currency(5 * rate)} ل.س\n\n"
                 "ابعت مبلغ التحويل بالدولار (رقم فقط):",
                 reply_markup=Keyboards.cancel_operation(),
                 context=context,
@@ -794,8 +790,8 @@ class PaymentHandler:
 
     @staticmethod
     async def start_syriatel_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """شحن سيريتل — متوقف حالياً."""
-        await PaymentHandler.notify_syriatel_deposit_suspended(update, context)
+        """شحن سيرياتيل كاش — توجيه لمقدمة التعليمات."""
+        await PaymentHandler.start_syriatel_manual_intro(update, context)
 
     @staticmethod
     async def start_syriatel_manual_intro(
@@ -806,13 +802,19 @@ class PaymentHandler:
         from telegram import InputFile
 
         text = (
-            "شحن سيرياتيل كاش - تحويل يدوي\n\n"
-            "هذه العملية تحويل يدوي.\n"
-            "أي عملية وهمية أو أقل من الحد الأدنى لن تُقبل ولن تُعوَّض.\n\n"
-            "الخطوات:\n"
-            "1) أدخل المبلغ المراد شحنه على البوت\n"
-            "2) اختر أحد أكواد التحويل وحوّل إليه من تطبيق سيريتل\n"
-            "3) أرسل رقم عملية التحويل (12 رقم) للتحقق التلقائي"
+            "📲 شحن سيرياتيل كاش | تحويل يدوي\n\n"
+            "خيو قبل ما تحول مصرياتك ركز معنا شوي 😂\n\n"
+            "🚨 في شغلتين ممنوع تغلط فيهن\n\n"
+            "❌ التحويل عن طريق الكازيات مرفوض نهائيا والمبلغ ما بيرجع ولا بيتعوض\n\n"
+            "❌ أي مبلغ أقل من الحد الأدنى للشحن ما رح ينقبل ولا بيتعوض\n\n"
+            "💸 طريقة الشحن سهلة وبتخلص بـ 3 خطوات\n\n"
+            "1️⃣ بتكتب المبلغ اللي بدك تشحنه\n\n"
+            "2️⃣ البوت بيعطيك كود سيرياتيل كاش مناسب للمبلغ وبتحول عليه يدويا\n\n"
+            "3️⃣ بعد التحويل بتبعت رقم العملية للبوت مشان نتحقق منها\n\n"
+            "⚠️ انتبه يا ملك\n\n"
+            "لا تحول على أي كود غير اللي بيعطيك ياه البوت ولا تستخدم الكازية أبدا\n\n"
+            "المحاسب ممكن يسامحك إذا غلطت باسمه بس بالتحويلات ما عنده حس فكاهي 😂\n\n"
+            "✅ إذا فهمت التعليمات اكبس متابعة وبلش شحنك"
         )
         assets = Path(__file__).resolve().parent / "assets"
         guide = assets / "syriatel_guide.png"
@@ -893,17 +895,19 @@ class PaymentHandler:
         try:
             amount = float(str(amount_text).replace(",", "").strip())
         except ValueError:
-            await update.message.reply_text(
-                "❌ المبلغ غير صحيح.",
-                reply_markup=Keyboards.cancel_operation(),
-            )
+            msg_text = "❌ المبلغ غير صحيح."
+            if update.callback_query:
+                await safe_edit_callback_message(update, msg_text, reply_markup=Keyboards.cancel_operation(), context=context)
+            elif update.effective_message:
+                await update.effective_message.reply_text(msg_text, reply_markup=Keyboards.cancel_operation())
             return
 
         if amount < min_a:
-            await update.message.reply_text(
-                f"❌ الحد الأدنى هو {format_currency(min_a)}",
-                reply_markup=Keyboards.cancel_operation(),
-            )
+            msg_text = f"❌ الحد الأدنى هو {format_currency(min_a)}"
+            if update.callback_query:
+                await safe_edit_callback_message(update, msg_text, reply_markup=Keyboards.cancel_operation(), context=context)
+            elif update.effective_message:
+                await update.effective_message.reply_text(msg_text, reply_markup=Keyboards.cancel_operation())
             return
 
         context.user_data["amount"] = amount
@@ -916,18 +920,26 @@ class PaymentHandler:
         timeout = Config.SYRIATEL_DEPOSIT["timeout_minutes"]
         lines = "\n".join(codes)
         text = (
-            "شحن سيرياتيل كاش - شحن يدوي\n\n"
+            "📲 شحن سيرياتيل كاش - اختيار الكود\n\n"
             "الخطوة الثانية: قم باختيار أحد الأكواد التالية:\n"
             f"{lines}\n\n"
-            f"ثم قم بدفع المبلغ ({format_currency(amount)}) وبعدها اضغط على الكود الذي دفعت إليه\n\n"
+            f"ثم قم بدفع المبلغ ({format_currency(amount)} ل.س) وبعدها اضغط على الكود الذي دفعت إليه\n\n"
             f"ملاحظة 1: مدة طلب الشحن هي {timeout} دقائق فقط\n"
             "ملاحظة 2: تم اختيار أكثر من رقم لتفادي تجاوز الحد اليومي"
         )
         context.user_data["state"] = "waiting_for_syriatel_code"
-        await update.message.reply_text(
-            text,
-            reply_markup=Keyboards.syriatel_codes_keyboard(codes),
-        )
+        if update.callback_query:
+            await safe_edit_callback_message(
+                update,
+                text,
+                reply_markup=Keyboards.syriatel_codes_keyboard(codes),
+                context=context,
+            )
+        elif update.effective_message:
+            await update.effective_message.reply_text(
+                text,
+                reply_markup=Keyboards.syriatel_codes_keyboard(codes),
+            )
 
     @staticmethod
     async def pick_syriatel_code(
@@ -935,9 +947,11 @@ class PaymentHandler:
     ):
         amount = context.user_data.get("amount")
         if not amount:
-            await update.callback_query.edit_message_text(
+            await safe_edit_callback_message(
+                update,
                 "❌ انتهت الجلسة. ابدأ من جديد.",
                 reply_markup=Keyboards.main_menu(),
+                context=context,
             )
             return
 
@@ -948,9 +962,11 @@ class PaymentHandler:
             try:
                 if datetime.utcnow() - datetime.fromisoformat(started) > timedelta(minutes=timeout):
                     context.user_data.clear()
-                    await update.callback_query.edit_message_text(
+                    await safe_edit_callback_message(
+                        update,
                         f"⏰ انتهى الوقت ({timeout} دقائق). أنشئ طلباً جديداً.",
                         reply_markup=Keyboards.start_menu(),
+                        context=context,
                     )
                     return
             except ValueError:

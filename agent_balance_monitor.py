@@ -46,16 +46,10 @@ def _looks_like_agent_insufficient(msg: str) -> bool:
 
 def build_alert_text(balance: float, threshold: float) -> str:
     agent_user = (Config.ICHANCY_CONFIG.get("username") or "").strip() or "—"
-    scale = max(1, int(Config.ICHANCY_CONFIG.get("amount_scale", 100) or 100))
-    bal_old = int(round(balance * scale))
-    thresh_old = int(round(threshold * scale))
     return (
         "🚨 *تنبيه عاجل: رصيد الكاشير فارغ أو منخفض!*\n\n"
-        f"💰 *الرصيد الحالي للكاشير:*\n"
-        f"▫️ بالقديم: *{bal_old:,} ل.س*\n"
-        f"▫️ بوحدة البوت: *{format_currency(balance)}*\n\n"
-        f"⚠️ *حد التنبيه المطلوب:*\n"
-        f"▫️ بالقديم: *{thresh_old:,} ل.س* (مليون ليرة)\n\n"
+        f"💰 *الرصيد الحالي للكاشير:* *{format_currency(balance)} ل.س*\n\n"
+        f"⚠️ *حد التنبيه المطلوب:* *{format_currency(threshold)} ل.س*\n\n"
         f"👤 حساب الوكيل: `{agent_user}`\n\n"
         "⚡️ *يرجى تعبئة وشحن حساب الكاشير فوراً حتى لا تتوقف عمليات الشحن للزبائن!*"
     )
