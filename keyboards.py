@@ -248,7 +248,7 @@ class Keyboards:
         """عبّي محفظتي — طرق الدفع بعد إدخال المبلغ"""
         return InlineKeyboardMarkup([
             [InlineKeyboardButton("📱 سيرياتيل كاش", callback_data="deposit_syriatel_cash")],
-            [InlineKeyboardButton("💠 شام كاش", callback_data="deposit_shamcash")],
+            [InlineKeyboardButton("💠 شام كاش (متوقف مؤقتاً)", callback_data="deposit_shamcash")],
             [InlineKeyboardButton("🌐 عملات رقمية", callback_data="deposit_usdt")],
             [InlineKeyboardButton("🧩 طرق تانية", callback_data="deposit_other")],
             [Keyboards.home_btn()],

@@ -187,8 +187,41 @@ class PaymentHandler:
             "واذا تأخرت المحاسب رح يطلع عليك نظرة ما بتطمن 😂"
         )
 
+    SHAMCASH_DEPOSIT_SUSPENDED = (
+        "💠 شام كاش\n\n"
+        "🛑 متوقف مؤقتاً يا معلم.\n\n"
+        "المحاسب قال:\n"
+        "«عم نحدّث حساب شام كاش وراجعين فوراً 😂»\n\n"
+        "فيك تشحن هلق عن طريق سيرياتيل كاش أو عملات رقمية (USDT)،\n"
+        "وبس يرجع شام كاش رح نبلّغك."
+    )
+
+    @staticmethod
+    async def notify_shamcash_deposit_suspended(
+        update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        """إبلاغ الزبون إن شحن شام كاش متوقف مؤقتاً."""
+        text = PaymentHandler.SHAMCASH_DEPOSIT_SUSPENDED
+        markup = Keyboards.wallet_deposit_menu()
+        if update.callback_query:
+            try:
+                await update.callback_query.answer("شام كاش متوقف مؤقتاً 😅", show_alert=False)
+            except TelegramError:
+                pass
+            await safe_edit_callback_message(
+                update, text, reply_markup=markup, context=context
+            )
+        elif update.effective_message:
+            await update.effective_message.reply_text(text, reply_markup=markup)
+
     @staticmethod
     async def start_shamcash_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """شام كاش — متوقف مؤقتاً."""
+        await PaymentHandler.notify_shamcash_deposit_suspended(update, context)
+        return
+
+    @staticmethod
+    async def _real_start_shamcash_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """اختيار العملة — بدون شعار."""
         amount = context.user_data.get("amount")
         if not amount:

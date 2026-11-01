@@ -1810,10 +1810,8 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             )
         else:
             await PaymentHandler.start_deposit_ask_amount(update, context)
-    elif data == "shamcash_cur_syp":
-        await PaymentHandler.start_shamcash_currency(update, context, "syp")
-    elif data == "shamcash_cur_usd":
-        await PaymentHandler.start_shamcash_currency(update, context, "usd")
+    elif data in ("shamcash_cur_syp", "shamcash_cur_usd"):
+        await PaymentHandler.notify_shamcash_deposit_suspended(update, context)
     elif data == "shamcash_copy_address":
         await PaymentHandler.copy_shamcash_address(update, context)
     elif data == "shamcash_where_tx":
@@ -2778,9 +2776,9 @@ async def handle_payment_method(update: Update, context: ContextTypes.DEFAULT_TY
         await update.callback_query.answer("❌ طريقة دفع غير صحيحة")
         return
 
-    # شام كاش إيداع — واجهة مبسّطة (المبلغ محفوظ مسبقاً)
+    # شام كاش إيداع — متوقف مؤقتاً
     if operation == "deposit" and method == "shamcash":
-        await PaymentHandler.start_shamcash_menu(update, context)
+        await PaymentHandler.notify_shamcash_deposit_suspended(update, context)
         return
 
     # سيريتل — شحن متوقف
@@ -2805,8 +2803,8 @@ async def handle_payment_method(update: Update, context: ContextTypes.DEFAULT_TY
         await safe_edit_callback_message(
             update,
             "🧩 طرق تانية\n\n"
-            "حالياً المتاح: شام كاش وعملات رقمية.\n"
-            "سيرياتيل كاش متوقف مؤقتاً.\n\n"
+            "حالياً المتاح: سيرياتيل كاش وعملات رقمية (USDT).\n"
+            "شام كاش متوقف مؤقتاً.\n\n"
             "المحاسب قال: اختار الموجود وخلاص 😂",
             reply_markup=Keyboards.wallet_deposit_menu(),
             context=context,
