@@ -849,6 +849,9 @@ class PaymentHandler:
             "المحاسب ممكن يسامحك إذا غلطت باسمه بس بالتحويلات ما عنده حس فكاهي 😂\n\n"
             "✅ إذا فهمت التعليمات اكبس متابعة وبلش شحنك"
         )
+        context.user_data["method"] = "syriatel_cash"
+        context.user_data["operation"] = "wallet_deposit"
+        context.user_data["deposit_started_at"] = datetime.utcnow().isoformat()
         assets = Path(__file__).resolve().parent / "assets"
         guide = assets / "syriatel_guide.png"
         chat_id = update.effective_chat.id
@@ -944,6 +947,9 @@ class PaymentHandler:
             return
 
         context.user_data["amount"] = amount
+        context.user_data["method"] = "syriatel_cash"
+        context.user_data["operation"] = "wallet_deposit"
+        context.user_data["deposit_started_at"] = datetime.utcnow().isoformat()
         force_code = context.user_data.pop("syriatel_force_code", None)
         if force_code:
             await PaymentHandler._syriatel_ask_tx(update, context, force_code, amount)
@@ -1010,6 +1016,9 @@ class PaymentHandler:
     @staticmethod
     async def _syriatel_ask_tx(update, context, code: str, amount: float):
         context.user_data["syriatel_code"] = code
+        context.user_data["method"] = "syriatel_cash"
+        context.user_data["operation"] = "wallet_deposit"
+        context.user_data["deposit_started_at"] = datetime.utcnow().isoformat()
         context.user_data["state"] = "waiting_for_syriatel_tx"
         digits = Config.SYRIATEL_DEPOSIT["tx_digits"]
         text = (
@@ -1055,11 +1064,14 @@ class PaymentHandler:
         from datetime import timedelta
 
         amount = context.user_data.get("amount")
-        code = context.user_data.get("syriatel_code")
+        code = context.user_data.get("syriatel_code") or (Config.get_syriatel_codes()[0] if Config.get_syriatel_codes() else "28955337")
+        context.user_data["syriatel_code"] = code
+        context.user_data["method"] = "syriatel_cash"
+        context.user_data["operation"] = "wallet_deposit"
         digits = Config.SYRIATEL_DEPOSIT["tx_digits"]
         timeout = Config.SYRIATEL_DEPOSIT["timeout_minutes"]
 
-        if not amount or not code:
+        if not amount:
             context.user_data.clear()
             await update.message.reply_text(
                 "❌ انتهت الجلسة. ابدأ من جديد.",
@@ -1216,6 +1228,25 @@ class PaymentHandler:
         except ApiSyriaError as exc:
             PaymentHandler._fail_pending_deposit(transaction_id, exc.message)
             context.user_data.clear()
+            msg = str(exc.message or "")
+            if "صلاحية جلسة" in msg or "جلسة الحساب" in msg:
+                for admin_id in (Config.ADMIN_IDS or []):
+                    try:
+                        asyncio.create_task(context.bot.send_message(
+                            chat_id=admin_id,
+                            text="🚨 *تنبيه عاجل للإدارة*\n\nانتهت صلاحية جلسة سيرياتيل كاش في موقع ApiSyria!\nيرجى الدخول فوراً إلى apisyria.com وحذف الحساب وإعادة ربطه حتى يعمل التحقق التلقائي للزبائن.",
+                            parse_mode="Markdown"
+                        ))
+                    except Exception:
+                        pass
+                await update.message.reply_text(
+                    "⚠️ بوابة التحقق التلقائي قيد التحديث المؤقت من الإدارة.\n\n"
+                    f"تم تسجيل طلب الشحن برقم العملية: `{tx_number}`\n"
+                    "يرجى التواصل مع الدعم الفني لتأكيد شحن رصيدك يدوياً.",
+                    parse_mode="Markdown",
+                    reply_markup=Keyboards.start_menu(),
+                )
+                return
             await update.message.reply_text(
                 f"❌ تم رفض طلب الشحن.\n{user_facing_error_message(exc)}",
                 reply_markup=Keyboards.start_menu(),

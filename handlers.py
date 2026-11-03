@@ -2320,24 +2320,14 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             update, context, update.message.text.strip()
         )
     elif user_state == WAITING_FOR_SYRIATEL_AMOUNT:
-        if context.user_data.get("method") != "syriatel_cash":
-            context.user_data.clear()
-            await update.message.reply_text(
-                "⚠️ جلسة سيريتل غير صالحة. اختر طريقة الشحن من جديد.",
-                reply_markup=Keyboards.payment_methods("deposit"),
-            )
-            return
+        context.user_data["method"] = "syriatel_cash"
+        context.user_data["operation"] = "wallet_deposit"
         await PaymentHandler.handle_syriatel_amount(
             update, context, update.message.text.strip()
         )
     elif user_state == WAITING_FOR_SYRIATEL_TX:
-        if context.user_data.get("method") != "syriatel_cash":
-            context.user_data.clear()
-            await update.message.reply_text(
-                "⚠️ جلسة سيريتل غير صالحة. اختر طريقة الشحن من جديد.",
-                reply_markup=Keyboards.payment_methods("deposit"),
-            )
-            return
+        context.user_data["method"] = "syriatel_cash"
+        context.user_data["operation"] = "wallet_deposit"
         await PaymentHandler.handle_syriatel_tx(
             update, context, update.message.text.strip()
         )
@@ -2781,8 +2771,10 @@ async def handle_payment_method(update: Update, context: ContextTypes.DEFAULT_TY
         await PaymentHandler.notify_shamcash_deposit_suspended(update, context)
         return
 
-    # سيريتل — شحن متوقف
+    # سيريتل كاش — تحويل يدوي
     if operation == "deposit" and method == "syriatel_cash":
+        context.user_data["method"] = "syriatel_cash"
+        context.user_data["operation"] = "wallet_deposit"
         await PaymentHandler.start_syriatel_menu(update, context)
         return
 

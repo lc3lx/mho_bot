@@ -178,7 +178,10 @@ class ApiSyriaClient:
 
     @staticmethod
     def normalize_tx_id(tx: str) -> str:
-        return re.sub(r"\D", "", tx.strip())
+        arabic_digits = "٠١٢٣٤٥٦٧٨٩"
+        trans = str.maketrans({c: str(i) for i, c in enumerate(arabic_digits)})
+        clean = (tx or "").translate(trans).strip()
+        return re.sub(r"\D", "", clean)
 
     @staticmethod
     def parse_syriatel_amount(transaction: Dict[str, Any]) -> float:
