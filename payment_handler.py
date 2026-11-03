@@ -1127,6 +1127,14 @@ class PaymentHandler:
             )
             data = result.get("data", {})
             if not data.get("found"):
+                # محاولة ثانية بعد 5 ثوانٍ في حال تأخر مزامنة الرسالة
+                await asyncio.sleep(5)
+                result = await asyncio.to_thread(
+                    api_client.syriatel_find_transaction, tx_number, code
+                )
+                data = result.get("data", {})
+
+            if not data.get("found"):
                 PaymentHandler._fail_pending_deposit(
                     transaction_id, "رقم عملية غير موجود"
                 )
@@ -1136,7 +1144,12 @@ class PaymentHandler:
                 except TelegramError:
                     pass
                 await update.message.reply_text(
-                    "❌ تم رفض طلب الشحن. السبب: رقم عملية غير موجود",
+                    "❌ تعذر العثور على العملية في بوابة سيرياتيل كاش.\n\n"
+                    "يرجى التأكد من:\n"
+                    f"1️⃣ التحويل إلى الكود المعتمد: {code} مباشرة.\n"
+                    "2️⃣ عدم التحويل عن طريق كازية (مرفوض نهائياً).\n"
+                    "3️⃣ إدخال رقم العملية المكون من 12 رقماً بشكل صحيح.\n\n"
+                    "إذا تم الخصم من حسابك بالفعل، أرسل تفاصيل العملية للدعم الفني للمراجعة اليدوية.",
                     reply_markup=Keyboards.start_menu(),
                 )
                 return
